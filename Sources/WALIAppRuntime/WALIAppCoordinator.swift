@@ -265,6 +265,12 @@ public extension AgentSnapshot {
                     detail: "\(display.pixelWidth) × \(display.pixelHeight)",
                     isConnected: display.isOnline,
                     isBuiltIn: display.isBuiltIn,
+                    isMain: display.isMain,
+                    assignedWallpaperID: display.assignedItemID,
+                    frameX: display.frameX,
+                    frameY: display.frameY,
+                    frameWidth: display.frameWidth,
+                    frameHeight: display.frameHeight,
                     contentFit: display.scaling.flatMap {
                         WALIContentFitPreference(rawValue: $0.rawValue)
                     }

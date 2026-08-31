@@ -13,6 +13,8 @@ public struct WALIAppRootView: View {
     @State private var route: AppRoute = .library
     @State private var selectedWallpaperID: UUID?
     @State private var selectedDisplayIDs: Set<String> = []
+    @State private var hasInitializedDisplaySelection = false
+    @State private var knownConnectedDisplayIDs: Set<String> = []
     @State private var selectedContentFit: WALIContentFitPreference = .fill
     @State private var searchText = ""
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -23,6 +25,7 @@ public struct WALIAppRootView: View {
     @State private var recentlyDeletedID: UUID?
     @State private var localError: String?
     @State private var showsStatus = false
+    @State private var showsDisplayArrangement = false
 
     public init(
         model: WALIAppModel = WALIAppModel(),
@@ -66,7 +69,7 @@ public struct WALIAppRootView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .frame(minWidth: 820, idealWidth: 1120, minHeight: 560, idealHeight: 720)
         .onAppear(perform: synchronizeSelection)
-        .onChange(of: model.snapshot.displays) { _, _ in
+        .onChange(of: connectedDisplayIDs) { _, _ in
             synchronizeDisplays()
             synchronizeContentFit()
         }
@@ -138,6 +141,7 @@ public struct WALIAppRootView: View {
                 wallpapers: filteredWallpapers,
                 selectedID: $selectedWallpaperID,
                 previewedID: selectedWallpaperID,
+                canApply: hasConnectedDisplaySelection,
                 onImport: { showsImporter = true },
                 onApply: apply,
                 onPreview: preview,
@@ -192,10 +196,21 @@ public struct WALIAppRootView: View {
         }
 
         ToolbarItemGroup(placement: .automatic) {
-            DisplayAssignmentMenu(
-                displays: model.snapshot.displays,
-                selection: $selectedDisplayIDs
-            )
+            Button {
+                showsDisplayArrangement.toggle()
+            } label: {
+                Label(displayPickerTitle, systemImage: "display.2")
+            }
+            .help("Choose Displays")
+            .popover(isPresented: $showsDisplayArrangement, arrowEdge: .bottom) {
+                DisplayArrangementView(
+                    displays: model.snapshot.displays,
+                    wallpapers: model.snapshot.wallpapers,
+                    selection: $selectedDisplayIDs,
+                    onDone: { showsDisplayArrangement = false }
+                )
+            }
+            .accessibilityIdentifier("WALI.DisplayPicker")
 
             Button {
                 showsStatus.toggle()
@@ -217,7 +232,7 @@ public struct WALIAppRootView: View {
                 if let selectedWallpaper { apply(selectedWallpaper) }
             }
             .keyboardShortcut(.return, modifiers: [.command])
-            .disabled(selectedWallpaper == nil)
+            .disabled(selectedWallpaper == nil || !hasConnectedDisplaySelection)
             Button("Pause or Resume") {
                 actions.send(.setPaused(!model.snapshot.renderer.state.isPaused))
             }
@@ -270,8 +285,15 @@ public struct WALIAppRootView: View {
     }
 
     private var effectiveDisplayIDs: Set<String> {
-        if !selectedDisplayIDs.isEmpty { return selectedDisplayIDs }
-        return Set(model.snapshot.displays.lazy.filter(\.isConnected).map(\.id))
+        selectedDisplayIDs.intersection(connectedDisplayIDs)
+    }
+
+    private var connectedDisplayIDs: Set<String> {
+        Set(model.snapshot.displays.lazy.filter(\.isConnected).map(\.id))
+    }
+
+    private var hasConnectedDisplaySelection: Bool {
+        !effectiveDisplayIDs.isEmpty
     }
 
     private var activeTransferCount: Int {
@@ -293,6 +315,14 @@ public struct WALIAppRootView: View {
         }
     }
 
+    private var displayPickerTitle: String {
+        switch selectedDisplayIDs.count {
+        case 0: "Choose Displays"
+        case 1: "1 Display"
+        default: "\(selectedDisplayIDs.count) Displays"
+        }
+    }
+
     private var deletionAlertBinding: Binding<Bool> {
         Binding(
             get: { pendingDeletionID != nil },
@@ -307,9 +337,22 @@ public struct WALIAppRootView: View {
     }
 
     private func synchronizeDisplays() {
-        let connected = Set(model.snapshot.displays.lazy.filter(\.isConnected).map(\.id))
-        selectedDisplayIDs.formIntersection(connected)
-        if selectedDisplayIDs.isEmpty { selectedDisplayIDs = connected }
+        let connected = connectedDisplayIDs
+
+        if !hasInitializedDisplaySelection {
+            guard !connected.isEmpty else {
+                knownConnectedDisplayIDs = connected
+                return
+            }
+            selectedDisplayIDs = connected
+            hasInitializedDisplaySelection = true
+        } else if connected != knownConnectedDisplayIDs {
+            // Preserve the pending selection exactly: removed displays fall
+            // out, while newly connected displays wait for an explicit pick.
+            selectedDisplayIDs.formIntersection(connected)
+        }
+
+        knownConnectedDisplayIDs = connected
     }
 
     private func synchronizeWallpaperSelection() {

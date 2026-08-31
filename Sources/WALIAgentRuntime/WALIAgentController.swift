@@ -705,20 +705,34 @@ public final class WALIAgentController: WALIUIActionHandling {
                     pixelHeight: Int((display.frame.height * display.backingScaleFactor).rounded()),
                     isMain: display.isMain,
                     isBuiltIn: display.isBuiltIn,
+                    frameX: Double(display.frame.origin.x),
+                    frameY: Double(display.frame.origin.y),
+                    frameWidth: Double(display.frame.width),
+                    frameHeight: Double(display.frame.height),
                     assignedItemID: nil,
                     isOnline: true
                 )
             }
             guard snapshot.displays == renderer.snapshot.displays else { return }
             let currentOnline = state.displays.filter(\.isOnline).map {
-                ($0.id, $0.aliases, $0.name, $0.pixelWidth, $0.pixelHeight, $0.isMain, $0.isBuiltIn)
+                (
+                    $0.id, $0.aliases, $0.name, $0.pixelWidth, $0.pixelHeight,
+                    $0.isMain, $0.isBuiltIn, $0.frameX, $0.frameY, $0.frameWidth,
+                    $0.frameHeight
+                )
             }
             let observed = displays.map {
-                ($0.id, $0.aliases, $0.name, $0.pixelWidth, $0.pixelHeight, $0.isMain, $0.isBuiltIn)
+                (
+                    $0.id, $0.aliases, $0.name, $0.pixelWidth, $0.pixelHeight,
+                    $0.isMain, $0.isBuiltIn, $0.frameX, $0.frameY, $0.frameWidth,
+                    $0.frameHeight
+                )
             }
             if !currentOnline.elementsEqual(observed, by: { lhs, rhs in
                 lhs.0 == rhs.0 && lhs.1 == rhs.1 && lhs.2 == rhs.2 && lhs.3 == rhs.3
                     && lhs.4 == rhs.4 && lhs.5 == rhs.5 && lhs.6 == rhs.6
+                    && lhs.7 == rhs.7 && lhs.8 == rhs.8 && lhs.9 == rhs.9
+                    && lhs.10 == rhs.10
             }) {
                 _ = try await router.performInternal(.replaceDisplays(displays))
             }

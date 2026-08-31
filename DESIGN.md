@@ -112,6 +112,11 @@ Settings stays in the standard application menu and `⌘,`; it is not a fake sid
 - Leading: native sidebar toggle and navigation history when applicable.
 - Center/primary area: search scoped to the current library surface.
 - Trailing: display assignment, active-wallpaper state, and a WALI status button.
+- Display assignment opens a popover that mirrors the connected display geometry
+  reported by macOS. Its centered, proportional monitor tiles are selection
+  controls, not draggable arrangement controls. Tiles show the current wallpaper,
+  display role, and scaling mode; the detail surface's Apply button remains the
+  only commit point for wallpaper changes.
 - The WALI status button opens the same compact status content used by the menu-bar extra: renderer CPU, memory, playback state, and quick controls.
 
 Toolbar items use native grouping. No custom toolbar background is drawn.

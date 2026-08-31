@@ -104,6 +104,12 @@ public struct WALIDisplayPresentation: Identifiable, Equatable, Sendable {
     public var detail: String
     public var isConnected: Bool
     public var isBuiltIn: Bool
+    public var isMain: Bool
+    public var assignedWallpaperID: UUID?
+    public var frameX: Double?
+    public var frameY: Double?
+    public var frameWidth: Double?
+    public var frameHeight: Double?
     public var contentFit: WALIContentFitPreference?
 
     public init(
@@ -112,6 +118,12 @@ public struct WALIDisplayPresentation: Identifiable, Equatable, Sendable {
         detail: String,
         isConnected: Bool = true,
         isBuiltIn: Bool = false,
+        isMain: Bool = false,
+        assignedWallpaperID: UUID? = nil,
+        frameX: Double? = nil,
+        frameY: Double? = nil,
+        frameWidth: Double? = nil,
+        frameHeight: Double? = nil,
         contentFit: WALIContentFitPreference? = nil
     ) {
         self.id = id
@@ -119,6 +131,12 @@ public struct WALIDisplayPresentation: Identifiable, Equatable, Sendable {
         self.detail = detail
         self.isConnected = isConnected
         self.isBuiltIn = isBuiltIn
+        self.isMain = isMain
+        self.assignedWallpaperID = assignedWallpaperID
+        self.frameX = frameX
+        self.frameY = frameY
+        self.frameWidth = frameWidth
+        self.frameHeight = frameHeight
         self.contentFit = contentFit
     }
 }

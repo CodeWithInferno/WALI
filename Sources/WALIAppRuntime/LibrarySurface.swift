@@ -7,6 +7,7 @@ struct LibrarySurface: View {
     let wallpapers: [WALIWallpaperPresentation]
     @Binding var selectedID: UUID?
     let previewedID: UUID?
+    let canApply: Bool
     let onImport: () -> Void
     let onApply: (WALIWallpaperPresentation) -> Void
     let onPreview: (WALIWallpaperPresentation) -> Void
@@ -33,6 +34,7 @@ struct LibrarySurface: View {
                                 wallpaper: wallpaper,
                                 isSelected: wallpaper.id == selectedID,
                                 isPreviewing: wallpaper.id == hoveringID,
+                                canApply: canApply,
                                 onSelect: { selectedID = wallpaper.id },
                                 onApply: { onApply(wallpaper) },
                                 onPreview: { onPreview(wallpaper) },
@@ -95,6 +97,7 @@ private struct WallpaperTile: View {
     let wallpaper: WALIWallpaperPresentation
     let isSelected: Bool
     let isPreviewing: Bool
+    let canApply: Bool
     let onSelect: () -> Void
     let onApply: () -> Void
     let onPreview: () -> Void
@@ -102,7 +105,17 @@ private struct WallpaperTile: View {
     let onReveal: () -> Void
     let onHover: (Bool) -> Void
 
+    @ViewBuilder
     var body: some View {
+        if isApplyEnabled {
+            tile
+                .accessibilityAction(named: "Apply", onApply)
+        } else {
+            tile
+        }
+    }
+
+    private var tile: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .bottomLeading) {
                 Group {
@@ -140,12 +153,15 @@ private struct WallpaperTile: View {
             }
         }
         .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: onApply)
+        .onTapGesture(count: 2) {
+            guard isApplyEnabled else { return }
+            onApply()
+        }
         .simultaneousGesture(TapGesture().onEnded(onSelect))
         .onHover(perform: onHover)
         .contextMenu {
             Button("Apply to Selected Displays", action: onApply)
-                .disabled(!isReady)
+                .disabled(!isApplyEnabled)
             Button("Preview", action: onPreview)
             Divider()
             Button("Show in Finder", action: onReveal)
@@ -154,7 +170,6 @@ private struct WallpaperTile: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .accessibilityAction(named: "Apply", onApply)
         .accessibilityAction(named: "Preview", onPreview)
     }
 
@@ -204,6 +219,10 @@ private struct WallpaperTile: View {
 
     private var isReady: Bool {
         if case .ready = wallpaper.availability { true } else { false }
+    }
+
+    private var isApplyEnabled: Bool {
+        isReady && canApply
     }
 
     private func clamped(_ value: Double) -> Double {

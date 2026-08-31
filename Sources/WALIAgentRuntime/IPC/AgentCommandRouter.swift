@@ -309,6 +309,10 @@ private extension EngineDisplay {
             pixelHeight: pixelHeight,
             isMain: isMain,
             isBuiltIn: isBuiltIn,
+            frameX: frameX,
+            frameY: frameY,
+            frameWidth: frameWidth,
+            frameHeight: frameHeight,
             assignedItemID: assignedItemID,
             scaling: scaling.flatMap { .init(rawValue: $0.rawValue) },
             isOnline: isOnline

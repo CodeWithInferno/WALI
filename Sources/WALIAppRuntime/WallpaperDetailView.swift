@@ -109,6 +109,7 @@ struct WallpaperDetailView: View {
                                 }
                                 .disabled(!display.isConnected)
                                 .toggleStyle(.checkbox)
+                                .accessibilityIdentifier("WALI.WallpaperDetail.Display.\(display.id)")
                             }
                         }
                     }
@@ -134,7 +135,8 @@ struct WallpaperDetailView: View {
             HStack(spacing: 8) {
                 Button("Apply", action: onApply)
                     .buttonStyle(.borderedProminent)
-                    .disabled(!isReady || selectedDisplayIDs.isEmpty)
+                    .disabled(!isReady || !hasConnectedDisplaySelection)
+                    .accessibilityIdentifier("WALI.WallpaperDetail.Apply")
 
                 Menu {
                     Button("Show in Finder", action: onReveal)
@@ -219,50 +221,10 @@ struct WallpaperDetailView: View {
     private var isReady: Bool {
         if case .ready = wallpaper.availability { true } else { false }
     }
-}
 
-struct DisplayAssignmentMenu: View {
-    let displays: [WALIDisplayPresentation]
-    @Binding var selection: Set<String>
-
-    var body: some View {
-        Menu {
-            if displays.isEmpty {
-                Text("No Displays Available")
-            } else {
-                ForEach(displays) { display in
-                    Toggle(isOn: binding(for: display.id)) {
-                        Label(display.name, systemImage: display.isBuiltIn ? "laptopcomputer" : "display")
-                    }
-                    .disabled(!display.isConnected)
-                }
-                Divider()
-                Button("All Connected Displays") {
-                    selection = Set(displays.lazy.filter(\.isConnected).map(\.id))
-                }
-            }
-        } label: {
-            Label(menuTitle, systemImage: "display.2")
+    private var hasConnectedDisplaySelection: Bool {
+        displays.contains { display in
+            display.isConnected && selectedDisplayIDs.contains(display.id)
         }
-        .help("Choose Displays")
-        .accessibilityIdentifier("WALI.DisplayPicker")
-    }
-
-    private var menuTitle: String {
-        switch selection.count {
-        case 0: "Choose Displays"
-        case 1: "1 Display"
-        default: "\(selection.count) Displays"
-        }
-    }
-
-    private func binding(for displayID: String) -> Binding<Bool> {
-        Binding(
-            get: { selection.contains(displayID) },
-            set: { selected in
-                if selected { selection.insert(displayID) }
-                else { selection.remove(displayID) }
-            }
-        )
     }
 }

@@ -89,6 +89,8 @@ public struct EngineLibraryItem: Codable, Sendable, Hashable, Identifiable {
 }
 
 public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
+    private static let maximumLogicalFrameValue = 1_000_000.0
+
     public let id: String
     public var aliases: [String]
     public var name: String
@@ -96,6 +98,10 @@ public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
     public var pixelHeight: Int
     public var isMain: Bool
     public var isBuiltIn: Bool
+    public var frameX: Double?
+    public var frameY: Double?
+    public var frameWidth: Double?
+    public var frameHeight: Double?
     public var assignedItemID: UUID?
     public var scaling: EnginePreferences.Scaling?
     public var isOnline: Bool
@@ -108,6 +114,10 @@ public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
         pixelHeight: Int,
         isMain: Bool,
         isBuiltIn: Bool = false,
+        frameX: Double? = nil,
+        frameY: Double? = nil,
+        frameWidth: Double? = nil,
+        frameHeight: Double? = nil,
         assignedItemID: UUID? = nil,
         scaling: EnginePreferences.Scaling? = nil,
         isOnline: Bool = true
@@ -119,6 +129,10 @@ public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
         self.pixelHeight = pixelHeight
         self.isMain = isMain
         self.isBuiltIn = isBuiltIn
+        self.frameX = Self.boundedCoordinate(frameX)
+        self.frameY = Self.boundedCoordinate(frameY)
+        self.frameWidth = Self.boundedDimension(frameWidth)
+        self.frameHeight = Self.boundedDimension(frameHeight)
         self.assignedItemID = assignedItemID
         self.scaling = scaling
         self.isOnline = isOnline
@@ -126,6 +140,7 @@ public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, aliases, name, pixelWidth, pixelHeight, isMain, isBuiltIn
+        case frameX, frameY, frameWidth, frameHeight
         case assignedItemID, scaling, isOnline
     }
 
@@ -138,6 +153,10 @@ public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
         pixelHeight = try values.decode(Int.self, forKey: .pixelHeight)
         isMain = try values.decode(Bool.self, forKey: .isMain)
         isBuiltIn = try values.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
+        frameX = Self.boundedCoordinate(try values.decodeIfPresent(Double.self, forKey: .frameX))
+        frameY = Self.boundedCoordinate(try values.decodeIfPresent(Double.self, forKey: .frameY))
+        frameWidth = Self.boundedDimension(try values.decodeIfPresent(Double.self, forKey: .frameWidth))
+        frameHeight = Self.boundedDimension(try values.decodeIfPresent(Double.self, forKey: .frameHeight))
         assignedItemID = try values.decodeIfPresent(UUID.self, forKey: .assignedItemID)
         scaling = try values.decodeIfPresent(EnginePreferences.Scaling.self, forKey: .scaling)
         isOnline = try values.decodeIfPresent(Bool.self, forKey: .isOnline) ?? true
@@ -152,9 +171,27 @@ public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
         try values.encode(pixelHeight, forKey: .pixelHeight)
         try values.encode(isMain, forKey: .isMain)
         try values.encode(isBuiltIn, forKey: .isBuiltIn)
+        try values.encodeIfPresent(Self.boundedCoordinate(frameX), forKey: .frameX)
+        try values.encodeIfPresent(Self.boundedCoordinate(frameY), forKey: .frameY)
+        try values.encodeIfPresent(Self.boundedDimension(frameWidth), forKey: .frameWidth)
+        try values.encodeIfPresent(Self.boundedDimension(frameHeight), forKey: .frameHeight)
         try values.encodeIfPresent(assignedItemID, forKey: .assignedItemID)
         try values.encodeIfPresent(scaling, forKey: .scaling)
         try values.encode(isOnline, forKey: .isOnline)
+    }
+
+    private static func boundedCoordinate(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, abs(value) <= maximumLogicalFrameValue else {
+            return nil
+        }
+        return value
+    }
+
+    private static func boundedDimension(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, value > 0, value <= maximumLogicalFrameValue else {
+            return nil
+        }
+        return value
     }
 }
 
