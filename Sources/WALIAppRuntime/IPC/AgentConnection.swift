@@ -26,12 +26,39 @@ private final class AgentOneShotContinuation<Value: Sendable>: @unchecked Sendab
         self.continuation = continuation
     }
 
-    func resume(with result: Result<Value, Error>) {
+    nonisolated func resume(with result: Result<Value, Error>) {
         lock.lock()
         let pending = continuation
         continuation = nil
         lock.unlock()
         pending?.resume(with: result)
+    }
+}
+
+/// Builds Objective-C callbacks outside ``AgentConnection``'s main-actor
+/// isolation. NSXPC invokes these blocks on private queues, so they may only
+/// resolve the thread-safe continuation and must never touch app state.
+private enum AgentCallbackFactory {
+    nonisolated static func errorHandler(
+        _ oneShot: AgentOneShotContinuation<Data>
+    ) -> @Sendable (any Error) -> Void {
+        { error in
+            oneShot.resume(with: .failure(error))
+        }
+    }
+
+    nonisolated static func replyHandler(
+        _ oneShot: AgentOneShotContinuation<Data>
+    ) -> @Sendable (Data?, (any Error)?) -> Void {
+        { data, error in
+            if let error {
+                oneShot.resume(with: .failure(error))
+            } else if let data {
+                oneShot.resume(with: .success(data))
+            } else {
+                oneShot.resume(with: .failure(AgentConnectionError.emptyResponse))
+            }
+        }
     }
 }
 
@@ -97,21 +124,13 @@ public final class AgentConnection {
         let connection = activeConnection()
         return try await withCheckedThrowingContinuation { continuation in
             let oneShot = AgentOneShotContinuation<Data>(continuation)
-            guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
-                oneShot.resume(with: .failure(error))
-            }) as? WALIAgentXPCProtocol else {
+            guard let proxy = connection.remoteObjectProxyWithErrorHandler(
+                AgentCallbackFactory.errorHandler(oneShot)
+            ) as? WALIAgentXPCProtocol else {
                 oneShot.resume(with: .failure(AgentConnectionError.invalidProxy))
                 return
             }
-            proxy.perform(request) { data, error in
-                if let error {
-                    oneShot.resume(with: .failure(error))
-                } else if let data {
-                    oneShot.resume(with: .success(data))
-                } else {
-                    oneShot.resume(with: .failure(AgentConnectionError.emptyResponse))
-                }
-            }
+            proxy.perform(request, withReply: AgentCallbackFactory.replyHandler(oneShot))
         }
     }
 
