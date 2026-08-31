@@ -1,0 +1,20 @@
+---
+description: Resource, media, persistence, and cleanup invariants
+globs: "{Packages/WALICore,Sources/WALIAgent,Sources/WALITranscoder,scripts}/**/*"
+alwaysApply: false
+---
+
+# Performance and Storage
+
+- Optimize from measurements; do not replace AVFoundation/VideoToolbox with custom rendering without benchmark evidence.
+- Pause decoding for sleep, display sleep, lock, invisible previews, serious thermal pressure, and configured low-power policy.
+- Poll resource metrics only while a diagnostics surface observes them; bound all in-memory histories.
+- Never decode a full master to render a library tile; use verified poster and preview variants.
+- Import into a staging transaction, verify outputs, then atomically install metadata and files.
+- Cancellation and crashes leave no library-visible partial asset and no permanent orphan.
+- The agent is the sole persistent-state writer; SQLite uses migrations, foreign keys, and transactional changes.
+- Binary media stays outside SQLite. Every stored file is referenced by metadata or an active staging journal.
+- Use APFS cloning for compatible lock-screen installation when safe; fall back to copy and never hard-link user library media.
+- Teardown is idempotent and releases windows, players, loopers, layers, observations, tasks, files, and descriptors.
+- Preserve a poster during pause/failure so stopping decode does not produce a blank desktop.
+- New continuous background work requires a measured energy budget and an off/suspend path.

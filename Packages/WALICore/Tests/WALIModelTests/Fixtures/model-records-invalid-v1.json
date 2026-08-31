@@ -1,0 +1,80 @@
+{
+  "succeededJobWithoutResult": {
+    "schema": {
+      "epoch": 1,
+      "revision": 0
+    },
+    "header": {
+      "schema": {
+        "epoch": 1,
+        "revision": 0
+      },
+      "id": "00000000-0000-0000-0000-00000000000a",
+      "kind": "wali.import",
+      "idempotencyKey": "00000000-0000-0000-0000-00000000000b",
+      "expectedEngineRevision": 7,
+      "phase": "terminal",
+      "attemptGeneration": 1,
+      "terminalOutcome": "succeeded"
+    },
+    "attempts": [
+      {
+        "jobID": "00000000-0000-0000-0000-00000000000a",
+        "generation": 1,
+        "state": {
+          "tag": "terminal",
+          "outcome": "succeeded"
+        }
+      }
+    ]
+  },
+  "cleanupStateWithoutOutcome": {
+    "tag": "cleanup_pending"
+  },
+  "invalidImportJobInput": {
+    "tag": "finish_attempt",
+    "generation": 1
+  },
+  "activeHeaderWithoutGeneration": {
+    "schema": {
+      "epoch": 1,
+      "revision": 0
+    },
+    "id": "00000000-0000-0000-0000-00000000000a",
+    "kind": "wali.import",
+    "idempotencyKey": "00000000-0000-0000-0000-00000000000b",
+    "expectedEngineRevision": 7,
+    "phase": "attempt_active"
+  },
+  "invalidReplacementPreparation": {
+    "tag": "ready",
+    "generation": 1
+  },
+  "invalidPlaybackInput": {
+    "tag": "set_automatic_reason",
+    "reason": "wali.system-sleep"
+  },
+  "unsupportedLibraryItem": {
+    "schema": {
+      "epoch": 2,
+      "revision": 0
+    },
+    "id": "00000000-0000-0000-0000-000000000006",
+    "releaseID": "00000000-0000-0000-0000-000000000002",
+    "displayName": "Aurora",
+    "origin": "local_import"
+  },
+  "duplicatePauseReasons": {
+    "schema": {
+      "epoch": 1,
+      "revision": 0
+    },
+    "desiredRunning": true,
+    "userPaused": false,
+    "automaticPauseReasons": [
+      "wali.system-sleep",
+      "wali.system-sleep"
+    ],
+    "selectedQuality": "balanced"
+  }
+}

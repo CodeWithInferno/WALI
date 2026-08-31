@@ -1,0 +1,563 @@
+schema_version: 3
+schema_document: docs/architecture/modules-schema.md
+
+swift_packages:
+  WALICore:
+    xcodegen_reference:
+      name: WALICore
+      path: Packages/WALICore
+    current:
+      products:
+        WALIModel:
+          kind: library
+          linkage: static
+          targets:
+            - WALIModel
+        WALIWire:
+          kind: library
+          linkage: static
+          targets:
+            - WALIWire
+        WALIEngine:
+          kind: library
+          linkage: static
+          targets:
+            - WALIEngine
+      targets:
+        WALIModel:
+          kind: regular
+          path: Sources/WALIModel
+          dependencies: []
+        WALIWire:
+          kind: regular
+          path: Sources/WALIWire
+          dependencies:
+            - WALIModel
+        WALIEngine:
+          kind: regular
+          path: Sources/WALIEngine
+          dependencies:
+            - WALIModel
+        WALIModelTests:
+          kind: test
+          path: Tests/WALIModelTests
+          dependencies:
+            - WALIModel
+        WALIWireTests:
+          kind: test
+          path: Tests/WALIWireTests
+          dependencies:
+            - WALIWire
+        WALIEngineTests:
+          kind: test
+          path: Tests/WALIEngineTests
+          dependencies:
+            - WALIEngine
+    target:
+      products:
+        WALIModel:
+          kind: library
+          linkage: static
+          targets:
+            - WALIModel
+        WALIWire:
+          kind: library
+          linkage: static
+          targets:
+            - WALIWire
+        WALIEngine:
+          kind: library
+          linkage: static
+          targets:
+            - WALIEngine
+      targets:
+        WALIModel:
+          kind: regular
+          path: Sources/WALIModel
+          dependencies: []
+        WALIWire:
+          kind: regular
+          path: Sources/WALIWire
+          dependencies:
+            - WALIModel
+        WALIEngine:
+          kind: regular
+          path: Sources/WALIEngine
+          dependencies:
+            - WALIModel
+        WALIModelTests:
+          kind: test
+          path: Tests/WALIModelTests
+          dependencies:
+            - WALIModel
+        WALIWireTests:
+          kind: test
+          path: Tests/WALIWireTests
+          dependencies:
+            - WALIWire
+        WALIEngineTests:
+          kind: test
+          path: Tests/WALIEngineTests
+          dependencies:
+            - WALIEngine
+
+xcode_test_targets:
+  WALIAppTests:
+    type: bundle.unit-test
+    source_path: Tests/WALIAppTests
+    build_dependencies:
+      - WALIAppRuntime
+    package_dependencies: []
+  WALIAgentTests:
+    type: bundle.unit-test
+    source_path: Tests/WALIAgentTests
+    build_dependencies:
+      - WALIAgentRuntime
+    package_dependencies: []
+  WALITranscoderTests:
+    type: bundle.unit-test
+    source_path: Tests/WALITranscoderTests
+    build_dependencies:
+      - WALITranscoderRuntime
+    package_dependencies: []
+  WALIUITests:
+    type: bundle.unit-test
+    source_path: Tests/WALIUITests
+    build_dependencies:
+      - WALIUI
+    package_dependencies: []
+  WALIEndToEndTests:
+    type: bundle.ui-testing
+    source_path: UITests/WALIEndToEndTests
+    build_dependencies:
+      - WALI
+    package_dependencies: []
+
+modules:
+  WALICore:
+    presence: absent
+    source_path: Packages/WALICore/Sources/WALICore
+    owner_role: architecture_maintainer
+    stability: transitional
+    current_capabilities: []
+    target_responsibility: Retired imported module; WALICore remains only the local package reference and folder name.
+    current_target: null
+    target_target: null
+    current_allowed_internal_imports: []
+    target_allowed_internal_imports: []
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - Foundation
+      - SwiftUI
+      - AppKit
+      - AVFoundation
+      - VideoToolbox
+      - Metal
+      - SQLite3
+      - CoreData
+      - SwiftData
+      - ServiceManagement
+      - CloudKit
+      - Network
+
+  WALIModel:
+    presence: current
+    source_path: Packages/WALICore/Sources/WALIModel
+    owner_role: domain_maintainer
+    stability: stable_contract
+    current_capabilities:
+      - module_availability_marker
+      - validated_immutable_model_records
+      - playback_state_reducer
+      - durable_import_job_reducer
+    target_responsibility: Stable immutable identifiers, records, policies, and reducer state.
+    current_target:
+      build_system: swift_package
+      name: WALIModel
+      type: library.static
+      package_reference: WALICore
+      product: WALIModel
+      target: WALIModel
+    target_target:
+      build_system: swift_package
+      name: WALIModel
+      type: library.static
+      package_reference: WALICore
+      product: WALIModel
+      target: WALIModel
+    current_allowed_internal_imports: []
+    target_allowed_internal_imports: []
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - Foundation
+      - SwiftUI
+      - AppKit
+      - AVFoundation
+      - VideoToolbox
+      - Metal
+      - SQLite3
+      - CoreData
+      - SwiftData
+      - ServiceManagement
+      - CloudKit
+      - Network
+
+  WALIWire:
+    presence: current
+    source_path: Packages/WALICore/Sources/WALIWire
+    owner_role: ipc_maintainer
+    stability: stable_contract
+    current_capabilities:
+      - module_availability_marker
+    target_responsibility: Bounded versioned transport-neutral DTOs and stable wire errors.
+    current_target:
+      build_system: swift_package
+      name: WALIWire
+      type: library.static
+      package_reference: WALICore
+      product: WALIWire
+      target: WALIWire
+    target_target:
+      build_system: swift_package
+      name: WALIWire
+      type: library.static
+      package_reference: WALICore
+      product: WALIWire
+      target: WALIWire
+    current_allowed_internal_imports:
+      - WALIModel
+    target_allowed_internal_imports:
+      - WALIModel
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - SwiftUI
+      - AppKit
+      - AVFoundation
+      - VideoToolbox
+      - Metal
+      - SQLite3
+      - CoreData
+      - SwiftData
+      - ServiceManagement
+      - CloudKit
+      - Network
+
+  WALIEngine:
+    presence: current
+    source_path: Packages/WALICore/Sources/WALIEngine
+    owner_role: engine_maintainer
+    stability: stable_interface
+    current_capabilities:
+      - module_availability_marker
+    target_responsibility: Transport-neutral use cases, durable jobs, revisions, and orchestration policy.
+    current_target:
+      build_system: swift_package
+      name: WALIEngine
+      type: library.static
+      package_reference: WALICore
+      product: WALIEngine
+      target: WALIEngine
+    target_target:
+      build_system: swift_package
+      name: WALIEngine
+      type: library.static
+      package_reference: WALICore
+      product: WALIEngine
+      target: WALIEngine
+    current_allowed_internal_imports:
+      - WALIModel
+    target_allowed_internal_imports:
+      - WALIModel
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - SwiftUI
+      - AppKit
+      - AVFoundation
+      - VideoToolbox
+      - Metal
+      - SQLite3
+      - CoreData
+      - SwiftData
+      - ServiceManagement
+      - CloudKit
+      - Network
+
+  WALIUI:
+    presence: current
+    source_path: Sources/WALIUI
+    owner_role: presentation_maintainer
+    stability: stable_interface
+    current_capabilities:
+      - placeholder_status_panel
+    target_responsibility: Reusable native presentation with no persistence, XPC, or renderer ownership.
+    current_target:
+      build_system: xcode
+      name: WALIUI
+      type: framework.static
+    target_target:
+      build_system: xcode
+      name: WALIUI
+      type: framework.static
+    current_allowed_internal_imports:
+      - WALIModel
+    target_allowed_internal_imports:
+      - WALIModel
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - SQLite3
+      - CoreData
+      - SwiftData
+      - ServiceManagement
+      - CloudKit
+      - Network
+
+  WALIAppRuntime:
+    presence: current
+    source_path: Sources/WALIAppRuntime
+    owner_role: foreground_runtime_maintainer
+    stability: adapter
+    current_capabilities:
+      - placeholder_root_view
+    target_responsibility: Foreground intentions, snapshot presentation, settings, and diagnostics UI adapters.
+    current_target:
+      build_system: xcode
+      name: WALIAppRuntime
+      type: framework.static
+    target_target:
+      build_system: xcode
+      name: WALIAppRuntime
+      type: framework.static
+    current_allowed_internal_imports:
+      - WALIModel
+      - WALIWire
+      - WALIUI
+    target_allowed_internal_imports:
+      - WALIModel
+      - WALIWire
+      - WALIUI
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - SQLite3
+      - CoreData
+      - SwiftData
+
+  WALIAgentRuntime:
+    presence: current
+    source_path: Sources/WALIAgentRuntime
+    owner_role: agent_runtime_maintainer
+    stability: adapter
+    current_capabilities:
+      - placeholder_root_view
+    target_responsibility: Host Engine, rendering, jobs, storage, and system-event adapters.
+    current_target:
+      build_system: xcode
+      name: WALIAgentRuntime
+      type: framework.static
+    target_target:
+      build_system: xcode
+      name: WALIAgentRuntime
+      type: framework.static
+    current_allowed_internal_imports:
+      - WALIModel
+      - WALIWire
+      - WALIEngine
+      - WALIUI
+    target_allowed_internal_imports:
+      - WALIModel
+      - WALIWire
+      - WALIEngine
+      - WALIUI
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks: []
+
+  WALITranscoderRuntime:
+    presence: current
+    source_path: Sources/WALITranscoderRuntime
+    owner_role: media_worker_maintainer
+    stability: adapter
+    current_capabilities:
+      - permissive_process_scoped_listener_placeholder
+    target_responsibility: Execute bounded immutable media attempts and return untrusted claims.
+    current_target:
+      build_system: xcode
+      name: WALITranscoderRuntime
+      type: framework.static
+    target_target:
+      build_system: xcode
+      name: WALITranscoderRuntime
+      type: framework.static
+    current_allowed_internal_imports:
+      - WALIModel
+      - WALIWire
+    target_allowed_internal_imports:
+      - WALIModel
+      - WALIWire
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - SwiftUI
+      - AppKit
+      - SQLite3
+      - CoreData
+      - SwiftData
+      - ServiceManagement
+      - CloudKit
+      - Network
+
+  WALI:
+    presence: current
+    source_path: Sources/WALIApp
+    owner_role: foreground_runtime_maintainer
+    stability: adapter
+    current_capabilities:
+      - placeholder_window_scene
+    target_responsibility: WALI.app composition root for foreground intentions and snapshots.
+    current_target:
+      build_system: xcode
+      name: WALI
+      type: application
+    target_target:
+      build_system: xcode
+      name: WALI
+      type: application
+    current_allowed_internal_imports:
+      - WALIAppRuntime
+    target_allowed_internal_imports:
+      - WALIAppRuntime
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - SQLite3
+      - CoreData
+      - SwiftData
+
+  WALIAgent:
+    presence: current
+    source_path: Sources/WALIAgent
+    owner_role: agent_runtime_maintainer
+    stability: adapter
+    current_capabilities:
+      - placeholder_settings_scene
+    target_responsibility: WALIAgent.app composition root and long-lived per-user Engine host.
+    current_target:
+      build_system: xcode
+      name: WALIAgent
+      type: application
+    target_target:
+      build_system: xcode
+      name: WALIAgent
+      type: application
+    current_allowed_internal_imports:
+      - WALIAgentRuntime
+    target_allowed_internal_imports:
+      - WALIAgentRuntime
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks: []
+
+  WALITranscoder:
+    presence: current
+    source_path: Sources/WALITranscoder
+    owner_role: media_worker_maintainer
+    stability: adapter
+    current_capabilities:
+      - xpc_service_entry_point
+    target_responsibility: WALITranscoder.xpc composition root for agent-private bounded media work.
+    current_target:
+      build_system: xcode
+      name: WALITranscoder
+      type: xpc-service
+    target_target:
+      build_system: xcode
+      name: WALITranscoder
+      type: xpc-service
+    current_allowed_internal_imports:
+      - WALITranscoderRuntime
+    target_allowed_internal_imports:
+      - WALITranscoderRuntime
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - SwiftUI
+      - AppKit
+      - SQLite3
+      - CoreData
+      - SwiftData
+
+edges:
+  current:
+    build:
+      - from: WALI
+        to: WALIAppRuntime
+      - from: WALIAppRuntime
+        to: WALIUI
+      - from: WALIAgent
+        to: WALIAgentRuntime
+      - from: WALIAgentRuntime
+        to: WALIUI
+      - from: WALITranscoder
+        to: WALITranscoderRuntime
+    package:
+      - from: WALIAppRuntime
+        to: WALIModel
+      - from: WALIAppRuntime
+        to: WALIWire
+      - from: WALIAgentRuntime
+        to: WALIModel
+      - from: WALIAgentRuntime
+        to: WALIWire
+      - from: WALIAgentRuntime
+        to: WALIEngine
+      - from: WALITranscoderRuntime
+        to: WALIModel
+      - from: WALITranscoderRuntime
+        to: WALIWire
+      - from: WALIUI
+        to: WALIModel
+    embed_only:
+      - from: WALI
+        to: WALIAgent
+      - from: WALIAgent
+        to: WALITranscoder
+
+  target:
+    build:
+      - from: WALI
+        to: WALIAppRuntime
+      - from: WALIAppRuntime
+        to: WALIUI
+      - from: WALIAgent
+        to: WALIAgentRuntime
+      - from: WALIAgentRuntime
+        to: WALIUI
+      - from: WALITranscoder
+        to: WALITranscoderRuntime
+    package:
+      - from: WALIAppRuntime
+        to: WALIModel
+      - from: WALIAppRuntime
+        to: WALIWire
+      - from: WALIAgentRuntime
+        to: WALIModel
+      - from: WALIAgentRuntime
+        to: WALIWire
+      - from: WALIAgentRuntime
+        to: WALIEngine
+      - from: WALITranscoderRuntime
+        to: WALIModel
+      - from: WALITranscoderRuntime
+        to: WALIWire
+      - from: WALIUI
+        to: WALIModel
+    embed_only:
+      - from: WALI
+        to: WALIAgent
+      - from: WALIAgent
+        to: WALITranscoder

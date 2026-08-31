@@ -1,0 +1,19 @@
+---
+description: Safe collaboration rules for humans and autonomous coding agents
+alwaysApply: true
+---
+
+# Contributor and Agent Protocol
+
+- Read `AGENTS.md`, the nearest module documentation, active plan, and relevant ADRs before editing.
+- Preserve user and contributor changes; never discard, reset, overwrite, or reformat unrelated work.
+- One task owns a file set at a time. Parallel agents may research independently but must not edit overlapping paths.
+- Keep changes scoped and reviewable; separate architecture, behavior, generated files, and formatting changes.
+- Update tests and public documentation in the same change as behavior.
+- Run focused verification, then affected-suite verification, and report exact commands/results.
+- Never commit, push, open a PR, alter remotes, or publish artifacts unless explicitly authorized.
+- Never add secrets, credentials, private media, proprietary reference assets, or local absolute paths.
+- New dependencies require a documented need, license check, maintenance check, and architectural approval.
+- Generated `WALI.xcodeproj` is not source of truth; edit `project.yml` and regenerate.
+- Architecture disagreement is resolved with evidence and an ADR, not by adding competing abstractions.
+- Leave the repository in a diagnosable state: typed errors, bounded logs, no silent fallbacks, and no disabled checks.

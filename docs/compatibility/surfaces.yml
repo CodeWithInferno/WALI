@@ -1,0 +1,462 @@
+schema_version: 3
+schema_document: docs/compatibility/surfaces-schema.md
+
+surfaces:
+  - id: sqlite_schema
+    kind: sqlite_schema
+    owner_role: storage_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALIAgent]
+      writers: [WALIAgent]
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      runtime_owner: WALIAgent
+      database_openers: [WALIAgent]
+      migration_policy:
+        fixture_requirement: every_supported_epoch_revision
+        unknown_newer: reject_before_write
+        stepwise: true
+
+  - id: artifact_manifest
+    kind: artifact_manifest
+    owner_role: storage_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALIAgent]
+      writers: [WALIAgent]
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      trust_authority: WALIAgent
+      checksum_algorithm: SHA-256
+      schema_policy: immutable_versioned_manifest
+      worker_claims: untrusted
+
+  - id: model_records
+    kind: model_records
+    owner_role: domain_maintainer
+    implementation: implemented
+    version:
+      current: { epoch: 1, revision: 0 }
+      readable_epochs:
+        - { epoch: 1, minimum_revision: 0, maximum_revision: 0 }
+      additive_compatibility: declared_ranges_only
+    product_compatibility:
+      minimum_reader: 0.1.0
+      minimum_writer: 0.1.0
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALIModel]
+      writers: [WALIModel]
+    fixture_gate:
+      status: passing
+      paths:
+        - Packages/WALICore/Tests/WALIModelTests/Fixtures/model-records-v1.json
+        - Packages/WALICore/Tests/WALIModelTests/Fixtures/model-records-invalid-v1.json
+    details:
+      schema: { epoch: 1, revision: 0 }
+      coding_semantics: logical_record_shape
+      canonical_bytes: false
+      record_roots:
+        - artifact
+        - asset_release
+        - library_item
+        - display_record
+        - device_local_presentation_assignment
+        - playback_state
+        - durable_job
+        - import_job
+      golden_fixture_paths:
+        - Packages/WALICore/Tests/WALIModelTests/Fixtures/model-records-v1.json
+      invalid_fixture_paths:
+        - Packages/WALICore/Tests/WALIModelTests/Fixtures/model-records-invalid-v1.json
+
+  - id: app_agent_wire
+    kind: wire_channel
+    owner_role: ipc_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALI, WALIAgent]
+      writers: [WALI, WALIAgent]
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      direction:
+        - from: WALI
+          to: WALIAgent
+          message_flow: intentions
+        - from: WALIAgent
+          to: WALI
+          message_flow: replies_snapshots_and_resync
+      message_catalog:
+        status: planned
+        path: null
+        messages: []
+        required_envelope_fields:
+          - protocol_version
+          - message_type
+          - message_version
+          - request_id
+          - idempotency_key
+          - expected_revision
+          - payload_length
+
+  - id: agent_worker_wire
+    kind: wire_channel
+    owner_role: ipc_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALIAgent, WALITranscoder]
+      writers: [WALIAgent, WALITranscoder]
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      direction:
+        - from: WALIAgent
+          to: WALITranscoder
+          message_flow: immutable_attempts_and_cancellation
+        - from: WALITranscoder
+          to: WALIAgent
+          message_flow: progress_terminal_results_and_untrusted_claims
+      message_catalog:
+        status: planned
+        path: null
+        messages: []
+        required_envelope_fields:
+          - protocol_version
+          - message_type
+          - message_version
+          - request_id
+          - idempotency_key
+          - expected_revision
+          - payload_length
+
+  - id: bundle_identifiers
+    kind: bundle_identity
+    owner_role: security_responder
+    implementation: configured
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: []
+      writers: []
+    fixture_gate:
+      status: not_applicable
+      paths: []
+    details:
+      configurations:
+        Debug:
+          WALI: com.wali.debug.WALI
+          WALIAgent: com.wali.debug.WALIAgent
+          WALITranscoder: com.wali.debug.WALITranscoder
+        Development:
+          WALI: com.wali.development.WALI
+          WALIAgent: com.wali.development.WALIAgent
+          WALITranscoder: com.wali.development.WALITranscoder
+        Release:
+          WALI: com.wali.WALI
+          WALIAgent: com.wali.WALIAgent
+          WALITranscoder: com.wali.WALITranscoder
+
+  - id: application_group_containers
+    kind: container_identity
+    owner_role: security_responder
+    implementation: configured
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: []
+      writers: []
+    fixture_gate:
+      status: not_applicable
+      paths: []
+    details:
+      entitlement_key: com.apple.security.application-groups
+      configurations:
+        Debug:
+          WALI: []
+          WALIAgent: []
+        Development:
+          WALI: [group.com.wali.development.shared]
+          WALIAgent: [group.com.wali.development.shared]
+        Release:
+          WALI: [group.com.wali.shared]
+          WALIAgent: [group.com.wali.shared]
+
+  - id: app_agent_service_names
+    kind: service_identity
+    owner_role: ipc_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALI, WALIAgent]
+      writers: []
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      decision_gate: adr_0006_signed_lifecycle_spike
+      configurations:
+        Debug:
+          current: []
+          target: [com.wali.debug.WALIAgent.control]
+        Development:
+          current: []
+          target: [com.wali.development.WALIAgent.control]
+        Release:
+          current: []
+          target: [com.wali.WALIAgent.control]
+
+  - id: agent_worker_service_names
+    kind: service_identity
+    owner_role: ipc_maintainer
+    implementation: configured
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALIAgent, WALITranscoder]
+      writers: []
+    fixture_gate:
+      status: not_applicable
+      paths: []
+    details:
+      decision_gate: hardening_task_2
+      configurations:
+        Debug:
+          current: [com.wali.debug.WALITranscoder]
+          target: [com.wali.debug.WALITranscoder]
+        Development:
+          current: [com.wali.development.WALITranscoder]
+          target: [com.wali.development.WALITranscoder]
+        Release:
+          current: [com.wali.WALITranscoder]
+          target: [com.wali.WALITranscoder]
+
+  - id: content_store
+    kind: content_store
+    owner_role: storage_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALIAgent]
+      writers: [WALIAgent]
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      current_layout: null
+      target_layout: Objects/sha256/<first-two-hex>/<full-digest>
+      digest_algorithm: SHA-256
+      publication_scope: same_volume_only
+      publication_primitive: no_replace
+
+  - id: preferences
+    kind: preferences
+    owner_role: agent_runtime_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALIAgent]
+      writers: [WALIAgent]
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      authority: WALIAgent
+      storage_status: unimplemented
+      current_keys: []
+      unknown_newer_policy: reject_before_mutation
+
+  - id: url_schemes
+    kind: url_scheme
+    owner_role: foreground_runtime_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALI]
+      writers: []
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      configurations:
+        Debug: []
+        Development: []
+        Release: []
+      mutation_policy: validate_and_confirm
+
+  - id: catalog_manifest
+    kind: catalog_manifest
+    owner_role: catalog_maintainer
+    implementation: deferred
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: []
+      writers: []
+    fixture_gate:
+      status: deferred
+      paths: []
+    details:
+      trust_model: signed_manifest_required
+      signature_required: true
+      network_status: deferred
+      schema_policy: bounded_versioned
+
+  - id: lock_screen_manifest
+    kind: lock_screen_manifest
+    owner_role: compatibility_maintainer
+    implementation: deferred
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: []
+      writers: []
+    fixture_gate:
+      status: deferred
+      paths: []
+    details:
+      support_scope: session_lock_screen_only
+      implementation_gate: separate_accepted_adr
+      fixture_policy: copied_version_gated_store
+
+  - id: diagnostic_export
+    kind: diagnostic_export
+    owner_role: diagnostics_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: []
+      writers: [WALIAgent]
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      current_format: null
+      required_redaction:
+        - user_paths
+        - credentials
+        - private_values
+        - media_bytes
+      excluded_payloads:
+        - source_media
+        - secrets
+      lease_required: true

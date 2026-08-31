@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Xcode user state and generated project
+WALI.xcodeproj/
+xcuserdata/
+*.xcuserstate
+
+# Generated build products
+.build/
+DerivedData/
+Config/Generated/
+*.profraw
+
+# Swift Package Manager
+Packages/WALICore/.build/
+Packages/WALICore/.swiftpm/
+
+# Transient root planning logs; curate durable material under docs/
+/findings.md
+/progress.md
+/task_plan.md

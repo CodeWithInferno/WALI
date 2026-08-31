@@ -1,0 +1,20 @@
+---
+description: Swift 6 concurrency and lifecycle requirements
+globs: "**/*.swift"
+alwaysApply: false
+---
+
+# Swift and Concurrency
+
+- Keep Swift 6 strict concurrency enabled; fix isolation errors instead of weakening compiler checks.
+- UI and AppKit object ownership is `@MainActor`.
+- Mutable persistence, import coordination, and renderer orchestration each have one explicit actor owner.
+- Value types crossing actors/processes conform to `Sendable`; prefer immutable structs and enums.
+- Never add `@unchecked Sendable` without an ADR, documented invariant, and focused race tests.
+- Prefer structured child tasks and task groups. Avoid `Task.detached` unless isolation is impossible and documented.
+- Long-running work checks cancellation, releases resources in `defer`, and reports a terminal state exactly once.
+- Do not block the main actor with file I/O, hashing, database operations, media analysis, encoding, sleeps, or synchronous IPC.
+- Avoid actor reentrancy bugs: validate state again after every `await` before committing mutations.
+- Store observation tokens explicitly and remove them during idempotent teardown.
+- Use monotonic clocks for durations and CPU deltas; inject clocks into tests.
+- Errors are typed at module interfaces; never silently swallow cancellation or system failures.

@@ -1,0 +1,20 @@
+---
+description: Test-first development and evidence requirements for WALI
+globs: "**/*.{swift,sh,yml,yaml}"
+alwaysApply: false
+---
+
+# Testing and Verification
+
+- For production behavior: write one focused failing test, observe the expected failure, implement minimally, then refactor while green.
+- Test through module interfaces. Prefer deterministic fakes over mocks of implementation details.
+- Every bug fix includes a regression test that fails without the fix.
+- Unit tests must not touch the live desktop assignment, login-item registry, Apple wallpaper store, user library, or network.
+- System adapters use temporary directories, fixture manifests, injected notifications, clocks, players, displays, and process samples.
+- Lock-screen automation runs only against copied fixtures; live verification is explicit and reversible.
+- Concurrency tests synchronize on events or clocks, never arbitrary sleeps.
+- A passing narrow test is not proof of a successful build; run the affected suite and build before completion claims.
+- Generated project changes require regeneration plus Debug and Release bundle verification.
+- Record performance hardware, macOS build, media profile, display topology, sample duration, median, and p95.
+- Do not weaken, skip, or delete a failing test merely to make CI green.
+- Completion requires fresh command output, not expectation or prior agent reports.

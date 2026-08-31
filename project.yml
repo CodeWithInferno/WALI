@@ -1,0 +1,294 @@
+name: WALI
+
+options:
+  bundleIdPrefix: com.wali
+  createIntermediateGroups: true
+  defaultConfig: Debug
+  deploymentTarget:
+    macOS: "15.0"
+  generateEmptyDirectories: true
+  minimumXcodeGenVersion: "2.44.1"
+  xcodeVersion: "26.2"
+
+configs:
+  Debug: debug
+  Development: debug
+  Release: release
+
+configFiles:
+  Debug: Config/Debug.xcconfig
+  Development: Config/Development.xcconfig
+  Release: Config/Release.xcconfig
+
+packages:
+  WALICore:
+    path: Packages/WALICore
+
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_VERSION: "6.0"
+
+targets:
+  WALI:
+    type: application
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources/WALIApp
+    info:
+      path: Config/Generated/WALI-Info.plist
+      properties:
+        CFBundleDisplayName: WALI
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.lifestyle
+        NSHighResolutionCapable: true
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_APP_BUNDLE_IDENTIFIER)"
+        PRODUCT_NAME: WALI
+        SKIP_INSTALL: NO
+      configs:
+        Development:
+          CODE_SIGN_ENTITLEMENTS: Config/WALI.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Config/WALI.entitlements
+    dependencies:
+      - target: WALIAppRuntime
+      - target: WALIAgent
+        embed: true
+        link: false
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/LoginItems
+
+  WALIAppRuntime:
+    type: framework.static
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources/WALIAppRuntime
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAppRuntime
+        PRODUCT_NAME: WALIAppRuntime
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: WALICore
+        product: WALIModel
+      - package: WALICore
+        product: WALIWire
+      - target: WALIUI
+
+  WALIAgent:
+    type: application
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources/WALIAgent
+    info:
+      path: Config/Generated/WALIAgent-Info.plist
+      properties:
+        CFBundleDisplayName: WALI Agent
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSUIElement: true
+        NSHighResolutionCapable: true
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
+        PRODUCT_NAME: WALIAgent
+        SKIP_INSTALL: YES
+      configs:
+        Development:
+          CODE_SIGN_ENTITLEMENTS: Config/WALIAgent.entitlements
+        Release:
+          CODE_SIGN_ENTITLEMENTS: Config/WALIAgent.entitlements
+    dependencies:
+      - target: WALIAgentRuntime
+      - target: WALITranscoder
+        embed: true
+        link: false
+        codeSign: true
+        copy:
+          destination: wrapper
+          subpath: Contents/XPCServices
+
+  WALIAgentRuntime:
+    type: framework.static
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources/WALIAgentRuntime
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAgentRuntime
+        PRODUCT_NAME: WALIAgentRuntime
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: WALICore
+        product: WALIModel
+      - package: WALICore
+        product: WALIWire
+      - package: WALICore
+        product: WALIEngine
+      - target: WALIUI
+
+  WALITranscoder:
+    type: xpc-service
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources/WALITranscoder
+    info:
+      path: Config/Generated/WALITranscoder-Info.plist
+      properties:
+        CFBundleDisplayName: WALI Transcoder
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        XPCService:
+          ServiceType: Application
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_TRANSCODER_BUNDLE_IDENTIFIER)"
+        PRODUCT_NAME: WALITranscoder
+        SKIP_INSTALL: YES
+    dependencies:
+      - target: WALITranscoderRuntime
+
+  WALITranscoderRuntime:
+    type: framework.static
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources/WALITranscoderRuntime
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALITranscoderRuntime
+        PRODUCT_NAME: WALITranscoderRuntime
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: WALICore
+        product: WALIModel
+      - package: WALICore
+        product: WALIWire
+
+  WALIUI:
+    type: framework.static
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Sources/WALIUI
+    settings:
+      base:
+        DEFINES_MODULE: YES
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIUI
+        PRODUCT_NAME: WALIUI
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: WALICore
+        product: WALIModel
+
+  WALIAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Tests/WALIAppTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAppTests
+    dependencies:
+      - target: WALIAppRuntime
+
+  WALIAgentTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Tests/WALIAgentTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAgentTests
+    dependencies:
+      - target: WALIAgentRuntime
+
+  WALITranscoderTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Tests/WALITranscoderTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALITranscoderTests
+    dependencies:
+      - target: WALITranscoderRuntime
+
+  WALIUITests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: Tests/WALIUITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIUITests
+    dependencies:
+      - target: WALIUI
+
+  WALIEndToEndTests:
+    type: bundle.ui-testing
+    platform: macOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: UITests/WALIEndToEndTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIEndToEndTests
+    dependencies:
+      - target: WALI
+
+schemes:
+  WALI:
+    build:
+      targets:
+        WALI: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - WALIAppTests
+        - WALIAgentTests
+        - WALITranscoderTests
+        - WALIUITests
+        - WALIEndToEndTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+    management:
+      shared: true
+

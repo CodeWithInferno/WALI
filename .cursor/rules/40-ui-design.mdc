@@ -1,0 +1,20 @@
+---
+description: Native macOS design and interaction rules for WALI surfaces
+globs: "Sources/{WALIApp,WALIAgent,WALIUI}/**/*.swift"
+alwaysApply: false
+---
+
+# Native UI Rules
+
+- Read `DESIGN.md` before creating or changing a visual surface.
+- Use native SwiftUI/AppKit navigation, toolbars, menus, settings, focus, commands, drag/drop, undo, and accessibility.
+- Let standard controls adopt the current macOS appearance; do not fake Liquid Glass or draw custom window chrome.
+- Glass/material belongs to navigation and controls, never wallpaper content tiles.
+- Use semantic system colors and type styles; do not bundle SF Pro or hardcode web typography.
+- Wallpaper imagery is primary. Keep chrome quiet, spacing deliberate, and decorative effects rare.
+- Give feedback on press. Gesture motion must be interruptible and originate from its current presentation state.
+- Do not animate frequently repeated keyboard actions; reserve bounce for real momentum.
+- Respect Reduce Motion, Reduce Transparency, Increase Contrast, VoiceOver, Full Keyboard Access, and system accent.
+- Global quick controls live in the menu-bar extra; the main toolbar may reuse the same `StatusPanel`.
+- Distinguish Pause, Stop Wallpaper, Close Window, and Quit WALI in labels and behavior.
+- Only one browser hover preview may decode at once, after the documented delay.

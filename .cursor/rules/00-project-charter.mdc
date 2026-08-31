@@ -1,0 +1,17 @@
+---
+description: WALI product mission, non-negotiable boundaries, and engineering priorities
+alwaysApply: true
+---
+
+# WALI Project Charter
+
+- Build an original, native macOS live-wallpaper product; do not copy proprietary code, artwork, branding, credentials, endpoints, or DRM behavior.
+- Target macOS 15+ with enhancements gated for macOS 26+.
+- Use Swift 6, SwiftUI for application surfaces, AppKit for desktop integration, and Apple media frameworks for playback/encoding.
+- Optimize in this order: correctness, user safety, recoverability, measured efficiency, maintainability, then feature breadth.
+- Treat the current user's desktop and session lock screen as supported domains.
+- Never claim WALI can replace or bypass FileVault preboot, SIP, another user's consent, or protected system login UI.
+- Keep local wallpapers usable without an account, network, analytics, or remote service.
+- Performance and storage claims require fresh measurements against documented budgets.
+- Read `DESIGN.md`, `ARCHITECTURE.md` when present, and applicable ADRs before changing product behavior.
+- Prefer reversible decisions and deep modules over speculative frameworks or future-proof abstractions.

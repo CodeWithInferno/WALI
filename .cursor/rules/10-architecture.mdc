@@ -1,0 +1,22 @@
+---
+description: Enforce WALI module seams, dependency direction, and architectural evolution
+alwaysApply: true
+---
+
+# Architecture Rules
+
+- `AGENTS.md` and accepted ADRs are normative; this file is only a concise projection.
+- Follow current and target states in `docs/architecture/modules.yml`; never describe planned modules as implemented.
+- Current app/agent surfaces are placeholders; app↔agent IPC, Engine orchestration, rendering, durable persistence, and storage do not exist yet.
+- `WALIModel` has Foundation-free Task 4 records and pure package-scoped playback/import-job reducers; `WALIWire` and `WALIEngine` remain marker-only products. `WALICore` is a package reference/path, not an imported module.
+- In the target, one Engine hosted by `WALIAgent.app` owns commands, revisions, jobs, storage decisions, and every persistent write.
+- Target `WALI.app` submits intentions and renders snapshots; it never owns renderer state, accepted jobs, or SQLite.
+- The target agent is the only WALI runtime SQLite opener and artifact installer.
+- The worker is agent-private in bundle containment; its bounded runtime request path remains unimplemented.
+- Runtime static modules are adapters. Executable targets never import one another's implementation.
+- Keep AppKit/SwiftUI objects, windows, players, and display reconciliation main-actor owned.
+- Use the stable seams named in `ARCHITECTURE.md`; avoid generic CRUD, pass-through managers, and one protocol per Apple framework.
+- Cross-process data has explicit protocol/message versions, IDs, bounds, stable errors, sequencing/resync, and peer authentication.
+- Use content-addressed immutable artifacts and a durable install journal; only committed verified releases are query-visible.
+- Add no empty catalog, sync, lock-screen, or plugin modules.
+- Ownership, dependency, persistence, IPC, security, rendering, or compatibility changes need an approved ADR.
