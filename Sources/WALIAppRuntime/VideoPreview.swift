@@ -44,7 +44,6 @@ private final class LoopingPlayback {
         let item = AVPlayerItem(url: url)
         let player = AVQueuePlayer()
         player.isMuted = true
-        player.actionAtItemEnd = .none
         self.player = player
         looper = AVPlayerLooper(player: player, templateItem: item)
     }

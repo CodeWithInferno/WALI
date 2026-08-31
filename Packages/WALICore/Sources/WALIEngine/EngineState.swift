@@ -5,6 +5,7 @@ import WALIModel
 public struct EngineSnapshot: Codable, Sendable, Hashable {
     public var revision: EngineRevision
     public var isPausedByUser: Bool
+    public var playbackStatus: EnginePlaybackStatus
     public var items: [EngineLibraryItem]
     public var trashedItems: [EngineLibraryItem]
     public var displays: [EngineDisplay]
@@ -15,6 +16,7 @@ public struct EngineSnapshot: Codable, Sendable, Hashable {
     public init(
         revision: EngineRevision = .init(rawValue: 0),
         isPausedByUser: Bool = false,
+        playbackStatus: EnginePlaybackStatus = .idle,
         items: [EngineLibraryItem] = [],
         trashedItems: [EngineLibraryItem] = [],
         displays: [EngineDisplay] = [],
@@ -24,6 +26,7 @@ public struct EngineSnapshot: Codable, Sendable, Hashable {
     ) {
         self.revision = revision
         self.isPausedByUser = isPausedByUser
+        self.playbackStatus = playbackStatus
         self.items = items
         self.trashedItems = trashedItems
         self.displays = displays
@@ -31,6 +34,15 @@ public struct EngineSnapshot: Codable, Sendable, Hashable {
         self.preferences = preferences
         self.resourceUsage = resourceUsage
     }
+}
+
+public enum EnginePlaybackStatus: Codable, Sendable, Hashable {
+    case idle
+    case preparing
+    case playing
+    case paused
+    case suspended
+    case failed(String)
 }
 
 public struct EngineLibraryItem: Codable, Sendable, Hashable, Identifiable {

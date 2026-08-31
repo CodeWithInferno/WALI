@@ -210,6 +210,7 @@ public struct ArtworkThumbnail: View {
     private let imageURL: URL?
     private let title: String
     private let cornerRadius: CGFloat
+    @State private var image: NSImage?
 
     public init(imageURL: URL?, title: String, cornerRadius: CGFloat = 12) {
         self.imageURL = imageURL
@@ -219,7 +220,7 @@ public struct ArtworkThumbnail: View {
 
     public var body: some View {
         Group {
-            if let imageURL, let image = NSImage(contentsOf: imageURL) {
+            if let image {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
@@ -235,5 +236,14 @@ public struct ArtworkThumbnail: View {
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .accessibilityLabel(title)
+        .task(id: imageURL) {
+            image = nil
+            guard let imageURL else { return }
+            let data = await Task.detached(priority: .utility) {
+                try? Data(contentsOf: imageURL, options: [.mappedIfSafe])
+            }.value
+            guard !Task.isCancelled, let data else { return }
+            image = NSImage(data: data)
+        }
     }
 }

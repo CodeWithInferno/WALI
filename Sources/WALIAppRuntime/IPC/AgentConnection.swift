@@ -38,7 +38,7 @@ public final class AgentConnection {
             expectedRevision: expectedRevision,
             command: command
         )
-        let requestData = try WireCodec.encode(request)
+        let requestData = try WireCodec.encodeRequest(request)
 
         let responseData = try await perform(requestData)
         let response = try WireCodec.decodeResponse(from: responseData)

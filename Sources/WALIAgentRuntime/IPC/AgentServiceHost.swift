@@ -32,7 +32,7 @@ private final class AgentServiceEndpoint: NSObject, WALIAgentXPCProtocol, @unche
         Task {
             let response = await handler(request)
             do {
-                replyBox.reply(try WireCodec.encode(response), nil)
+                replyBox.reply(try WireCodec.encodeResponse(response), nil)
             } catch {
                 replyBox.reply(nil, error as NSError)
             }
@@ -74,7 +74,10 @@ private enum LocalClientValidator {
 
         let ownTeam = ownInfo[kSecCodeInfoTeamIdentifier as String] as? String
         let clientTeam = clientInfo[kSecCodeInfoTeamIdentifier as String] as? String
-        return ownTeam == clientTeam
+        if let ownTeam, let clientTeam {
+            return ownTeam == clientTeam
+        }
+        return (Bundle.main.bundleIdentifier ?? "").contains(".debug.")
     }
 
     private static var expectedClientIdentifier: String {

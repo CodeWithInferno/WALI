@@ -9,6 +9,7 @@ public enum EngineAction: Sendable {
     case replaceDisplays([EngineDisplay])
     case apply(itemID: UUID, displayIDs: [String])
     case setPaused(Bool)
+    case setPlaybackStatus(EnginePlaybackStatus)
     case nextWallpaper
     case stopWallpaper
     case rename(itemID: UUID, name: String)
@@ -71,7 +72,7 @@ public actor RuntimeEngine {
         expectedRevision: EngineRevision? = nil
     ) throws -> EngineTransaction {
         if let prior = completedTransactions[idempotencyKey] {
-            return EngineTransaction(snapshot: prior.snapshot, effects: [])
+            return prior
         }
 
         if let expectedRevision, expectedRevision.rawValue != state.revision.rawValue {
@@ -83,7 +84,7 @@ public actor RuntimeEngine {
 
         let effects = try reduce(action)
         state.revision = EngineRevision(rawValue: state.revision.rawValue &+ 1)
-        let transaction = EngineTransaction(snapshot: state, effects: effects + [.persist])
+        let transaction = EngineTransaction(snapshot: state, effects: [.persist] + effects)
         remember(transaction, for: idempotencyKey)
         return transaction
     }
@@ -138,14 +139,29 @@ public actor RuntimeEngine {
             return [.cancelImport(jobID: id)]
 
         case let .replaceDisplays(displays):
-            let assignments = Dictionary(uniqueKeysWithValues: state.displays.map { ($0.id, $0.assignedItemID) })
-            state.displays = displays.map { display in
+            let previous = Dictionary(
+                state.displays.map { ($0.id, $0) },
+                uniquingKeysWith: { _, newest in newest }
+            )
+            let incoming = Dictionary(
+                displays.map { ($0.id, $0) },
+                uniquingKeysWith: { _, newest in newest }
+            )
+            var reconciled = incoming.values.map { display in
                 var display = display
                 if display.assignedItemID == nil {
-                    display.assignedItemID = assignments[display.id] ?? nil
+                    display.assignedItemID = previous[display.id]?.assignedItemID
                 }
                 return display
             }
+            reconciled.append(contentsOf: previous.values.compactMap { oldDisplay in
+                guard incoming[oldDisplay.id] == nil else { return nil }
+                var offline = oldDisplay
+                offline.isMain = false
+                offline.isOnline = false
+                return offline
+            })
+            state.displays = reconciled.sorted { $0.id < $1.id }
             return []
 
         case let .apply(itemID, displayIDs):
@@ -163,7 +179,12 @@ public actor RuntimeEngine {
 
         case let .setPaused(isPaused):
             state.isPausedByUser = isPaused
+            state.playbackStatus = isPaused ? .paused : (state.displays.contains { $0.assignedItemID != nil } ? .preparing : .idle)
             return [.setPlaybackPaused(isPaused)]
+
+        case let .setPlaybackStatus(status):
+            state.playbackStatus = status
+            return []
 
         case .nextWallpaper:
             guard !state.items.isEmpty else { return [] }
@@ -183,6 +204,7 @@ public actor RuntimeEngine {
             for index in state.displays.indices {
                 state.displays[index].assignedItemID = nil
             }
+            state.playbackStatus = .idle
             return assignedIDs.map { .stopRendering(itemID: $0) }
 
         case let .rename(itemID, proposedName):

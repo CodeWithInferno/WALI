@@ -7,6 +7,7 @@ import WALIModel
 public struct WallpaperRenderingAssignment: Sendable, Hashable {
     public let displayID: WallpaperDisplayIdentifier
     public let videoURL: URL
+    public let efficientVideoURL: URL?
     public let posterURL: URL?
     public let contentFit: PresentationContentFit
     public let lowPowerResponse: PresentationLowPowerResponse
@@ -14,12 +15,14 @@ public struct WallpaperRenderingAssignment: Sendable, Hashable {
     public init(
         displayID: WallpaperDisplayIdentifier,
         videoURL: URL,
+        efficientVideoURL: URL? = nil,
         posterURL: URL? = nil,
         contentFit: PresentationContentFit = .fill,
         lowPowerResponse: PresentationLowPowerResponse = .pause
     ) {
         self.displayID = displayID
         self.videoURL = videoURL
+        self.efficientVideoURL = efficientVideoURL
         self.posterURL = posterURL
         self.contentFit = contentFit
         self.lowPowerResponse = lowPowerResponse
@@ -102,7 +105,7 @@ public final class WallpaperRenderer {
         systemEvents.onChange = { [weak self] reasons in
             guard let self else { return }
             self.automaticPauseReasons = reasons
-            self.updatePauseState()
+            self.reconcile()
         }
         displayMonitor.start()
         systemEvents.start()
@@ -162,7 +165,8 @@ public final class WallpaperRenderer {
             sessions.removeValue(forKey: staleID)?.tearDown()
         }
 
-        for (assignment, display, screen) in observations {
+        for (requestedAssignment, display, screen) in observations {
+            let assignment = effectiveAssignment(requestedAssignment)
             if let session = sessions[display.id] {
                 session.update(
                     assignment: assignment,
@@ -208,6 +212,24 @@ public final class WallpaperRenderer {
             reasons.remove(.lowPower)
         }
         return reasons
+    }
+
+    private func effectiveAssignment(
+        _ assignment: WallpaperRenderingAssignment
+    ) -> WallpaperRenderingAssignment {
+        guard automaticPauseReasons.contains(.lowPower),
+              assignment.lowPowerResponse == .reduceQuality,
+              let efficientVideoURL = assignment.efficientVideoURL else {
+            return assignment
+        }
+        return WallpaperRenderingAssignment(
+            displayID: assignment.displayID,
+            videoURL: efficientVideoURL,
+            efficientVideoURL: efficientVideoURL,
+            posterURL: assignment.posterURL,
+            contentFit: assignment.contentFit,
+            lowPowerResponse: assignment.lowPowerResponse
+        )
     }
 
     private func removeAllSessions() {

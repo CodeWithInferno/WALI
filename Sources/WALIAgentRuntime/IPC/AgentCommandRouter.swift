@@ -77,8 +77,14 @@ public actor AgentCommandRouter {
 
             case .openForegroundApp:
                 await MainActor.run {
-                    if let identifier = Self.foregroundBundleIdentifier {
-                        NSWorkspace.shared.launchApplication(withBundleIdentifier: identifier, options: [], additionalEventParamDescriptor: nil, launchIdentifier: nil)
+                    if let identifier = Self.foregroundBundleIdentifier,
+                       let applicationURL = NSWorkspace.shared.urlForApplication(
+                           withBundleIdentifier: identifier
+                       ) {
+                        NSWorkspace.shared.openApplication(
+                            at: applicationURL,
+                            configuration: .init()
+                        ) { _, _ in }
                     }
                 }
                 return response(for: request, snapshot: await engine.snapshot())
@@ -178,13 +184,26 @@ private extension EngineSnapshot {
     var wireValue: AgentSnapshot {
         AgentSnapshot(
             revision: revision,
-            playback: isPausedByUser ? .paused : (displays.contains { $0.assignedItemID != nil } ? .playing : .idle),
+            playback: playbackStatus.wireValue,
             items: items.map(\.wireValue),
             displays: displays.map(\.wireValue),
             imports: imports.map(\.wireValue),
             preferences: preferences.wireValue,
             resourceUsage: resourceUsage.wireValue
         )
+    }
+}
+
+private extension EnginePlaybackStatus {
+    var wireValue: AgentPlaybackState {
+        switch self {
+        case .idle: .idle
+        case .preparing: .preparing
+        case .playing: .playing
+        case .paused: .paused
+        case .suspended: .suspended
+        case .failed: .failed
+        }
     }
 }
 

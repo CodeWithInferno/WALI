@@ -51,4 +51,17 @@ public final class AgentLifecycleController {
     public func openApprovalSettings() {
         SMAppService.openSystemSettingsLoginItems()
     }
+
+    public func setMainApplicationLaunchAtLogin(_ enabled: Bool) throws {
+        let mainApplication = SMAppService.mainApp
+        if enabled {
+            guard mainApplication.status != .enabled else { return }
+            if mainApplication.status == .requiresApproval {
+                throw AgentLifecycleError.requiresApproval
+            }
+            try mainApplication.register()
+        } else if mainApplication.status != .notRegistered {
+            try mainApplication.unregister()
+        }
+    }
 }

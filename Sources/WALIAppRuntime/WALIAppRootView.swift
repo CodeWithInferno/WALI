@@ -202,15 +202,10 @@ public struct WALIAppRootView: View {
         Group {
             Button("Import Video") { showsImporter = true }
                 .keyboardShortcut("o", modifiers: .command)
-            Button("Preview Selection") {
-                if let selectedWallpaper { preview(selectedWallpaper) }
-            }
-            .keyboardShortcut(.space, modifiers: [])
-            .disabled(selectedWallpaper == nil)
             Button("Apply Selection") {
                 if let selectedWallpaper { apply(selectedWallpaper) }
             }
-            .keyboardShortcut(.return, modifiers: [])
+            .keyboardShortcut(.return, modifiers: [.command])
             .disabled(selectedWallpaper == nil)
             Button("Pause or Resume") {
                 actions.send(.setPaused(!model.snapshot.renderer.state.isPaused))

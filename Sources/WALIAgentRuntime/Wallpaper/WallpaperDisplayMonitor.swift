@@ -24,6 +24,7 @@ public struct WallpaperDisplay: Sendable, Hashable, Identifiable {
     public let visibleFrame: CGRect
     public let backingScaleFactor: CGFloat
     public let isBuiltIn: Bool
+    public let isMain: Bool
 
     public init(
         id: WallpaperDisplayIdentifier,
@@ -32,7 +33,8 @@ public struct WallpaperDisplay: Sendable, Hashable, Identifiable {
         frame: CGRect,
         visibleFrame: CGRect,
         backingScaleFactor: CGFloat,
-        isBuiltIn: Bool
+        isBuiltIn: Bool,
+        isMain: Bool
     ) {
         self.id = id
         self.aliases = aliases
@@ -41,6 +43,7 @@ public struct WallpaperDisplay: Sendable, Hashable, Identifiable {
         self.visibleFrame = visibleFrame
         self.backingScaleFactor = backingScaleFactor
         self.isBuiltIn = isBuiltIn
+        self.isMain = isMain
     }
 
     public func matches(_ identifier: WallpaperDisplayIdentifier) -> Bool {
@@ -192,7 +195,8 @@ public final class WallpaperDisplayMonitor {
                 frame: screen.frame,
                 visibleFrame: screen.visibleFrame,
                 backingScaleFactor: screen.backingScaleFactor,
-                isBuiltIn: CGDisplayIsBuiltin(directID) != 0
+                isBuiltIn: CGDisplayIsBuiltin(directID) != 0,
+                isMain: screen == NSScreen.main
             ),
             screen: screen
         )

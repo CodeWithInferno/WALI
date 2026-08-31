@@ -13,6 +13,7 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     private let lifecycle: AgentLifecycleController
     private var pollingTask: Task<Void, Never>?
     private var lastSnapshot: AgentSnapshot?
+    private var quitObserver: (any NSObjectProtocol)?
 
     public init(
         model: WALIAppModel = WALIAppModel(),
@@ -26,6 +27,17 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
 
     public func start() {
         guard pollingTask == nil else { return }
+        if quitObserver == nil {
+            quitObserver = DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name("com.wali.quitAll"),
+                object: nil,
+                queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+        }
         pollingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -44,6 +56,10 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     public func stop() {
         pollingTask?.cancel()
         pollingTask = nil
+        if let quitObserver {
+            DistributedNotificationCenter.default().removeObserver(quitObserver)
+            self.quitObserver = nil
+        }
         connection.invalidate()
     }
 
@@ -55,6 +71,9 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
 
     private func perform(_ action: WALIUIAction) async {
         do {
+            if case let .updatePreferences(preferences) = action {
+                try lifecycle.setMainApplicationLaunchAtLogin(preferences.launchAtLogin)
+            }
             guard let command = try command(for: action) else { return }
             let expectedRevision: EngineRevision?
             switch command {
@@ -64,7 +83,7 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
                 expectedRevision = lastSnapshot?.revision
             }
             let snapshot = try await connection.send(command, expectedRevision: expectedRevision)
-            apply(snapshot)
+            apply(snapshot, clearNotice: true)
         } catch {
             present(error: error)
             if (error as? AgentFailure)?.code == .staleRevision {
@@ -117,7 +136,6 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
             return nil
         case .openSettings:
             NSApplication.shared.activate(ignoringOtherApps: true)
-            NSApplication.shared.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
             return nil
         case .quit:
             return .quit
@@ -135,12 +153,14 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
         }
     }
 
-    private func apply(_ snapshot: AgentSnapshot) {
+    private func apply(_ snapshot: AgentSnapshot, clearNotice: Bool = false) {
         guard lastSnapshot == nil || snapshot.revision.rawValue >= lastSnapshot!.revision.rawValue else {
             return
         }
         lastSnapshot = snapshot
-        model.snapshot = snapshot.presentationValue(preserving: model.snapshot.notice)
+        model.snapshot = snapshot.presentationValue(
+            preserving: clearNotice ? nil : model.snapshot.notice
+        )
     }
 
     private func present(error: Error, title: String = "WALI Couldn’t Complete That") {
@@ -157,8 +177,6 @@ public extension AgentSnapshot {
     func presentationValue(preserving notice: WALINoticePresentation? = nil) -> WALIUISnapshot {
         let activeItemIDs = Set(displays.compactMap(\.assignedItemID))
         let activeItem = items.first(where: { activeItemIDs.contains($0.id) })
-        let activeImports = imports.filter { ![.complete, .cancelled, .failed].contains($0.phase) }
-
         return WALIUISnapshot(
             wallpapers: items.map { item in
                 WALIWallpaperPresentation(
@@ -183,7 +201,7 @@ public extension AgentSnapshot {
             },
             transfers: imports.map(\.presentationValue),
             renderer: WALIRendererPresentation(
-                state: rendererState(activeImports: activeImports),
+                state: rendererState,
                 wallpaperTitle: activeItem?.name,
                 thumbnailURL: activeItem?.posterURL,
                 displayCount: displays.count { $0.assignedItemID != nil && $0.isOnline },
@@ -205,10 +223,7 @@ public extension AgentSnapshot {
         )
     }
 
-    private func rendererState(activeImports: [AgentImportJob]) -> WALIRendererState {
-        if let job = activeImports.first {
-            return .converting(progress: job.progress)
-        }
+    private var rendererState: WALIRendererState {
         switch playback {
         case .idle: return .stopped
         case .preparing: return .converting(progress: nil)
