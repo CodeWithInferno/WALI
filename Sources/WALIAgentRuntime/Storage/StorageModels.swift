@@ -131,17 +131,43 @@ public struct RuntimePreferences: Codable, Sendable, Hashable {
     public var qualityIntent: PresentationQualityIntent
     public var lowPowerResponse: PresentationLowPowerResponse
     public var previewsOnHover: Bool
+    public var lockScreenContinuityEnabled: Bool
 
     public init(
         launchAtLogin: Bool = false,
         qualityIntent: PresentationQualityIntent = .automatic,
         lowPowerResponse: PresentationLowPowerResponse = .pause,
-        previewsOnHover: Bool = true
+        previewsOnHover: Bool = true,
+        lockScreenContinuityEnabled: Bool = false
     ) {
         self.launchAtLogin = launchAtLogin
         self.qualityIntent = qualityIntent
         self.lowPowerResponse = lowPowerResponse
         self.previewsOnHover = previewsOnHover
+        self.lockScreenContinuityEnabled = lockScreenContinuityEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case launchAtLogin, qualityIntent, lowPowerResponse, previewsOnHover
+        case lockScreenContinuityEnabled
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        launchAtLogin = try values.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
+        qualityIntent = try values.decodeIfPresent(
+            PresentationQualityIntent.self,
+            forKey: .qualityIntent
+        ) ?? .automatic
+        lowPowerResponse = try values.decodeIfPresent(
+            PresentationLowPowerResponse.self,
+            forKey: .lowPowerResponse
+        ) ?? .pause
+        previewsOnHover = try values.decodeIfPresent(Bool.self, forKey: .previewsOnHover) ?? true
+        lockScreenContinuityEnabled = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .lockScreenContinuityEnabled
+        ) ?? false
     }
 }
 

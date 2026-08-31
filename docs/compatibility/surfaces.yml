@@ -421,26 +421,37 @@ surfaces:
   - id: lock_screen_manifest
     kind: lock_screen_manifest
     owner_role: compatibility_maintainer
-    implementation: deferred
+    implementation: implemented
     version:
-      current: null
-      readable_epochs: []
-      additive_compatibility: null
+      current: { epoch: 1, revision: 0 }
+      readable_epochs:
+        - { epoch: 1, minimum_revision: 0, maximum_revision: 0 }
+      additive_compatibility: declared_ranges_only
     product_compatibility:
-      minimum_reader: null
-      minimum_writer: null
+      minimum_reader: 0.1.0
+      minimum_writer: 0.1.0
       rollback_readers: []
       rollback_fixture_paths: []
     module_access:
-      readers: []
-      writers: []
+      readers: [WALIAgent]
+      writers: [WALIAgent]
     fixture_gate:
-      status: deferred
-      paths: []
+      status: passing
+      paths:
+        - Fixtures/LockScreen/modern-aerial-v1.json
     details:
       support_scope: session_lock_screen_only
-      implementation_gate: separate_accepted_adr
-      fixture_policy: copied_version_gated_store
+      implementation_gate: accepted_adr_0008
+      fixture_policy: redacted_version_gated_store
+      verified_system_builds: [25F80]
+      manifest_version: 1
+      provider: com.apple.wallpaper.choice.aerials
+      category_id: 57414C49-0000-4000-8000-000000000001
+      subcategory_id: 57414C49-0000-4000-8000-000000000002
+      shot_prefix: CUSTOM_WALI_
+      maximum_owned_assets: 8
+      unknown_newer_policy: reject_before_write
+      global_default_policy: never_mutate
 
   - id: diagnostic_export
     kind: diagnostic_export

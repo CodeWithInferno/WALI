@@ -196,7 +196,8 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
                 scaling: .init(rawValue: preferences.contentFit.rawValue) ?? .fill,
                 quality: .init(rawValue: preferences.quality.rawValue) ?? .automatic,
                 lowPowerBehavior: .init(rawValue: preferences.lowPowerBehavior.rawValue) ?? .pause,
-                muted: current.muted
+                muted: current.muted,
+                lockScreenContinuityEnabled: preferences.lockScreenContinuityEnabled
             ))
         case .openMainApplication:
             NSApplication.shared.activate(ignoringOtherApps: true)
@@ -292,7 +293,8 @@ public extension AgentSnapshot {
                 startPaused: preferences.startPaused,
                 quality: .init(rawValue: preferences.quality.rawValue) ?? .automatic,
                 lowPowerBehavior: .init(rawValue: preferences.lowPowerBehavior.rawValue) ?? .pause,
-                contentFit: .init(rawValue: preferences.scaling.rawValue) ?? .fill
+                contentFit: .init(rawValue: preferences.scaling.rawValue) ?? .fill,
+                lockScreenContinuityEnabled: preferences.lockScreenContinuityEnabled
             ),
             storage: WALIStoragePresentation(
                 usedBytes: Int64(clamping: resourceUsage.storageUsedBytes),

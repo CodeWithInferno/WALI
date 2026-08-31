@@ -46,6 +46,16 @@ public struct WALISettingsView: View {
                     }
                 }
 
+                Section("Lock Screen") {
+                    Toggle(
+                        "Show the current wallpaper after locking",
+                        isOn: $draft.lockScreenContinuityEnabled
+                    )
+                    Text("Experimental private compatibility on verified macOS builds. It applies only to this signed-in session, uses an independent playback timeline, and is unavailable at FileVault startup. Turning it off restores previous choices that are still managed by WALI.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Storage") {
                     LabeledContent("Used", value: storage.usedBytes.formatted(.byteCount(style: .file)))
                     if let limit = storage.limitBytes, limit > 0 {
@@ -80,7 +90,7 @@ public struct WALISettingsView: View {
             }
             .padding(16)
         }
-        .frame(width: 520, height: 470)
+        .frame(width: 520, height: 580)
         .navigationTitle("Settings")
         .accessibilityIdentifier("WALI.Settings")
     }

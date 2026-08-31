@@ -20,6 +20,10 @@ WALI is an open-source, native macOS live-wallpaper system focused on efficient 
 - Support the current user's session lock screen only through tested, version-gated compatibility adapters.
 
 WALI cannot and will not bypass FileVault preboot, SIP, protected login UI, or another user's consent.
+Lock Screen continuity is an opt-in private compatibility adapter currently
+limited to verified macOS build 25F80. Apple may change this format at any
+update; WALI then fails closed until a new fixture-backed epoch is accepted.
+Desktop and Lock Screen playback timelines are independent.
 
 ## Architecture
 

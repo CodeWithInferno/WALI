@@ -343,7 +343,8 @@ private extension EnginePreferences {
             scaling: .init(rawValue: scaling.rawValue) ?? .fill,
             quality: .init(rawValue: quality.rawValue) ?? .automatic,
             lowPowerBehavior: .init(rawValue: lowPowerBehavior.rawValue) ?? .pause,
-            muted: muted
+            muted: muted,
+            lockScreenContinuityEnabled: lockScreenContinuityEnabled
         )
     }
 }
@@ -358,7 +359,8 @@ private extension AgentPreferences {
             scaling: .init(rawValue: scaling.rawValue) ?? .fill,
             quality: .init(rawValue: quality.rawValue) ?? .automatic,
             lowPowerBehavior: .init(rawValue: lowPowerBehavior.rawValue) ?? .pause,
-            muted: muted
+            muted: muted,
+            lockScreenContinuityEnabled: lockScreenContinuityEnabled
         )
     }
 }

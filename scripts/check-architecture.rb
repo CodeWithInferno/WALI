@@ -1632,6 +1632,7 @@ class ArchitectureChecker
     validate_fixture_gate(id, implementation, surface["fixture_gate"])
     validate_surface_details(id, implementation, surface["details"])
     validate_model_record_fixture_alignment(surface) if id == "model_records"
+    validate_lock_screen_fixture_alignment(surface) if id == "lock_screen_manifest"
   end
 
   def validate_surface_versions(id, implementation, version, compatibility)
@@ -1804,6 +1805,82 @@ class ArchitectureChecker
     end
   end
 
+  def validate_lock_screen_fixture_alignment(surface)
+    gate = surface["fixture_gate"]
+    return unless gate.is_a?(Hash)
+
+    paths = string_array(gate["paths"], "lock_screen_manifest fixture paths")
+    expected = ["Fixtures/LockScreen/modern-aerial-v1.json"]
+    unless paths == expected
+      error("lock_screen_manifest must use the redacted modern Aerial v1 fixture")
+      return
+    end
+    path = safe_relative_path(paths.first, "lock_screen_manifest fixture path")
+    return unless path && File.file?(path)
+
+    begin
+      fixture = JSON.parse(File.read(path))
+    rescue JSON::ParserError
+      error("lock_screen_manifest fixture must be valid JSON")
+      return
+    end
+    expected_values = {
+      ["epoch"] => 1,
+      ["revision"] => 0,
+      ["verified_system_build"] => "25F80",
+      ["manifest", "version"] => 1,
+      ["wallpaper_index", "provider"] => "com.apple.wallpaper.choice.aerials"
+    }
+    expected_values.each do |keys, expected_value|
+      actual = keys.reduce(fixture) { |value, key| value.is_a?(Hash) ? value[key] : nil }
+      error("lock_screen_manifest fixture #{keys.join('.')} is invalid") unless actual == expected_value
+    end
+    category = fixture.dig("manifest", "categories")&.first
+    subcategory = category.is_a?(Hash) ? category["subcategories"]&.first : nil
+    asset = fixture.dig("manifest", "assets")&.first
+    asset_id = "11111111-2222-4333-8444-555555555555"
+    unless category.is_a?(Hash) &&
+           category["id"] == "57414C49-0000-4000-8000-000000000001" &&
+           category["representativeAssetID"] == asset_id &&
+           category["previewImage"].to_s.start_with?("file:///REDACTED/") &&
+           subcategory.is_a?(Hash) &&
+           subcategory["id"] == "57414C49-0000-4000-8000-000000000002" &&
+           subcategory["representativeAssetID"] == asset_id &&
+           subcategory["previewImage"].to_s.start_with?("file:///REDACTED/")
+      error("lock_screen_manifest fixture ownership category structure is invalid")
+    end
+    required_asset_fields = %w[
+      id shotID categories subcategories localizedNameKey accessibilityLabel
+      showInTopLevel includeInShuffle preferredOrder pointsOfInterest
+      url-4K-SDR-240FPS previewImage
+    ]
+    unless asset.is_a?(Hash) && (required_asset_fields - asset.keys).empty? &&
+           asset["id"] == asset_id &&
+           asset["categories"] == ["57414C49-0000-4000-8000-000000000001"] &&
+           asset["subcategories"] == ["57414C49-0000-4000-8000-000000000002"] &&
+           asset["shotID"] == "CUSTOM_WALI_11111111_2222_4333_8444_555555555555" &&
+           asset["url-4K-SDR-240FPS"].to_s.start_with?("file:///REDACTED/") &&
+           asset["previewImage"].to_s.start_with?("file:///REDACTED/")
+      error("lock_screen_manifest fixture asset structure is invalid")
+    end
+    expected_mutable = [
+      "Displays/<display-uuid>/Linked/Content/Choices",
+      "Spaces/<space-uuid>/Displays/<display-uuid>/Linked/Content/Choices"
+    ]
+    expected_excluded = ["AllSpacesAndDisplays", "Spaces/<space-uuid>/Default"]
+    unless fixture.dig("wallpaper_index", "mutable_node_patterns") == expected_mutable &&
+           fixture.dig("wallpaper_index", "excluded_node_patterns") == expected_excluded &&
+           fixture.dig("wallpaper_index", "configuration", "assetID") == asset_id
+      error("lock_screen_manifest fixture node scope is invalid")
+    end
+    serialized = File.read(path)
+    file_urls = serialized.scan(%r{file://[^"\s]+})
+    if serialized.include?("/Users/") || serialized.match?(/Backdrop/i) ||
+       file_urls.any? { |url| !url.start_with?("file:///REDACTED/") }
+      error("lock_screen_manifest fixture must remain redacted and product-neutral")
+    end
+  end
+
   def validate_surface_details(id, implementation, details)
     unless details.is_a?(Hash)
       error("surface #{id} details must be a mapping")
@@ -1930,12 +2007,26 @@ class ArchitectureChecker
     when "lock_screen_manifest"
       require_exact_fields(
         details,
-        %w[support_scope implementation_gate fixture_policy],
+        %w[
+          support_scope implementation_gate fixture_policy verified_system_builds
+          manifest_version provider category_id subcategory_id shot_prefix
+          maximum_owned_assets unknown_newer_policy global_default_policy
+        ],
         "#{id} details"
       )
-      error("lock_screen_manifest must remain deferred") unless implementation == "deferred"
-      error("lock_screen_manifest implementation_gate is invalid") unless details["implementation_gate"] == "separate_accepted_adr"
-      error("lock_screen_manifest fixture_policy is invalid") unless details["fixture_policy"] == "copied_version_gated_store"
+      error("lock_screen_manifest must be implemented") unless implementation == "implemented"
+      error("lock_screen_manifest support scope is invalid") unless details["support_scope"] == "session_lock_screen_only"
+      error("lock_screen_manifest implementation_gate is invalid") unless details["implementation_gate"] == "accepted_adr_0008"
+      error("lock_screen_manifest fixture_policy is invalid") unless details["fixture_policy"] == "redacted_version_gated_store"
+      error("lock_screen_manifest verified builds are invalid") unless details["verified_system_builds"] == ["25F80"]
+      error("lock_screen_manifest manifest version is invalid") unless details["manifest_version"] == 1
+      error("lock_screen_manifest provider is invalid") unless details["provider"] == "com.apple.wallpaper.choice.aerials"
+      error("lock_screen_manifest category ID is invalid") unless details["category_id"] == "57414C49-0000-4000-8000-000000000001"
+      error("lock_screen_manifest subcategory ID is invalid") unless details["subcategory_id"] == "57414C49-0000-4000-8000-000000000002"
+      error("lock_screen_manifest shot prefix is invalid") unless details["shot_prefix"] == "CUSTOM_WALI_"
+      error("lock_screen_manifest asset bound is invalid") unless details["maximum_owned_assets"] == 8
+      error("lock_screen_manifest must reject unknown schemas before write") unless details["unknown_newer_policy"] == "reject_before_write"
+      error("lock_screen_manifest must never mutate global defaults") unless details["global_default_policy"] == "never_mutate"
     when "diagnostic_export"
       require_exact_fields(
         details,

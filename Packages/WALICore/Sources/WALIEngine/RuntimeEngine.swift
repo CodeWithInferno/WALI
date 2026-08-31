@@ -270,6 +270,7 @@ public actor RuntimeEngine {
             let renderingChanged = state.preferences.scaling != preferences.scaling
                 || state.preferences.quality != preferences.quality
                 || state.preferences.lowPowerBehavior != preferences.lowPowerBehavior
+                || state.preferences.lockScreenContinuityEnabled != preferences.lockScreenContinuityEnabled
             state.preferences = preferences
             var effects: [EngineEffect] = []
             if launchAtLoginChanged {

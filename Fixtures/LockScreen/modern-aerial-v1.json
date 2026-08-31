@@ -1,0 +1,58 @@
+{
+  "epoch": 1,
+  "revision": 0,
+  "verified_system_build": "25F80",
+  "manifest": {
+    "version": 1,
+    "categories": [
+      {
+        "id": "57414C49-0000-4000-8000-000000000001",
+        "localizedNameKey": "WALI",
+        "localizedDescriptionKey": "Wallpapers managed by WALI",
+        "preferredOrder": 0,
+        "representativeAssetID": "11111111-2222-4333-8444-555555555555",
+        "previewImage": "file:///REDACTED/aerials/thumbnails/11111111-2222-4333-8444-555555555555.png",
+        "subcategories": [
+          {
+            "id": "57414C49-0000-4000-8000-000000000002",
+            "localizedNameKey": "WALI",
+            "localizedDescriptionKey": "Wallpapers managed by WALI",
+            "preferredOrder": 0,
+            "representativeAssetID": "11111111-2222-4333-8444-555555555555",
+            "previewImage": "file:///REDACTED/aerials/thumbnails/11111111-2222-4333-8444-555555555555.png"
+          }
+        ]
+      }
+    ],
+    "assets": [
+      {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "shotID": "CUSTOM_WALI_11111111_2222_4333_8444_555555555555",
+        "categories": ["57414C49-0000-4000-8000-000000000001"],
+        "subcategories": ["57414C49-0000-4000-8000-000000000002"],
+        "localizedNameKey": "Synthetic Wallpaper",
+        "accessibilityLabel": "Synthetic Wallpaper",
+        "showInTopLevel": true,
+        "includeInShuffle": true,
+        "preferredOrder": 0,
+        "pointsOfInterest": {
+          "0": "CUSTOM_WALI_11111111_2222_4333_8444_555555555555_0"
+        },
+        "url-4K-SDR-240FPS": "file:///REDACTED/aerials/videos/11111111-2222-4333-8444-555555555555.mov",
+        "previewImage": "file:///REDACTED/aerials/thumbnails/11111111-2222-4333-8444-555555555555.png"
+      }
+    ]
+  },
+  "wallpaper_index": {
+    "provider": "com.apple.wallpaper.choice.aerials",
+    "configuration": {"assetID": "11111111-2222-4333-8444-555555555555"},
+    "mutable_node_patterns": [
+      "Displays/<display-uuid>/Linked/Content/Choices",
+      "Spaces/<space-uuid>/Displays/<display-uuid>/Linked/Content/Choices"
+    ],
+    "excluded_node_patterns": [
+      "AllSpacesAndDisplays",
+      "Spaces/<space-uuid>/Default"
+    ]
+  }
+}

@@ -71,6 +71,7 @@ public final class WallpaperRenderer {
     public typealias SnapshotHandler = @MainActor (WallpaperRendererSnapshot) -> Void
 
     public var onSnapshotChange: SnapshotHandler?
+    public var onPresentationRefresh: (@MainActor () -> Void)?
     public private(set) var snapshot = WallpaperRendererSnapshot(
         displays: [],
         sessions: [],
@@ -100,6 +101,7 @@ public final class WallpaperRenderer {
         isRunning = true
 
         displayMonitor.onChange = { [weak self] _ in
+            self?.onPresentationRefresh?()
             self?.reconcile()
         }
         systemEvents.onChange = { [weak self] reasons in
@@ -109,6 +111,7 @@ public final class WallpaperRenderer {
         }
         systemEvents.onPresentationRefresh = { [weak self] in
             self?.displayMonitor.reconcileNow()
+            self?.onPresentationRefresh?()
             self?.reconcile()
         }
         displayMonitor.start()
@@ -144,6 +147,7 @@ public final class WallpaperRenderer {
             systemEvents.stop()
         }
         systemEvents.onPresentationRefresh = nil
+        onPresentationRefresh = nil
         isRunning = false
         automaticPauseReasons.removeAll(keepingCapacity: false)
         removeAllSessions()

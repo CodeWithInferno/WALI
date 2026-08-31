@@ -157,11 +157,20 @@ Clicking the menu-bar icon opens a compact, popover-like window containing:
 
 Performance sampling is demand-driven: 1 Hz while the popover or diagnostics view is visible, then suspended. The monitor must not create meaningful background energy use.
 
-## Screen saver and Lock Screen
+## Lock Screen continuity
 
 WALI renders the signed-in user's desktop and follows that desktop across Spaces, display reconnects, wake, and unlock. macOS does not expose a public API for an app to draw arbitrary content inside the protected Lock Screen or FileVault login surface.
 
-A future lock-adjacent feature must be a separately installed, user-selected `ScreenSaver.framework` module. Describe it as an animated screen saver while locked, never as direct Lock Screen wallpaper or a guaranteed frame-continuous handoff.
+Settings uses a native `Form` section with one opt-in toggle beside direct,
+inline status text. The feature is labeled experimental private compatibility:
+it mirrors active assignments through Apple's current-user Aerial provider on
+verified macOS builds. The copy states that the authenticated Lock Screen has
+an independent playback timeline and that FileVault startup is unavailable.
+Turning the toggle off rolls back only WALI-owned records.
+
+This is never presented as direct Lock Screen drawing or a frame-continuous
+handoff. It does not add custom chrome, elevated setup, a server, or a separate
+Create surface.
 
 ## Motion and interaction
 

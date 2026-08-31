@@ -90,7 +90,10 @@ no-replace publication. Preferences record agent authority and fail-closed
 unknown-newer policy. URL schemes are configuration-keyed and require
 validation/confirmation. Catalog details require signatures and remain
 deferred. Diagnostics require a lease, redaction classes, and excluded payload
-classes. Lock-screen details must retain the deferred ADR/fixture gates.
+classes. The implemented Lock Screen surface is limited by accepted ADR 0008,
+an exact system-build and manifest-version allowlist, fixed WALI ownership
+identifiers and bounds, a reject-before-write policy, and a redacted
+version-gated fixture.
 
 ## Configuration-keyed identities
 

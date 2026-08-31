@@ -154,6 +154,10 @@ idempotent.
   publication.
 - `SystemEventSource`: normalized display, power, sleep, lock, and thermal
   events.
+- `LockScreenContinuityCoordinator`: an agent-owned, opt-in compatibility
+  adapter for the authenticated current user's Aerial and wallpaper stores.
+  It uses injected roots, build/schema gates, WALI ownership IDs, rollback
+  journals, and atomic replacement; it is not part of the desktop renderer.
 - `DiagnosticsLease`: demand-driven, bounded diagnostics observation.
 
 These are deep domain seams. Do not create generic repositories for every
@@ -194,11 +198,13 @@ Extend through capabilities and adapters:
   boundary.
 - Storage implementations remain behind `RuntimeStore`.
 
-Desktop public APIs come first. A separately installed screen-saver companion,
-arbitrary plugins, sync, a remote catalog, and shared `/Users/Shared` storage
-are deferred. Direct rendering in the protected Lock Screen and FileVault
-login surfaces is unsupported. No deferred feature gets an empty runtime or
-privilege today.
+Desktop public APIs remain primary. ADR 0008 permits one private adapter for
+authenticated-session Lock Screen continuity on exact verified macOS builds.
+The agent registers WALI-owned copies with Apple's current-user Aerial provider
+and patches only matching display and Space-display choices. Direct rendering
+in protected Lock Screen UI, FileVault preboot, unauthenticated loginwindow,
+other users, elevated helpers, arbitrary plugins, sync, a remote catalog, and
+shared `/Users/Shared` storage remain unsupported or deferred.
 
 ## Gates
 

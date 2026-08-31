@@ -214,19 +214,22 @@ public struct WALIPreferencesPresentation: Equatable, Sendable {
     public var quality: WALIQualityPreference
     public var lowPowerBehavior: WALILowPowerPreference
     public var contentFit: WALIContentFitPreference
+    public var lockScreenContinuityEnabled: Bool
 
     public init(
         launchAtLogin: Bool = false,
         startPaused: Bool = false,
         quality: WALIQualityPreference = .automatic,
         lowPowerBehavior: WALILowPowerPreference = .pause,
-        contentFit: WALIContentFitPreference = .fill
+        contentFit: WALIContentFitPreference = .fill,
+        lockScreenContinuityEnabled: Bool = false
     ) {
         self.launchAtLogin = launchAtLogin
         self.startPaused = startPaused
         self.quality = quality
         self.lowPowerBehavior = lowPowerBehavior
         self.contentFit = contentFit
+        self.lockScreenContinuityEnabled = lockScreenContinuityEnabled
     }
 }
 

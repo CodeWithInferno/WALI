@@ -80,6 +80,7 @@ public final class SystemEventSource {
             ) { [weak self] _ in
                 Task { @MainActor in
                     self?.set(.sessionLocked, active: false)
+                    self?.onPresentationRefresh?()
                 }
             }
         )

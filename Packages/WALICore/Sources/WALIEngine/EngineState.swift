@@ -259,6 +259,7 @@ public struct EnginePreferences: Codable, Sendable, Hashable {
     public var quality: Quality
     public var lowPowerBehavior: LowPowerBehavior
     public var muted: Bool
+    public var lockScreenContinuityEnabled: Bool
 
     public init(
         launchAtLogin: Bool = false,
@@ -268,7 +269,8 @@ public struct EnginePreferences: Codable, Sendable, Hashable {
         scaling: Scaling = .fill,
         quality: Quality = .automatic,
         lowPowerBehavior: LowPowerBehavior = .pause,
-        muted: Bool = true
+        muted: Bool = true,
+        lockScreenContinuityEnabled: Bool = false
     ) {
         self.launchAtLogin = launchAtLogin
         self.startPaused = startPaused
@@ -278,6 +280,28 @@ public struct EnginePreferences: Codable, Sendable, Hashable {
         self.quality = quality
         self.lowPowerBehavior = lowPowerBehavior
         self.muted = muted
+        self.lockScreenContinuityEnabled = lockScreenContinuityEnabled
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case launchAtLogin, startPaused, pauseOnBattery, pauseWhenOccluded
+        case scaling, quality, lowPowerBehavior, muted, lockScreenContinuityEnabled
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        launchAtLogin = try values.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
+        startPaused = try values.decodeIfPresent(Bool.self, forKey: .startPaused) ?? false
+        pauseOnBattery = try values.decodeIfPresent(Bool.self, forKey: .pauseOnBattery) ?? false
+        pauseWhenOccluded = try values.decodeIfPresent(Bool.self, forKey: .pauseWhenOccluded) ?? true
+        scaling = try values.decodeIfPresent(Scaling.self, forKey: .scaling) ?? .fill
+        quality = try values.decodeIfPresent(Quality.self, forKey: .quality) ?? .automatic
+        lowPowerBehavior = try values.decodeIfPresent(LowPowerBehavior.self, forKey: .lowPowerBehavior) ?? .pause
+        muted = try values.decodeIfPresent(Bool.self, forKey: .muted) ?? true
+        lockScreenContinuityEnabled = try values.decodeIfPresent(
+            Bool.self,
+            forKey: .lockScreenContinuityEnabled
+        ) ?? false
     }
 }
 

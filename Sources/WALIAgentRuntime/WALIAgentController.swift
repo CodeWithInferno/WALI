@@ -26,6 +26,8 @@ public final class WALIAgentController: WALIUIActionHandling {
     private let diagnostics = ProcessDiagnostics()
     private let stateStore: EngineSnapshotStore?
     private let runtimeStore: RuntimeStore?
+    private let lockScreenContinuity: LockScreenContinuityCoordinator?
+    private let lockScreenStoreMonitor: LockScreenStoreMonitor?
     private let transcoder = TranscoderConnection()
     private var router: AgentCommandRouter?
     private var serviceHost: AgentServiceHost?
@@ -34,10 +36,25 @@ public final class WALIAgentController: WALIUIActionHandling {
     private var importTasks: [UUID: Task<Void, Never>] = [:]
     private var importContexts: [UUID: LocalImportContext] = [:]
     private var importProgressUpdates: [UUID: ImportProgressUpdate] = [:]
+    private var lockScreenTask: Task<Void, Never>?
 
     public init() {
+        let libraryPaths = try? LibraryPaths.applicationSupport()
         stateStore = try? EngineSnapshotStore()
-        runtimeStore = try? RuntimeStore(paths: LibraryPaths.applicationSupport())
+        runtimeStore = libraryPaths.map(RuntimeStore.init(paths:))
+        lockScreenContinuity = libraryPaths.map {
+            LockScreenContinuityCoordinator.live(
+                waliMetadataDirectory: $0.metadata,
+                ownedLibraryRoot: $0.root
+            )
+        }
+        lockScreenStoreMonitor = libraryPaths.map {
+            let paths = LockScreenStorePaths.live(waliMetadataDirectory: $0.metadata)
+            return LockScreenStoreMonitor(directories: [
+                paths.manifestURL.deletingLastPathComponent(),
+                paths.indexURL.deletingLastPathComponent(),
+            ])
+        }
     }
 
     public func start() {
@@ -45,6 +62,13 @@ public final class WALIAgentController: WALIUIActionHandling {
         renderer.onSnapshotChange = { [weak self] snapshot in
             self?.rendererDidChange(snapshot)
         }
+        renderer.onPresentationRefresh = { [weak self] in
+            self?.scheduleLockScreenReconciliation()
+        }
+        lockScreenStoreMonitor?.onChange = { [weak self] in
+            self?.scheduleLockScreenReconciliation()
+        }
+        lockScreenStoreMonitor?.start()
         renderer.start()
         startupTask = Task { @MainActor [weak self] in
             await self?.bootstrap()
@@ -54,6 +78,9 @@ public final class WALIAgentController: WALIUIActionHandling {
     public func shutdown() {
         startupTask?.cancel()
         startupTask = nil
+        lockScreenTask?.cancel()
+        lockScreenTask = nil
+        lockScreenStoreMonitor?.stop()
         for task in purgeTasks.values { task.cancel() }
         purgeTasks.removeAll()
         for task in importTasks.values { task.cancel() }
@@ -113,6 +140,11 @@ public final class WALIAgentController: WALIUIActionHandling {
         host.start()
 
         renderDesiredState(restored)
+        do {
+            try await reconcileLockScreen(restored)
+        } catch {
+            present(error)
+        }
         renderer.setUserPaused(restored.isPausedByUser || restored.preferences.startPaused)
         for item in restored.trashedItems {
             scheduleTrashPurge(item.id)
@@ -127,8 +159,8 @@ public final class WALIAgentController: WALIUIActionHandling {
     private func perform(_ action: WALIUIAction) async {
         guard let router else { return }
         do {
-            guard let command = try command(for: action) else { return }
             let state = await router.snapshot()
+            guard let command = try command(for: action, preserving: state.preferences) else { return }
             let request = AgentRequest(
                 expectedRevision: state.revision,
                 command: command
@@ -145,7 +177,10 @@ public final class WALIAgentController: WALIUIActionHandling {
         }
     }
 
-    private func command(for action: WALIUIAction) throws -> AgentCommand? {
+    private func command(
+        for action: WALIUIAction,
+        preserving currentPreferences: EnginePreferences = .init()
+    ) throws -> AgentCommand? {
         switch action {
         case let .importVideos(urls):
             let bookmarks = try urls.map {
@@ -172,9 +207,13 @@ public final class WALIAgentController: WALIUIActionHandling {
             return .setPreferences(.init(
                 launchAtLogin: preferences.launchAtLogin,
                 startPaused: preferences.startPaused,
+                pauseOnBattery: currentPreferences.pauseOnBattery,
+                pauseWhenOccluded: currentPreferences.pauseWhenOccluded,
                 scaling: .init(rawValue: preferences.contentFit.rawValue) ?? .fill,
                 quality: .init(rawValue: preferences.quality.rawValue) ?? .automatic,
-                lowPowerBehavior: .init(rawValue: preferences.lowPowerBehavior.rawValue) ?? .pause
+                lowPowerBehavior: .init(rawValue: preferences.lowPowerBehavior.rawValue) ?? .pause,
+                muted: currentPreferences.muted,
+                lockScreenContinuityEnabled: preferences.lockScreenContinuityEnabled
             ))
         case .openMainApplication:
             return .openForegroundApp
@@ -221,7 +260,9 @@ public final class WALIAgentController: WALIUIActionHandling {
                 let preferences = RuntimePreferences(
                     launchAtLogin: authoritative.preferences.launchAtLogin,
                     qualityIntent: qualityIntent,
-                    lowPowerResponse: lowPowerResponse
+                    lowPowerResponse: lowPowerResponse,
+                    previewsOnHover: try await runtimeStore.snapshot().preferences.previewsOnHover,
+                    lockScreenContinuityEnabled: authoritative.preferences.lockScreenContinuityEnabled
                 )
                 if try await runtimeStore.snapshot().preferences != preferences {
                     try await runtimeStore.updatePreferences(preferences)
@@ -229,6 +270,7 @@ public final class WALIAgentController: WALIUIActionHandling {
             }
         case .render, .stopRendering, .reconcileRendering:
             renderDesiredState(authoritative)
+            try await reconcileLockScreen(authoritative)
         case .setPlaybackPaused:
             renderer.setUserPaused(authoritative.isPausedByUser)
         case let .startImport(jobID, bookmark):
@@ -686,6 +728,41 @@ public final class WALIAgentController: WALIUIActionHandling {
         renderer.setAssignments(assignments)
     }
 
+    private func scheduleLockScreenReconciliation() {
+        lockScreenTask?.cancel()
+        lockScreenTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled, let self, let router = self.router else { return }
+            let snapshot = await router.snapshot()
+            do {
+                try await self.reconcileLockScreen(snapshot)
+            } catch {
+                self.present(error)
+            }
+        }
+    }
+
+    private func reconcileLockScreen(_ snapshot: EngineSnapshot) async throws {
+        guard let lockScreenContinuity else { return }
+        let items = Dictionary(uniqueKeysWithValues: snapshot.items.map { ($0.id, $0) })
+        let assignments = snapshot.displays.compactMap { display -> LockScreenWallpaperAssignment? in
+            guard display.isOnline,
+                  let itemID = display.assignedItemID,
+                  let item = items[itemID] else { return nil }
+            return LockScreenWallpaperAssignment(
+                displayID: display.id,
+                itemID: itemID,
+                name: item.name,
+                masterURL: item.masterURL,
+                posterURL: item.posterURL
+            )
+        }
+        _ = try await lockScreenContinuity.reconcile(
+            enabled: snapshot.preferences.lockScreenContinuityEnabled,
+            assignments: assignments
+        )
+    }
+
     private func rendererDidChange(_ snapshot: WallpaperRendererSnapshot) {
         Task { @MainActor [weak self] in
             await self?.synchronizeRenderer(snapshot)
@@ -883,7 +960,8 @@ private extension AgentSnapshot {
                 startPaused: preferences.startPaused,
                 quality: .init(rawValue: preferences.quality.rawValue) ?? .automatic,
                 lowPowerBehavior: .init(rawValue: preferences.lowPowerBehavior.rawValue) ?? .pause,
-                contentFit: .init(rawValue: preferences.scaling.rawValue) ?? .fill
+                contentFit: .init(rawValue: preferences.scaling.rawValue) ?? .fill,
+                lockScreenContinuityEnabled: preferences.lockScreenContinuityEnabled
             ),
             storage: .init(
                 usedBytes: Int64(clamping: resourceUsage.storageUsedBytes),
