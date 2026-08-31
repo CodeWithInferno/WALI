@@ -5,6 +5,12 @@ public enum PresentationContentFit: String, Codable, Sendable, Hashable {
 
     /// Fit the whole image while preserving aspect ratio.
     case fit
+
+    /// Fill the display without preserving the source aspect ratio.
+    case stretch
+
+    /// Keep the source at or below its native pixel size and center it.
+    case center
 }
 
 /// Fixed-point coordinate in the inclusive range zero through ten thousand.

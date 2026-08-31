@@ -100,11 +100,10 @@ Media grids use 16 pt gutters and adapt column count to available width. Do not 
 
 Sections:
 
-1. Discover
-2. Library
-3. Playlists
-4. Downloads
-5. Create
+1. Library
+2. Downloads
+
+Importing is available from the toolbar, the empty Library and Downloads states, and drag and drop. A separate Create destination would duplicate that flow and is intentionally omitted.
 
 Settings stays in the standard application menu and `⌘,`; it is not a fake sidebar page. Sidebar icon color follows the system accent. Selection, row height, disclosure, and hide/show behavior remain native.
 
@@ -124,8 +123,9 @@ Toolbar items use native grouping. No custom toolbar background is drawn.
 - Hovering for 350 ms starts one silent low-resolution preview. Leaving stops and releases it.
 - Only one grid preview may decode at a time.
 - Single click selects. Double click applies. Space opens a Quick Look-style preview.
-- A detail surface shows full preview, title, creator/license, dimensions, duration, file size, display target, and Apply.
-- Imported videos clearly show conversion and lock-screen compatibility state.
+- A detail surface shows full preview, title, creator/license, dimensions, duration, file size, per-display targets, scaling, and Apply.
+- Scaling is saved with each display assignment: Fill Screen, Fit to Screen, Stretch to Fill, or Center at native size.
+- Imported videos clearly show conversion state.
 
 ### Empty, loading, and error states
 
@@ -151,6 +151,12 @@ Clicking the menu-bar icon opens a compact, popover-like window containing:
 `Stop Wallpaper` stops rendering but leaves WALI available. `Quit WALI` exits the agent and main app. Destructive or disruptive actions use explicit labels rather than ambiguous icon-only controls.
 
 Performance sampling is demand-driven: 1 Hz while the popover or diagnostics view is visible, then suspended. The monitor must not create meaningful background energy use.
+
+## Screen saver and Lock Screen
+
+WALI renders the signed-in user's desktop and follows that desktop across Spaces, display reconnects, wake, and unlock. macOS does not expose a public API for an app to draw arbitrary content inside the protected Lock Screen or FileVault login surface.
+
+A future lock-adjacent feature must be a separately installed, user-selected `ScreenSaver.framework` module. Describe it as an animated screen saver while locked, never as direct Lock Screen wallpaper or a guaranteed frame-continuous handoff.
 
 ## Motion and interaction
 

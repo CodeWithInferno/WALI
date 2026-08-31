@@ -46,7 +46,7 @@ public actor AgentCommandRouter {
     public func handle(_ request: AgentRequest) async -> AgentResponse {
         do {
             switch request.command {
-            case .handshake, .snapshot:
+            case .handshake, .snapshot, .diagnosticsSnapshot:
                 return response(for: request, snapshot: await engine.snapshot())
 
             case let .importFiles(bookmarks):
@@ -62,8 +62,15 @@ public actor AgentCommandRouter {
             case let .cancelImport(jobID):
                 return try await mutate(request, action: .cancelImport(jobID))
 
-            case let .apply(itemID, displayIDs):
-                return try await mutate(request, action: .apply(itemID: itemID, displayIDs: displayIDs))
+            case let .apply(itemID, displayIDs, scaling):
+                return try await mutate(
+                    request,
+                    action: .apply(
+                        itemID: itemID,
+                        displayIDs: displayIDs,
+                        scaling: .init(rawValue: scaling.rawValue) ?? .fill
+                    )
+                )
 
             case let .setPlaybackPaused(isPaused):
                 return try await mutate(request, action: .setPaused(isPaused))
@@ -296,12 +303,14 @@ private extension EngineDisplay {
     var wireValue: AgentDisplay {
         .init(
             id: id,
+            aliases: aliases,
             name: name,
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
             isMain: isMain,
             isBuiltIn: isBuiltIn,
             assignedItemID: assignedItemID,
+            scaling: scaling.flatMap { .init(rawValue: $0.rawValue) },
             isOnline: isOnline
         )
     }

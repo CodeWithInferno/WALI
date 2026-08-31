@@ -149,7 +149,7 @@ public enum WireCodec {
                   bookmarks.allSatisfy({ $0.count <= 1_024 * 1_024 }) else {
                 throw WireCodecError.collectionTooLarge
             }
-        case let .apply(_, displayIDs):
+        case let .apply(_, displayIDs, _):
             guard displayIDs.count <= 16,
                   displayIDs.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 }) else {
                 throw WireCodecError.collectionTooLarge

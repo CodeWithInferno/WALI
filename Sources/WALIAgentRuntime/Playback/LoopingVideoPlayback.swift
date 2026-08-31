@@ -2,6 +2,7 @@
 import AppKit
 import Foundation
 import QuartzCore
+import WALIModel
 
 public enum WallpaperPlaybackError: Error, LocalizedError, Sendable {
     case sourceMustBeAFile
@@ -50,12 +51,15 @@ final class LoopingVideoPlayback {
 
     init(canvas: WallpaperCanvasView) {
         self.canvas = canvas
+        canvas.onLayout = { [weak self] bounds, backingScaleFactor in
+            self?.layoutSurfaces(in: bounds, backingScaleFactor: backingScaleFactor)
+        }
     }
 
     func replace(
         videoURL: URL,
         posterURL: URL?,
-        scaling: AVLayerVideoGravity
+        scaling: PresentationContentFit
     ) async throws {
         replacementGeneration &+= 1
         let generation = replacementGeneration
@@ -91,10 +95,24 @@ final class LoopingVideoPlayback {
             throw WallpaperPlaybackError.assetHasNoVideoTrack
         }
 
+        let naturalSize = try await videoTracks[0].load(.naturalSize)
+        let preferredTransform = try await videoTracks[0].load(.preferredTransform)
+        try Task.checkCancellation()
+        guard generation == replacementGeneration else {
+            throw CancellationError()
+        }
+        let transformedRect = CGRect(origin: .zero, size: naturalSize)
+            .applying(preferredTransform)
+        let presentationSize = CGSize(
+            width: abs(transformedRect.width),
+            height: abs(transformedRect.height)
+        )
+
         let surface = Surface(
             asset: asset,
             poster: posterURL.flatMap(NSImage.init(contentsOf:)),
-            scaling: scaling
+            scaling: scaling,
+            presentationSize: presentationSize
         )
         pendingSurface?.tearDown(from: canvas)
         pendingSurface = surface
@@ -127,6 +145,20 @@ final class LoopingVideoPlayback {
         // The pending player must decode one frame even when the current
         // presentation is paused; it is paused again immediately on commit.
         surface.player.play()
+    }
+
+    private func layoutSurfaces(in bounds: CGRect, backingScaleFactor: CGFloat) {
+        activeSurface?.layout(in: bounds, backingScaleFactor: backingScaleFactor)
+        pendingSurface?.layout(in: bounds, backingScaleFactor: backingScaleFactor)
+    }
+
+    func setScaling(_ scaling: PresentationContentFit) {
+        activeSurface?.setScaling(scaling)
+        pendingSurface?.setScaling(scaling)
+        layoutSurfaces(
+            in: canvas.bounds,
+            backingScaleFactor: canvas.window?.backingScaleFactor ?? 1
+        )
     }
 
     func setPaused(_ paused: Bool) {
@@ -228,13 +260,22 @@ final class LoopingVideoPlayback {
         let playerLayer: AVPlayerLayer
         let player: AVQueuePlayer
         let item: AVPlayerItem
+        var scaling: PresentationContentFit
+        let presentationSize: CGSize
         var looper: AVPlayerLooper?
         var readyObservation: NSKeyValueObservation?
         var statusObservation: NSKeyValueObservation?
         var readyTimeoutTask: Task<Void, Never>?
 
-        init(asset: AVAsset, poster: NSImage?, scaling: AVLayerVideoGravity) {
+        init(
+            asset: AVAsset,
+            poster: NSImage?,
+            scaling: PresentationContentFit,
+            presentationSize: CGSize
+        ) {
             item = AVPlayerItem(asset: asset)
+            self.scaling = scaling
+            self.presentationSize = presentationSize
             player = AVQueuePlayer()
             player.isMuted = true
             player.volume = 0
@@ -243,7 +284,7 @@ final class LoopingVideoPlayback {
             looper = AVPlayerLooper(player: player, templateItem: item)
 
             playerLayer = AVPlayerLayer(player: player)
-            playerLayer.videoGravity = scaling
+            playerLayer.videoGravity = Self.videoGravity(for: scaling)
             playerLayer.backgroundColor = NSColor.black.cgColor
 
             posterLayer.backgroundColor = NSColor.black.cgColor
@@ -252,15 +293,74 @@ final class LoopingVideoPlayback {
                 context: nil,
                 hints: nil
             )
-            posterLayer.contentsGravity = scaling == .resizeAspectFill
-                ? .resizeAspectFill
-                : .resizeAspect
+            posterLayer.contentsGravity = Self.contentsGravity(for: scaling)
             posterLayer.opacity = 1
 
             containerLayer.backgroundColor = NSColor.black.cgColor
             containerLayer.masksToBounds = true
             containerLayer.addSublayer(posterLayer)
             containerLayer.addSublayer(playerLayer)
+        }
+
+        func layout(in bounds: CGRect, backingScaleFactor: CGFloat) {
+            let contentFrame: CGRect
+            if scaling == .center, presentationSize.width > 0, presentationSize.height > 0 {
+                let scaleFactor = max(backingScaleFactor, 1)
+                let nativePointSize = CGSize(
+                    width: presentationSize.width / scaleFactor,
+                    height: presentationSize.height / scaleFactor
+                )
+                let shrink = min(
+                    1,
+                    bounds.width / nativePointSize.width,
+                    bounds.height / nativePointSize.height
+                )
+                let size = CGSize(
+                    width: nativePointSize.width * shrink,
+                    height: nativePointSize.height * shrink
+                )
+                contentFrame = CGRect(
+                    x: bounds.midX - size.width / 2,
+                    y: bounds.midY - size.height / 2,
+                    width: size.width,
+                    height: size.height
+                )
+            } else {
+                contentFrame = bounds
+            }
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            playerLayer.frame = contentFrame
+            posterLayer.frame = contentFrame
+            posterLayer.contentsScale = max(backingScaleFactor, 1)
+            CATransaction.commit()
+        }
+
+        func setScaling(_ scaling: PresentationContentFit) {
+            self.scaling = scaling
+            playerLayer.videoGravity = Self.videoGravity(for: scaling)
+            posterLayer.contentsGravity = Self.contentsGravity(for: scaling)
+        }
+
+        private static func videoGravity(
+            for scaling: PresentationContentFit
+        ) -> AVLayerVideoGravity {
+            switch scaling {
+            case .fill: .resizeAspectFill
+            case .fit, .center: .resizeAspect
+            case .stretch: .resize
+            }
+        }
+
+        private static func contentsGravity(
+            for scaling: PresentationContentFit
+        ) -> CALayerContentsGravity {
+            switch scaling {
+            case .fill: .resizeAspectFill
+            case .fit, .center: .resizeAspect
+            case .stretch: .resize
+            }
         }
 
         func setPosterVisible(_ visible: Bool) {

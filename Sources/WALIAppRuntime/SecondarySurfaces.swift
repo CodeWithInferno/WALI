@@ -1,102 +1,106 @@
 import SwiftUI
 import WALIUI
 
-struct CreateSurface: View {
-    let onImport: () -> Void
-    let onDrop: ([URL]) -> Void
-
-    @State private var isDropTargeted = false
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Create a Wallpaper")
-                        .font(.title)
-                    Text("Choose a video and WALI will prepare a quiet, efficient local copy for your displays.")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                }
-
-                VStack(spacing: 16) {
-                    Image(systemName: "arrow.down.doc")
-                        .font(.system(size: 36, weight: .regular))
-                        .foregroundStyle(isDropTargeted ? Color.accentColor : .secondary)
-                        .accessibilityHidden(true)
-
-                    VStack(spacing: 5) {
-                        Text("Drop a video here")
-                            .font(.headline)
-                        Text("QuickTime movies and other formats supported by macOS")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Button("Choose Video…", action: onImport)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                }
-                .frame(maxWidth: .infinity, minHeight: 260)
-                .background(Color(nsColor: .controlBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(
-                            isDropTargeted ? Color.accentColor : Color(nsColor: .separatorColor),
-                            style: StrokeStyle(lineWidth: isDropTargeted ? 2 : 1, dash: [7, 5])
-                        )
-                }
-                .dropDestination(
-                    for: URL.self,
-                    action: { urls, _ in
-                        let movieURLs = urls.filter(\.isFileURL)
-                        guard !movieURLs.isEmpty else { return false }
-                        onDrop(movieURLs)
-                        return true
-                    },
-                    isTargeted: { isDropTargeted = $0 }
-                )
-
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "lock.shield")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Private by design")
-                            .font(.headline)
-                        Text("Your media stays on this Mac. WALI never deletes or modifies the source file.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .padding(24)
-            .frame(maxWidth: 760, alignment: .leading)
-        }
-        .accessibilityIdentifier("WALI.Create")
-    }
-}
-
 struct DownloadsSurface: View {
     let transfers: [WALITransferPresentation]
+    let onImport: () -> Void
+    let onDrop: ([URL]) -> Void
     let onCancel: (UUID) -> Void
+
+    @State private var isDropTargeted = false
 
     var body: some View {
         Group {
             if transfers.isEmpty {
                 ContentUnavailableView {
-                    Label("No Active Imports", systemImage: "arrow.down.circle")
+                    Label("No Recent Imports", systemImage: "arrow.down.circle")
                 } description: {
-                    Text("Video preparation and import progress will appear here.")
+                    Text("Import a video or drop one here. WALI will show preparation progress on this page.")
+                } actions: {
+                    Button("Import Video…", action: onImport)
+                        .controlSize(.large)
                 }
             } else {
-                List(transfers) { transfer in
-                    TransferRow(transfer: transfer, onCancel: { onCancel(transfer.id) })
-                        .padding(.vertical, 6)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Recent Imports")
+                                .font(.headline)
+
+                            Spacer()
+
+                            Text(summary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Button(action: onImport) {
+                                Label("Import Video…", systemImage: "plus")
+                            }
+                        }
+
+                        VStack(spacing: 0) {
+                            ForEach(Array(transfers.enumerated()), id: \.element.id) { index, transfer in
+                                TransferRow(transfer: transfer, onCancel: { onCancel(transfer.id) })
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 12)
+
+                                if index < transfers.index(before: transfers.endIndex) {
+                                    Divider()
+                                        .padding(.leading, 68)
+                                }
+                            }
+                        }
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                        }
+
+                        Label("Original videos stay untouched", systemImage: "lock.shield")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 4)
+                    }
+                    .frame(maxWidth: 720, alignment: .leading)
+                    .padding(24)
+                    .frame(maxWidth: .infinity, alignment: .top)
                 }
             }
         }
+        .dropDestination(
+            for: URL.self,
+            action: { urls, _ in
+                let movieURLs = urls.filter(\.isFileURL)
+                guard !movieURLs.isEmpty else { return false }
+                onDrop(movieURLs)
+                return true
+            },
+            isTargeted: { isDropTargeted = $0 }
+        )
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                    .padding(8)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .accessibilityIdentifier("WALI.Downloads")
+    }
+
+    private var summary: String {
+        let activeCount = transfers.count { transfer in
+            switch transfer.state {
+            case .queued, .working: true
+            default: false
+            }
+        }
+        if activeCount > 0 {
+            return activeCount == 1 ? "1 active" : "\(activeCount) active"
+        }
+        return transfers.count == 1 ? "1 item" : "\(transfers.count) items"
     }
 }
 
@@ -106,22 +110,22 @@ private struct TransferRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: symbolName)
-                .font(.title2)
-                .foregroundStyle(symbolColor)
-                .frame(width: 28)
-                .accessibilityHidden(true)
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor))
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack {
-                    Text(transfer.title)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Spacer()
-                    Text(stateTitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Image(systemName: symbolName)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(symbolColor)
+            }
+            .frame(width: 40, height: 40)
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(transfer.title)
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
                 Text(detailText)
                     .font(.caption)
@@ -130,13 +134,20 @@ private struct TransferRow: View {
 
                 if case let .working(progress) = transfer.state {
                     ProgressView(value: progress)
+                        .controlSize(.small)
                         .accessibilityLabel("\(transfer.title) progress")
                 }
             }
 
+            Spacer(minLength: 12)
+
             if canCancel {
                 Button("Cancel", role: .cancel, action: onCancel)
                     .controlSize(.small)
+            } else {
+                Text(stateTitle)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(symbolColor)
             }
         }
         .accessibilityElement(children: .combine)
@@ -153,8 +164,12 @@ private struct TransferRow: View {
     }
 
     private var detailText: String {
-        if case let .failed(message) = transfer.state { return message }
-        return transfer.detail
+        switch transfer.state {
+        case let .failed(message): message
+        case .ready: "Added to your Library"
+        case .cancelled: "Import cancelled"
+        default: transfer.detail
+        }
     }
 
     private var symbolName: String {

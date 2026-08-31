@@ -25,6 +25,12 @@ public struct StatusPanel: View {
         }
         .padding(16)
         .frame(width: 320)
+        .task {
+            while !Task.isCancelled {
+                actions.send(.refreshDiagnostics)
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("WALI.StatusPanel")
     }
@@ -75,15 +81,9 @@ public struct StatusPanel: View {
                     .accessibilityLabel("Conversion progress")
             }
 
-            if status.cpuPercent != nil || status.physicalMemoryBytes != nil {
-                HStack(spacing: 16) {
-                    if let cpuPercent = status.cpuPercent {
-                        metric(label: "CPU", value: cpuPercent.formatted(.number.precision(.fractionLength(0...1))) + "%")
-                    }
-                    if let bytes = status.physicalMemoryBytes {
-                        metric(label: "Memory", value: bytes.formatted(.byteCount(style: .memory)))
-                    }
-                }
+            HStack(spacing: 24) {
+                metric(label: "CPU", value: formattedCPU)
+                metric(label: "Memory", value: formattedMemory)
             }
         }
     }
@@ -137,6 +137,17 @@ public struct StatusPanel: View {
                 .font(.body.monospacedDigit())
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var formattedCPU: String {
+        guard let cpuPercent = status.cpuPercent else { return "—" }
+        if cpuPercent > 0, cpuPercent < 0.1 { return "<0.1%" }
+        return cpuPercent.formatted(.number.precision(.fractionLength(0...1))) + "%"
+    }
+
+    private var formattedMemory: String {
+        guard let bytes = status.physicalMemoryBytes else { return "—" }
+        return bytes.formatted(.byteCount(style: .memory))
     }
 
     private func actionButton(

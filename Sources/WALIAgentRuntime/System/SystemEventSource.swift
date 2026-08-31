@@ -16,6 +16,7 @@ public final class SystemEventSource {
     public typealias ChangeHandler = @MainActor (Set<WallpaperAutomaticPauseReason>) -> Void
 
     public var onChange: ChangeHandler?
+    public var onPresentationRefresh: (@MainActor () -> Void)?
     public private(set) var pauseReasons: Set<WallpaperAutomaticPauseReason> = []
 
     private var workspaceTokens: [any NSObjectProtocol] = []
@@ -35,18 +36,24 @@ public final class SystemEventSource {
         }
         observe(workspaceCenter, name: NSWorkspace.didWakeNotification) { source in
             source.set(.systemSleep, active: false)
+            source.onPresentationRefresh?()
         }
         observe(workspaceCenter, name: NSWorkspace.screensDidSleepNotification) { source in
             source.set(.displayAsleep, active: true)
         }
         observe(workspaceCenter, name: NSWorkspace.screensDidWakeNotification) { source in
             source.set(.displayAsleep, active: false)
+            source.onPresentationRefresh?()
         }
         observe(workspaceCenter, name: NSWorkspace.sessionDidResignActiveNotification) { source in
             source.set(.sessionLocked, active: true)
         }
         observe(workspaceCenter, name: NSWorkspace.sessionDidBecomeActiveNotification) { source in
             source.set(.sessionLocked, active: false)
+            source.onPresentationRefresh?()
+        }
+        observe(workspaceCenter, name: NSWorkspace.activeSpaceDidChangeNotification) { source in
+            source.onPresentationRefresh?()
         }
 
         let processCenter = NotificationCenter.default

@@ -23,6 +23,7 @@ public final class WALIAgentController: WALIUIActionHandling {
     public let model = WALIAppModel()
 
     private let renderer = WallpaperRenderer()
+    private let diagnostics = ProcessDiagnostics()
     private let stateStore: EngineSnapshotStore?
     private let runtimeStore: RuntimeStore?
     private let transcoder = TranscoderConnection()
@@ -41,6 +42,10 @@ public final class WALIAgentController: WALIUIActionHandling {
 
     public func start() {
         guard startupTask == nil else { return }
+        renderer.onSnapshotChange = { [weak self] snapshot in
+            self?.rendererDidChange(snapshot)
+        }
+        renderer.start()
         startupTask = Task { @MainActor [weak self] in
             await self?.bootstrap()
         }
@@ -96,16 +101,17 @@ public final class WALIAgentController: WALIUIActionHandling {
         }
         self.router = router
 
-        let host = AgentServiceHost { request in
-            await router.handle(request)
+        let host = AgentServiceHost { [weak self] request in
+            let response = await router.handle(request)
+            guard case .diagnosticsSnapshot = request.command,
+                  let sample = await self?.takeDiagnosticsSample() else {
+                return response
+            }
+            return response.replacingResourceUsage(with: sample)
         }
         serviceHost = host
         host.start()
 
-        renderer.onSnapshotChange = { [weak self] snapshot in
-            self?.rendererDidChange(snapshot)
-        }
-        renderer.start()
         renderDesiredState(restored)
         renderer.setUserPaused(restored.isPausedByUser || restored.preferences.startPaused)
         for item in restored.trashedItems {
@@ -146,8 +152,12 @@ public final class WALIAgentController: WALIUIActionHandling {
                 try $0.bookmarkData(options: [.withSecurityScope])
             }
             return .importFiles(bookmarks: bookmarks)
-        case let .applyWallpaper(itemID, displayIDs):
-            return .apply(itemID: itemID, displayIDs: displayIDs.sorted())
+        case let .applyWallpaper(itemID, displayIDs, contentFit):
+            return .apply(
+                itemID: itemID,
+                displayIDs: displayIDs.sorted(),
+                scaling: .init(rawValue: contentFit.rawValue) ?? .fill
+            )
         case let .deleteWallpaper(itemID): return .removeItem(itemID: itemID)
         case let .restoreWallpaper(itemID): return .restoreItem(itemID: itemID)
         case let .revealWallpaper(itemID): return .revealItem(itemID: itemID)
@@ -155,6 +165,9 @@ public final class WALIAgentController: WALIUIActionHandling {
         case let .setPaused(paused): return .setPlaybackPaused(paused)
         case .nextWallpaper: return .nextWallpaper
         case .stopWallpaper: return .stopWallpaper
+        case .refreshDiagnostics:
+            applyDiagnosticsSample(takeDiagnosticsSample())
+            return nil
         case let .updatePreferences(preferences):
             return .setPreferences(.init(
                 launchAtLogin: preferences.launchAtLogin,
@@ -214,7 +227,7 @@ public final class WALIAgentController: WALIUIActionHandling {
                     try await runtimeStore.updatePreferences(preferences)
                 }
             }
-        case .render, .stopRendering:
+        case .render, .stopRendering, .reconcileRendering:
             renderDesiredState(authoritative)
         case .setPlaybackPaused:
             renderer.setUserPaused(authoritative.isPausedByUser)
@@ -644,7 +657,6 @@ public final class WALIAgentController: WALIUIActionHandling {
     }
 
     private func renderDesiredState(_ snapshot: EngineSnapshot) {
-        let contentFit: PresentationContentFit = snapshot.preferences.scaling == .fit ? .fit : .fill
         let lowPowerResponse: PresentationLowPowerResponse
         switch snapshot.preferences.lowPowerBehavior {
         case .pause: lowPowerResponse = .pause
@@ -665,7 +677,9 @@ public final class WALIAgentController: WALIUIActionHandling {
                 videoURL: primaryURL,
                 efficientVideoURL: item.previewURL,
                 posterURL: item.posterURL,
-                contentFit: contentFit,
+                contentFit: PresentationContentFit(
+                    rawValue: (display.scaling ?? snapshot.preferences.scaling).rawValue
+                ) ?? .fill,
                 lowPowerResponse: lowPowerResponse
             )
         }
@@ -685,6 +699,7 @@ public final class WALIAgentController: WALIUIActionHandling {
             let displays = snapshot.displays.map { display in
                 EngineDisplay(
                     id: display.id.rawValue,
+                    aliases: display.aliases.map(\.rawValue).sorted(),
                     name: display.name,
                     pixelWidth: Int((display.frame.width * display.backingScaleFactor).rounded()),
                     pixelHeight: Int((display.frame.height * display.backingScaleFactor).rounded()),
@@ -694,10 +709,16 @@ public final class WALIAgentController: WALIUIActionHandling {
                     isOnline: true
                 )
             }
-            let currentOnline = state.displays.filter(\.isOnline).map { ($0.id, $0.name, $0.pixelWidth, $0.pixelHeight, $0.isMain, $0.isBuiltIn) }
-            let observed = displays.map { ($0.id, $0.name, $0.pixelWidth, $0.pixelHeight, $0.isMain, $0.isBuiltIn) }
+            guard snapshot.displays == renderer.snapshot.displays else { return }
+            let currentOnline = state.displays.filter(\.isOnline).map {
+                ($0.id, $0.aliases, $0.name, $0.pixelWidth, $0.pixelHeight, $0.isMain, $0.isBuiltIn)
+            }
+            let observed = displays.map {
+                ($0.id, $0.aliases, $0.name, $0.pixelWidth, $0.pixelHeight, $0.isMain, $0.isBuiltIn)
+            }
             if !currentOnline.elementsEqual(observed, by: { lhs, rhs in
-                lhs.0 == rhs.0 && lhs.1 == rhs.1 && lhs.2 == rhs.2 && lhs.3 == rhs.3 && lhs.4 == rhs.4 && lhs.5 == rhs.5
+                lhs.0 == rhs.0 && lhs.1 == rhs.1 && lhs.2 == rhs.2 && lhs.3 == rhs.3
+                    && lhs.4 == rhs.4 && lhs.5 == rhs.5 && lhs.6 == rhs.6
             }) {
                 _ = try await router.performInternal(.replaceDisplays(displays))
             }
@@ -765,11 +786,51 @@ public final class WALIAgentController: WALIUIActionHandling {
         }
     }
 
+    private func takeDiagnosticsSample() -> ProcessResourceSample {
+        diagnostics.sampleNow()
+    }
+
+    private func applyDiagnosticsSample(_ sample: ProcessResourceSample) {
+        model.snapshot.renderer.cpuPercent = sample.cpuPercent
+        model.snapshot.renderer.physicalMemoryBytes = Int64(clamping: sample.physicalMemoryBytes)
+    }
+
     private func present(_ error: Error) {
         model.snapshot.notice = .init(
             kind: .error,
             title: "WALI Needs Attention",
             message: error.localizedDescription
+        )
+    }
+}
+
+private extension AgentResponse {
+    func replacingResourceUsage(with sample: ProcessResourceSample) -> AgentResponse {
+        guard case let .snapshot(snapshot) = result else { return self }
+        let current = snapshot.resourceUsage
+        let resourceUsage = AgentResourceUsage(
+            activePlayers: current.activePlayers,
+            cpuPercent: sample.cpuPercent,
+            residentMemoryBytes: sample.physicalMemoryBytes,
+            isLowPowerModeEnabled: current.isLowPowerModeEnabled,
+            thermalState: current.thermalState,
+            storageUsedBytes: current.storageUsedBytes,
+            storageLimitBytes: current.storageLimitBytes
+        )
+        let replacement = AgentSnapshot(
+            revision: snapshot.revision,
+            connection: snapshot.connection,
+            playback: snapshot.playback,
+            items: snapshot.items,
+            displays: snapshot.displays,
+            imports: snapshot.imports,
+            preferences: snapshot.preferences,
+            resourceUsage: resourceUsage
+        )
+        return AgentResponse(
+            protocolVersion: protocolVersion,
+            requestID: requestID,
+            result: .snapshot(replacement)
         )
     }
 }
@@ -798,8 +859,10 @@ private extension AgentSnapshot {
                 wallpaperTitle: activeItem?.name,
                 thumbnailURL: activeItem?.posterURL,
                 displayCount: displays.count { $0.isOnline && $0.assignedItemID != nil },
-                cpuPercent: resourceUsage.cpuPercent,
-                physicalMemoryBytes: Int64(clamping: resourceUsage.residentMemoryBytes)
+                cpuPercent: resourceUsage.residentMemoryBytes > 0 ? resourceUsage.cpuPercent : nil,
+                physicalMemoryBytes: resourceUsage.residentMemoryBytes > 0
+                    ? Int64(clamping: resourceUsage.residentMemoryBytes)
+                    : nil
             ),
             preferences: .init(
                 launchAtLogin: preferences.launchAtLogin,

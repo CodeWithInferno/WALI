@@ -90,32 +90,71 @@ public struct EngineLibraryItem: Codable, Sendable, Hashable, Identifiable {
 
 public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
     public let id: String
+    public var aliases: [String]
     public var name: String
     public var pixelWidth: Int
     public var pixelHeight: Int
     public var isMain: Bool
     public var isBuiltIn: Bool
     public var assignedItemID: UUID?
+    public var scaling: EnginePreferences.Scaling?
     public var isOnline: Bool
 
     public init(
         id: String,
+        aliases: [String] = [],
         name: String,
         pixelWidth: Int,
         pixelHeight: Int,
         isMain: Bool,
         isBuiltIn: Bool = false,
         assignedItemID: UUID? = nil,
+        scaling: EnginePreferences.Scaling? = nil,
         isOnline: Bool = true
     ) {
         self.id = id
+        self.aliases = aliases
         self.name = name
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.isMain = isMain
         self.isBuiltIn = isBuiltIn
         self.assignedItemID = assignedItemID
+        self.scaling = scaling
         self.isOnline = isOnline
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, aliases, name, pixelWidth, pixelHeight, isMain, isBuiltIn
+        case assignedItemID, scaling, isOnline
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        aliases = try values.decodeIfPresent([String].self, forKey: .aliases) ?? []
+        name = try values.decode(String.self, forKey: .name)
+        pixelWidth = try values.decode(Int.self, forKey: .pixelWidth)
+        pixelHeight = try values.decode(Int.self, forKey: .pixelHeight)
+        isMain = try values.decode(Bool.self, forKey: .isMain)
+        isBuiltIn = try values.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
+        assignedItemID = try values.decodeIfPresent(UUID.self, forKey: .assignedItemID)
+        scaling = try values.decodeIfPresent(EnginePreferences.Scaling.self, forKey: .scaling)
+        isOnline = try values.decodeIfPresent(Bool.self, forKey: .isOnline) ?? true
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(aliases, forKey: .aliases)
+        try values.encode(name, forKey: .name)
+        try values.encode(pixelWidth, forKey: .pixelWidth)
+        try values.encode(pixelHeight, forKey: .pixelHeight)
+        try values.encode(isMain, forKey: .isMain)
+        try values.encode(isBuiltIn, forKey: .isBuiltIn)
+        try values.encodeIfPresent(assignedItemID, forKey: .assignedItemID)
+        try values.encodeIfPresent(scaling, forKey: .scaling)
+        try values.encode(isOnline, forKey: .isOnline)
     }
 }
 
@@ -159,6 +198,8 @@ public struct EnginePreferences: Codable, Sendable, Hashable {
     public enum Scaling: String, Codable, Sendable, Hashable {
         case fill
         case fit
+        case stretch
+        case center
     }
 
     public enum Quality: String, Codable, Sendable, Hashable {

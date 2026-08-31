@@ -35,6 +35,8 @@ public struct WALISettingsView: View {
                     Picker("Fit", selection: $draft.contentFit) {
                         Text("Fill Display").tag(WALIContentFitPreference.fill)
                         Text("Fit Entire Video").tag(WALIContentFitPreference.fit)
+                        Text("Stretch to Fill").tag(WALIContentFitPreference.stretch)
+                        Text("Center at Native Size").tag(WALIContentFitPreference.center)
                     }
 
                     Picker("Low Power Mode", selection: $draft.lowPowerBehavior) {

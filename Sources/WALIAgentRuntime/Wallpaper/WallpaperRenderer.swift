@@ -107,6 +107,10 @@ public final class WallpaperRenderer {
             self.automaticPauseReasons = reasons
             self.reconcile()
         }
+        systemEvents.onPresentationRefresh = { [weak self] in
+            self?.displayMonitor.reconcileNow()
+            self?.reconcile()
+        }
         displayMonitor.start()
         systemEvents.start()
         reconcile()
@@ -139,6 +143,7 @@ public final class WallpaperRenderer {
             displayMonitor.stop()
             systemEvents.stop()
         }
+        systemEvents.onPresentationRefresh = nil
         isRunning = false
         automaticPauseReasons.removeAll(keepingCapacity: false)
         removeAllSessions()
@@ -316,7 +321,7 @@ private final class WallpaperSession {
         self.globalPauseReasons = globalPauseReasons
         isUserPaused = userPaused
         currentScreen = screen
-        window.updateFrame(for: screen)
+        window.refreshPlacement(on: screen)
         loadAssignmentIfNeeded()
         applyPauseState()
     }
@@ -344,6 +349,13 @@ private final class WallpaperSession {
 
     private func loadAssignmentIfNeeded() {
         guard assignment != loadedAssignment else { return }
+        if let loadedAssignment,
+           loadedAssignment.videoURL == assignment.videoURL,
+           loadedAssignment.posterURL == assignment.posterURL {
+            self.loadedAssignment = assignment
+            playback.setScaling(assignment.contentFit)
+            return
+        }
         loadedAssignment = assignment
         preparationTask?.cancel()
 
@@ -354,10 +366,12 @@ private final class WallpaperSession {
                 try await playback.replace(
                     videoURL: requestedAssignment.videoURL,
                     posterURL: requestedAssignment.posterURL,
-                    scaling: requestedAssignment.contentFit == .fill
-                        ? .resizeAspectFill
-                        : .resizeAspect
+                    scaling: requestedAssignment.contentFit
                 )
+                guard requestedAssignment.videoURL == assignment.videoURL,
+                      requestedAssignment.posterURL == assignment.posterURL else { return }
+                loadedAssignment = assignment
+                playback.setScaling(assignment.contentFit)
             } catch is CancellationError {
                 return
             } catch {

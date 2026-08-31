@@ -13,6 +13,7 @@ public struct WALIAppRootView: View {
     @State private var route: AppRoute = .library
     @State private var selectedWallpaperID: UUID?
     @State private var selectedDisplayIDs: Set<String> = []
+    @State private var selectedContentFit: WALIContentFitPreference = .fill
     @State private var searchText = ""
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showsImporter = false
@@ -32,18 +33,8 @@ public struct WALIAppRootView: View {
     }
 
     public var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 168, ideal: 190, max: 230)
-        } content: {
-            content
-                .navigationSplitViewColumnWidth(min: 420, ideal: 650)
-        } detail: {
-            detail
-                .navigationSplitViewColumnWidth(min: 280, ideal: 340, max: 440)
-        }
+        navigation
         .navigationTitle(route.title)
-        .searchable(text: $searchText, placement: .toolbar, prompt: "Search Library")
         .toolbar { toolbar }
         .fileImporter(
             isPresented: $showsImporter,
@@ -75,11 +66,39 @@ public struct WALIAppRootView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .frame(minWidth: 820, idealWidth: 1120, minHeight: 560, idealHeight: 720)
         .onAppear(perform: synchronizeSelection)
-        .onChange(of: model.snapshot.displays) { _, _ in synchronizeDisplays() }
+        .onChange(of: model.snapshot.displays) { _, _ in
+            synchronizeDisplays()
+            synchronizeContentFit()
+        }
+        .onChange(of: selectedDisplayIDs) { _, _ in synchronizeContentFit() }
         .onChange(of: model.snapshot.wallpapers) { _, _ in synchronizeWallpaperSelection() }
         .onChange(of: model.settingsPresentationRequest) { _, _ in showsSettings = true }
         .background(keyboardCommands)
         .accessibilityIdentifier("WALI.MainWindow")
+    }
+
+    @ViewBuilder
+    private var navigation: some View {
+        if route == .library {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                sidebar
+                    .navigationSplitViewColumnWidth(min: 168, ideal: 190, max: 230)
+            } content: {
+                content
+                    .navigationSplitViewColumnWidth(min: 350, ideal: 630)
+            } detail: {
+                detail
+                    .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 440)
+            }
+            .searchable(text: $searchText, placement: .toolbar, prompt: "Search Library")
+        } else {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
+                sidebar
+                    .navigationSplitViewColumnWidth(min: 168, ideal: 190, max: 230)
+            } detail: {
+                content
+            }
+        }
     }
 
     private var sidebar: some View {
@@ -87,10 +106,6 @@ public struct WALIAppRootView: View {
             Section("My WALI") {
                 sidebarRow(.library)
                 sidebarRow(.downloads, badge: activeTransferCount)
-            }
-
-            Section {
-                sidebarRow(.create)
             }
         }
         .listStyle(.sidebar)
@@ -131,11 +146,14 @@ public struct WALIAppRootView: View {
                 onDrop: importVideos
             )
         case .downloads:
-            DownloadsSurface(transfers: model.snapshot.transfers) { transferID in
-                actions.send(.cancelTransfer(id: transferID))
-            }
-        case .create:
-            CreateSurface(onImport: { showsImporter = true }, onDrop: importVideos)
+            DownloadsSurface(
+                transfers: model.snapshot.transfers,
+                onImport: { showsImporter = true },
+                onDrop: importVideos,
+                onCancel: { transferID in
+                    actions.send(.cancelTransfer(id: transferID))
+                }
+            )
         }
     }
 
@@ -146,6 +164,7 @@ public struct WALIAppRootView: View {
                 wallpaper: selectedWallpaper,
                 displays: model.snapshot.displays,
                 selectedDisplayIDs: $selectedDisplayIDs,
+                contentFit: $selectedContentFit,
                 onApply: { apply(selectedWallpaper) },
                 onPreview: { preview(selectedWallpaper) },
                 onDelete: { requestDeletion(selectedWallpaper) },
@@ -284,6 +303,7 @@ public struct WALIAppRootView: View {
     private func synchronizeSelection() {
         synchronizeDisplays()
         synchronizeWallpaperSelection()
+        synchronizeContentFit()
     }
 
     private func synchronizeDisplays() {
@@ -317,7 +337,22 @@ public struct WALIAppRootView: View {
             localError = "Connect or select a display before applying a wallpaper."
             return
         }
-        actions.send(.applyWallpaper(itemID: wallpaper.id, displayIDs: effectiveDisplayIDs))
+        actions.send(.applyWallpaper(
+            itemID: wallpaper.id,
+            displayIDs: effectiveDisplayIDs,
+            contentFit: selectedContentFit
+        ))
+    }
+
+    private func synchronizeContentFit() {
+        let selectedModes = Set(
+            model.snapshot.displays.lazy
+                .filter { effectiveDisplayIDs.contains($0.id) }
+                .compactMap(\.contentFit)
+        )
+        selectedContentFit = selectedModes.count == 1
+            ? selectedModes.first!
+            : model.snapshot.preferences.contentFit
     }
 
     private func preview(_ wallpaper: WALIWallpaperPresentation) {
@@ -340,13 +375,11 @@ public struct WALIAppRootView: View {
 private enum AppRoute: String, CaseIterable, Hashable {
     case library
     case downloads
-    case create
 
     var title: String {
         switch self {
         case .library: "Library"
         case .downloads: "Downloads"
-        case .create: "Create"
         }
     }
 
@@ -354,15 +387,13 @@ private enum AppRoute: String, CaseIterable, Hashable {
         switch self {
         case .library: "square.grid.2x2"
         case .downloads: "arrow.down.circle"
-        case .create: "wand.and.stars"
         }
     }
 
     var detailHint: String {
         switch self {
         case .library: "Select a wallpaper to see details and display controls."
-        case .downloads: "Import and conversion progress appears here."
-        case .create: "Import a video to create a wallpaper."
+        case .downloads: "Import videos and follow their preparation progress."
         }
     }
 }

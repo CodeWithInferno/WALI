@@ -59,9 +59,11 @@ final class WallpaperWindow: NSWindow {
         publishVisibility()
     }
 
-    func updateFrame(for screen: NSScreen) {
-        guard frame != screen.frame else { return }
-        setFrame(screen.frame, display: true)
+    func refreshPlacement(on screen: NSScreen) {
+        if frame != screen.frame {
+            setFrame(screen.frame, display: true)
+        }
+        orderFrontRegardless()
     }
 
     func tearDown() {
@@ -82,6 +84,8 @@ final class WallpaperWindow: NSWindow {
 
 @MainActor
 final class WallpaperCanvasView: NSView {
+    var onLayout: (@MainActor (CGRect, CGFloat) -> Void)?
+
     private let backgroundLayer = CALayer()
     private var surfaceLayers: [CALayer] = []
 
@@ -104,21 +108,17 @@ final class WallpaperCanvasView: NSView {
         CATransaction.setDisableActions(true)
         for surfaceLayer in surfaceLayers {
             surfaceLayer.frame = bounds
-            for child in surfaceLayer.sublayers ?? [] {
-                child.frame = surfaceLayer.bounds
-            }
         }
         CATransaction.commit()
+        onLayout?(bounds, window?.backingScaleFactor ?? 1)
     }
 
     func addSurface(_ surfaceLayer: CALayer, visible: Bool) {
         surfaceLayer.frame = bounds
         surfaceLayer.opacity = visible ? 1 : 0
-        for child in surfaceLayer.sublayers ?? [] {
-            child.frame = surfaceLayer.bounds
-        }
         backgroundLayer.addSublayer(surfaceLayer)
         surfaceLayers.append(surfaceLayer)
+        onLayout?(bounds, window?.backingScaleFactor ?? 1)
     }
 
     func crossfade(

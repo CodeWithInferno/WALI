@@ -194,9 +194,11 @@ Extend through capabilities and adapters:
   boundary.
 - Storage implementations remain behind `RuntimeStore`.
 
-Desktop public APIs come first. Session lock-screen adapters, arbitrary
-plugins, sync, a remote catalog, and shared `/Users/Shared` storage are
-deferred. No deferred feature gets an empty runtime or privilege today.
+Desktop public APIs come first. A separately installed screen-saver companion,
+arbitrary plugins, sync, a remote catalog, and shared `/Users/Shared` storage
+are deferred. Direct rendering in the protected Lock Screen and FileVault
+login surfaces is unsupported. No deferred feature gets an empty runtime or
+privilege today.
 
 ## Gates
 

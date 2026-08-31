@@ -34,9 +34,10 @@ public struct AgentRequest: Codable, Sendable, Hashable {
 public enum AgentCommand: Codable, Sendable, Hashable {
     case handshake(clientVersion: String)
     case snapshot
+    case diagnosticsSnapshot
     case importFiles(bookmarks: [Data])
     case cancelImport(jobID: UUID)
-    case apply(itemID: UUID, displayIDs: [String])
+    case apply(itemID: UUID, displayIDs: [String], scaling: AgentPreferences.Scaling)
     case setPlaybackPaused(Bool)
     case nextWallpaper
     case stopWallpaper
@@ -191,32 +192,71 @@ public struct AgentLibraryItem: Codable, Sendable, Hashable, Identifiable {
 
 public struct AgentDisplay: Codable, Sendable, Hashable, Identifiable {
     public let id: String
+    public let aliases: [String]
     public let name: String
     public let pixelWidth: Int
     public let pixelHeight: Int
     public let isMain: Bool
     public let isBuiltIn: Bool
     public let assignedItemID: UUID?
+    public let scaling: AgentPreferences.Scaling?
     public let isOnline: Bool
 
     public init(
         id: String,
+        aliases: [String] = [],
         name: String,
         pixelWidth: Int,
         pixelHeight: Int,
         isMain: Bool,
         isBuiltIn: Bool = false,
         assignedItemID: UUID? = nil,
+        scaling: AgentPreferences.Scaling? = nil,
         isOnline: Bool = true
     ) {
         self.id = id
+        self.aliases = aliases
         self.name = name
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.isMain = isMain
         self.isBuiltIn = isBuiltIn
         self.assignedItemID = assignedItemID
+        self.scaling = scaling
         self.isOnline = isOnline
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, aliases, name, pixelWidth, pixelHeight, isMain, isBuiltIn
+        case assignedItemID, scaling, isOnline
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        aliases = try values.decodeIfPresent([String].self, forKey: .aliases) ?? []
+        name = try values.decode(String.self, forKey: .name)
+        pixelWidth = try values.decode(Int.self, forKey: .pixelWidth)
+        pixelHeight = try values.decode(Int.self, forKey: .pixelHeight)
+        isMain = try values.decode(Bool.self, forKey: .isMain)
+        isBuiltIn = try values.decodeIfPresent(Bool.self, forKey: .isBuiltIn) ?? false
+        assignedItemID = try values.decodeIfPresent(UUID.self, forKey: .assignedItemID)
+        scaling = try values.decodeIfPresent(AgentPreferences.Scaling.self, forKey: .scaling)
+        isOnline = try values.decodeIfPresent(Bool.self, forKey: .isOnline) ?? true
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(aliases, forKey: .aliases)
+        try values.encode(name, forKey: .name)
+        try values.encode(pixelWidth, forKey: .pixelWidth)
+        try values.encode(pixelHeight, forKey: .pixelHeight)
+        try values.encode(isMain, forKey: .isMain)
+        try values.encode(isBuiltIn, forKey: .isBuiltIn)
+        try values.encodeIfPresent(assignedItemID, forKey: .assignedItemID)
+        try values.encodeIfPresent(scaling, forKey: .scaling)
+        try values.encode(isOnline, forKey: .isOnline)
     }
 }
 
@@ -260,6 +300,8 @@ public struct AgentPreferences: Codable, Sendable, Hashable {
     public enum Scaling: String, Codable, Sendable, Hashable {
         case fill
         case fit
+        case stretch
+        case center
     }
 
     public enum Quality: String, Codable, Sendable, Hashable {

@@ -48,6 +48,21 @@ public final class AgentLifecycleController {
         }
     }
 
+    /// Replaces a stale Service Management registration after the containing
+    /// app bundle has been rebuilt in place. Normal installed updates do not
+    /// need this; it is an explicit recovery path for support and development.
+    public func reinstallAgent() async throws {
+        guard let service else { throw AgentLifecycleError.missingConfiguration }
+        if service.status != .notRegistered, service.status != .notFound {
+            try await service.unregister()
+            // Service Management removes its launchd job synchronously but
+            // retires the background-item record asynchronously. Re-registering
+            // in the same run can reuse the stale launch constraint.
+            try await Task.sleep(for: .seconds(3))
+        }
+        try service.register()
+    }
+
     public func openApprovalSettings() {
         SMAppService.openSystemSettingsLoginItems()
     }

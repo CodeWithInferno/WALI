@@ -334,7 +334,7 @@ modules:
     stability: adapter
     current_capabilities:
       - connected_native_application_shell
-      - native_library_create_and_download_surfaces
+      - native_library_and_download_surfaces
       - adaptive_artwork_grid_and_detail
       - settings_shortcuts_and_accessibility
       - agent_xpc_client_and_lifecycle
@@ -373,6 +373,7 @@ modules:
       - engine_host_and_command_router
       - authenticated_mach_service
       - per_display_wallpaper_renderer
+      - per_display_scaling_and_reconnect_continuity
       - crash_recoverable_content_store
       - import_and_transcoder_orchestration
       - native_menu_bar_scene

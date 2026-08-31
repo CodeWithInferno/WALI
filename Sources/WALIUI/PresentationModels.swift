@@ -104,19 +104,22 @@ public struct WALIDisplayPresentation: Identifiable, Equatable, Sendable {
     public var detail: String
     public var isConnected: Bool
     public var isBuiltIn: Bool
+    public var contentFit: WALIContentFitPreference?
 
     public init(
         id: String,
         name: String,
         detail: String,
         isConnected: Bool = true,
-        isBuiltIn: Bool = false
+        isBuiltIn: Bool = false,
+        contentFit: WALIContentFitPreference? = nil
     ) {
         self.id = id
         self.name = name
         self.detail = detail
         self.isConnected = isConnected
         self.isBuiltIn = isBuiltIn
+        self.contentFit = contentFit
     }
 }
 
@@ -239,6 +242,8 @@ public enum WALILowPowerPreference: String, CaseIterable, Identifiable, Equatabl
 public enum WALIContentFitPreference: String, CaseIterable, Identifiable, Equatable, Sendable {
     case fill
     case fit
+    case stretch
+    case center
 
     public var id: Self { self }
 }
@@ -267,7 +272,11 @@ public enum WALINoticeKind: Equatable, Sendable {
 /// Every user intention emitted by the reusable presentation layer.
 public enum WALIUIAction: Equatable, Sendable {
     case importVideos([URL])
-    case applyWallpaper(itemID: UUID, displayIDs: Set<String>)
+    case applyWallpaper(
+        itemID: UUID,
+        displayIDs: Set<String>,
+        contentFit: WALIContentFitPreference
+    )
     case deleteWallpaper(itemID: UUID)
     case restoreWallpaper(itemID: UUID)
     case revealWallpaper(itemID: UUID)
@@ -275,6 +284,7 @@ public enum WALIUIAction: Equatable, Sendable {
     case setPaused(Bool)
     case nextWallpaper
     case stopWallpaper
+    case refreshDiagnostics
     case updatePreferences(WALIPreferencesPresentation)
     case openMainApplication
     case openSettings

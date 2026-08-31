@@ -7,7 +7,7 @@ public enum EngineAction: Sendable {
     case finishImport(jobID: UUID, item: EngineLibraryItem)
     case cancelImport(UUID)
     case replaceDisplays([EngineDisplay])
-    case apply(itemID: UUID, displayIDs: [String])
+    case apply(itemID: UUID, displayIDs: [String], scaling: EnginePreferences.Scaling)
     case setPaused(Bool)
     case setPlaybackStatus(EnginePlaybackStatus)
     case nextWallpaper
@@ -25,6 +25,7 @@ public enum EngineEffect: Sendable, Hashable {
     case startImport(jobID: UUID, bookmark: Data)
     case cancelImport(jobID: UUID)
     case render(item: EngineLibraryItem, displayIDs: [String])
+    case reconcileRendering
     case stopRendering(itemID: UUID)
     case setPlaybackPaused(Bool)
     case removeArtifacts(itemID: UUID)
@@ -148,24 +149,41 @@ public actor RuntimeEngine {
                 displays.map { ($0.id, $0) },
                 uniquingKeysWith: { _, newest in newest }
             )
+            var matchedPreviousIDs: Set<String> = []
             var reconciled = incoming.values.map { display in
                 var display = display
-                if display.assignedItemID == nil {
-                    display.assignedItemID = previous[display.id]?.assignedItemID
+                let identities = Set([display.id] + display.aliases)
+                let prior = previous[display.id] ?? previous.values.first { candidate in
+                    !identities.isDisjoint(with: Set([candidate.id] + candidate.aliases))
+                }
+                if let prior {
+                    matchedPreviousIDs.insert(prior.id)
+                    if display.assignedItemID == nil {
+                        display.assignedItemID = prior.assignedItemID
+                    }
+                    if display.scaling == nil {
+                        display.scaling = prior.scaling
+                            ?? (prior.assignedItemID == nil ? nil : state.preferences.scaling)
+                    }
+                    display.aliases = Array(
+                        Set(display.aliases + prior.aliases + [prior.id])
+                            .subtracting([display.id])
+                    ).sorted()
                 }
                 return display
             }
             reconciled.append(contentsOf: previous.values.compactMap { oldDisplay in
-                guard incoming[oldDisplay.id] == nil else { return nil }
+                guard incoming[oldDisplay.id] == nil,
+                      !matchedPreviousIDs.contains(oldDisplay.id) else { return nil }
                 var offline = oldDisplay
                 offline.isMain = false
                 offline.isOnline = false
                 return offline
             })
             state.displays = reconciled.sorted { $0.id < $1.id }
-            return []
+            return [.reconcileRendering]
 
-        case let .apply(itemID, displayIDs):
+        case let .apply(itemID, displayIDs, scaling):
             guard let item = state.items.first(where: { $0.id == itemID }) else {
                 throw EngineError.itemNotFound(itemID)
             }
@@ -175,6 +193,7 @@ public actor RuntimeEngine {
             }
             for index in state.displays.indices where displayIDs.contains(state.displays[index].id) {
                 state.displays[index].assignedItemID = itemID
+                state.displays[index].scaling = scaling
             }
             return [.render(item: item, displayIDs: displayIDs)]
 
@@ -248,8 +267,18 @@ public actor RuntimeEngine {
 
         case let .setPreferences(preferences):
             let launchAtLoginChanged = state.preferences.launchAtLogin != preferences.launchAtLogin
+            let renderingChanged = state.preferences.scaling != preferences.scaling
+                || state.preferences.quality != preferences.quality
+                || state.preferences.lowPowerBehavior != preferences.lowPowerBehavior
             state.preferences = preferences
-            return launchAtLoginChanged ? [.updateLaunchAtLogin(preferences.launchAtLogin)] : []
+            var effects: [EngineEffect] = []
+            if launchAtLoginChanged {
+                effects.append(.updateLaunchAtLogin(preferences.launchAtLogin))
+            }
+            if renderingChanged {
+                effects.append(.reconcileRendering)
+            }
+            return effects
 
         case let .setResourceUsage(resourceUsage):
             state.resourceUsage = resourceUsage

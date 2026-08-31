@@ -56,6 +56,9 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
         pollingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
+                if ProcessInfo.processInfo.arguments.contains("--repair-agent-registration") {
+                    try await lifecycle.reinstallAgent()
+                }
                 try lifecycle.ensureRunning()
             } catch {
                 present(error: error, title: "Background Access Needed")
@@ -143,7 +146,7 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
 
     private func expectedRevision(for command: AgentCommand) -> EngineRevision? {
         switch command {
-        case .snapshot, .handshake, .openForegroundApp, .revealItem, .quit:
+        case .snapshot, .diagnosticsSnapshot, .handshake, .openForegroundApp, .revealItem, .quit:
             nil
         default:
             lastSnapshot?.revision
@@ -161,8 +164,12 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
                 )
             }
             return .importFiles(bookmarks: bookmarks)
-        case let .applyWallpaper(itemID, displayIDs):
-            return .apply(itemID: itemID, displayIDs: displayIDs.sorted())
+        case let .applyWallpaper(itemID, displayIDs, contentFit):
+            return .apply(
+                itemID: itemID,
+                displayIDs: displayIDs.sorted(),
+                scaling: .init(rawValue: contentFit.rawValue) ?? .fill
+            )
         case let .deleteWallpaper(itemID):
             return .removeItem(itemID: itemID)
         case let .restoreWallpaper(itemID):
@@ -177,6 +184,8 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
             return .nextWallpaper
         case .stopWallpaper:
             return .stopWallpaper
+        case .refreshDiagnostics:
+            return .diagnosticsSnapshot
         case let .updatePreferences(preferences):
             let current = lastSnapshot?.preferences ?? .init()
             return .setPreferences(.init(
@@ -255,7 +264,10 @@ public extension AgentSnapshot {
                     name: display.name,
                     detail: "\(display.pixelWidth) × \(display.pixelHeight)",
                     isConnected: display.isOnline,
-                    isBuiltIn: display.isBuiltIn
+                    isBuiltIn: display.isBuiltIn,
+                    contentFit: display.scaling.flatMap {
+                        WALIContentFitPreference(rawValue: $0.rawValue)
+                    }
                 )
             },
             transfers: imports.map(\.presentationValue),
@@ -264,8 +276,10 @@ public extension AgentSnapshot {
                 wallpaperTitle: activeItem?.name,
                 thumbnailURL: activeItem?.posterURL,
                 displayCount: displays.count { $0.assignedItemID != nil && $0.isOnline },
-                cpuPercent: resourceUsage.cpuPercent,
-                physicalMemoryBytes: Int64(clamping: resourceUsage.residentMemoryBytes)
+                cpuPercent: hasDiagnosticsSample ? resourceUsage.cpuPercent : nil,
+                physicalMemoryBytes: hasDiagnosticsSample
+                    ? Int64(clamping: resourceUsage.residentMemoryBytes)
+                    : nil
             ),
             preferences: WALIPreferencesPresentation(
                 launchAtLogin: preferences.launchAtLogin,
@@ -280,6 +294,10 @@ public extension AgentSnapshot {
             ),
             notice: notice
         )
+    }
+
+    private var hasDiagnosticsSample: Bool {
+        resourceUsage.residentMemoryBytes > 0
     }
 
     private var rendererState: WALIRendererState {

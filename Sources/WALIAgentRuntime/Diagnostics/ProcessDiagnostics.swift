@@ -49,7 +49,39 @@ public final class ProcessDiagnostics {
     private var timer: Timer?
     private var baseline: CPUBaseline?
 
-    public init() {}
+    public init() {
+        baseline = Self.currentCPUBaseline()
+    }
+
+    /// Takes one bounded sample without starting background work.
+    ///
+    /// Status surfaces call this while visible, which keeps resource reporting
+    /// honest without introducing permanent diagnostics polling.
+    @discardableResult
+    public func sampleNow() -> ProcessResourceSample {
+        let nextBaseline = Self.currentCPUBaseline()
+        let cpuPercent = baseline.map { previous in
+            let elapsed = max(nextBaseline.wallSeconds - previous.wallSeconds, 0.000_001)
+            let consumed = max(nextBaseline.cpuSeconds - previous.cpuSeconds, 0)
+            return consumed / elapsed * 100
+        } ?? 0
+        baseline = nextBaseline
+
+        let sample = ProcessResourceSample(
+            timestamp: Date(),
+            cpuPercent: cpuPercent.isFinite ? cpuPercent : 0,
+            physicalMemoryBytes: Self.physicalFootprint()
+        )
+        history.append(sample)
+        if history.count > 60 {
+            history.removeFirst(history.count - 60)
+        }
+        let currentHandlers = Array(handlers.values)
+        for handler in currentHandlers {
+            handler(sample)
+        }
+        return sample
+    }
 
     public func acquireLease(onSample: @escaping SampleHandler) -> ProcessDiagnosticsLease {
         let id = UUID()
@@ -65,7 +97,7 @@ public final class ProcessDiagnostics {
 
     private func startSamplingIfNeeded() {
         guard timer == nil else { return }
-        baseline = currentCPUBaseline()
+        baseline = Self.currentCPUBaseline()
         sample()
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -87,30 +119,10 @@ public final class ProcessDiagnostics {
 
     private func sample() {
         guard !handlers.isEmpty else { return }
-        let nextBaseline = currentCPUBaseline()
-        let cpuPercent = baseline.map { previous in
-            let elapsed = max(nextBaseline.wallSeconds - previous.wallSeconds, 0.000_001)
-            let consumed = max(nextBaseline.cpuSeconds - previous.cpuSeconds, 0)
-            return consumed / elapsed * 100
-        } ?? 0
-        baseline = nextBaseline
-
-        let sample = ProcessResourceSample(
-            timestamp: Date(),
-            cpuPercent: cpuPercent.isFinite ? cpuPercent : 0,
-            physicalMemoryBytes: physicalFootprint()
-        )
-        history.append(sample)
-        if history.count > 60 {
-            history.removeFirst(history.count - 60)
-        }
-        let currentHandlers = Array(handlers.values)
-        for handler in currentHandlers {
-            handler(sample)
-        }
+        sampleNow()
     }
 
-    private func currentCPUBaseline() -> CPUBaseline {
+    private static func currentCPUBaseline() -> CPUBaseline {
         var usage = rusage()
         let result = withUnsafeMutablePointer(to: &usage) { pointer in
             getrusage(RUSAGE_SELF, pointer)
@@ -127,11 +139,11 @@ public final class ProcessDiagnostics {
         )
     }
 
-    private func seconds(_ value: timeval) -> Double {
+    private static func seconds(_ value: timeval) -> Double {
         Double(value.tv_sec) + Double(value.tv_usec) / 1_000_000
     }
 
-    private func physicalFootprint() -> UInt64 {
+    private static func physicalFootprint() -> UInt64 {
         var information = task_vm_info_data_t()
         var count = mach_msg_type_number_t(
             MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size
