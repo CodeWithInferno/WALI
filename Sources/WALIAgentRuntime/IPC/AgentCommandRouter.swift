@@ -1,0 +1,260 @@
+import AppKit
+import Foundation
+import WALIEngine
+import WALIModel
+import WALIWire
+
+public typealias EngineEffectHandler = @Sendable (EngineEffect, EngineSnapshot) async throws -> Void
+
+/// Maps the versioned wire protocol onto the transport-neutral engine.
+public actor AgentCommandRouter {
+    private let engine: RuntimeEngine
+    private let effectHandler: EngineEffectHandler
+
+    public init(
+        restoring snapshot: EngineSnapshot = .init(),
+        effectHandler: @escaping EngineEffectHandler
+    ) {
+        engine = RuntimeEngine(restoring: snapshot)
+        self.effectHandler = effectHandler
+    }
+
+    public func handle(_ request: AgentRequest) async -> AgentResponse {
+        do {
+            switch request.command {
+            case .handshake, .snapshot:
+                return response(for: request, snapshot: await engine.snapshot())
+
+            case let .importFiles(bookmarks):
+                let inputs = try bookmarks.map { bookmark in
+                    let url = try Self.resolveBookmark(bookmark)
+                    return (id: UUID(), fileName: url.lastPathComponent, bookmark: bookmark)
+                }
+                return try await mutate(
+                    request,
+                    action: .beginImports(inputs)
+                )
+
+            case let .cancelImport(jobID):
+                return try await mutate(request, action: .cancelImport(jobID))
+
+            case let .apply(itemID, displayIDs):
+                return try await mutate(request, action: .apply(itemID: itemID, displayIDs: displayIDs))
+
+            case let .setPlaybackPaused(isPaused):
+                return try await mutate(request, action: .setPaused(isPaused))
+
+            case let .renameItem(itemID, name):
+                return try await mutate(request, action: .rename(itemID: itemID, name: name))
+
+            case let .removeItem(itemID):
+                return try await mutate(request, action: .remove(itemID: itemID))
+
+            case let .setPreferences(preferences):
+                return try await mutate(
+                    request,
+                    action: .setPreferences(preferences.engineValue)
+                )
+
+            case let .revealItem(itemID):
+                let snapshot = await engine.snapshot()
+                guard let item = snapshot.items.first(where: { $0.id == itemID }) else {
+                    throw EngineError.itemNotFound(itemID)
+                }
+                await MainActor.run {
+                    NSWorkspace.shared.activateFileViewerSelecting([item.masterURL])
+                }
+                return response(for: request, snapshot: snapshot)
+
+            case .openForegroundApp:
+                await MainActor.run {
+                    if let identifier = Self.foregroundBundleIdentifier {
+                        NSWorkspace.shared.launchApplication(withBundleIdentifier: identifier, options: [], additionalEventParamDescriptor: nil, launchIdentifier: nil)
+                    }
+                }
+                return response(for: request, snapshot: await engine.snapshot())
+
+            case .quit:
+                await MainActor.run { NSApplication.shared.terminate(nil) }
+                return response(for: request, snapshot: await engine.snapshot())
+            }
+        } catch {
+            return AgentResponse(
+                requestID: request.requestID,
+                result: .failure(Self.failure(from: error))
+            )
+        }
+    }
+
+    @discardableResult
+    public func performInternal(
+        _ action: EngineAction,
+        idempotencyKey: UUID = UUID()
+    ) async throws -> EngineSnapshot {
+        let transaction = try await engine.perform(action, idempotencyKey: idempotencyKey)
+        try await execute(transaction)
+        return transaction.snapshot
+    }
+
+    public func snapshot() async -> EngineSnapshot {
+        await engine.snapshot()
+    }
+
+    private func mutate(_ request: AgentRequest, action: EngineAction) async throws -> AgentResponse {
+        let transaction = try await engine.perform(
+            action,
+            idempotencyKey: request.idempotencyKey,
+            expectedRevision: request.expectedRevision
+        )
+        try await execute(transaction)
+        return response(for: request, snapshot: transaction.snapshot)
+    }
+
+    private func execute(_ transaction: EngineTransaction) async throws {
+        for effect in transaction.effects {
+            try await effectHandler(effect, transaction.snapshot)
+        }
+    }
+
+    private func response(for request: AgentRequest, snapshot: EngineSnapshot) -> AgentResponse {
+        AgentResponse(requestID: request.requestID, result: .snapshot(snapshot.wireValue))
+    }
+
+    private static func resolveBookmark(_ data: Data) throws -> URL {
+        var stale = false
+        return try URL(
+            resolvingBookmarkData: data,
+            options: [.withoutUI],
+            relativeTo: nil,
+            bookmarkDataIsStale: &stale
+        )
+    }
+
+    private static var foregroundBundleIdentifier: String? {
+        let agentIdentifier = Bundle.main.bundleIdentifier ?? ""
+        if agentIdentifier.contains(".debug.") { return "com.wali.debug.WALI" }
+        if agentIdentifier.contains(".development.") { return "com.wali.development.WALI" }
+        return "com.wali.WALI"
+    }
+
+    private static func failure(from error: Error) -> AgentFailure {
+        switch error {
+        case let EngineError.staleRevision(expected, actual):
+            AgentFailure(
+                code: .staleRevision,
+                message: "This view is out of date (expected \(expected), current \(actual)).",
+                recoverySuggestion: "Refresh and try again."
+            )
+        case EngineError.itemNotFound:
+            AgentFailure(code: .itemNotFound, message: "That wallpaper is no longer in the library.")
+        case EngineError.displayNotFound:
+            AgentFailure(code: .displayNotFound, message: "That display is no longer connected.")
+        case EngineError.importNotFound:
+            AgentFailure(code: .importFailed, message: "That import is no longer available.")
+        case EngineError.invalidName:
+            AgentFailure(code: .invalidRequest, message: "Choose a name between 1 and 120 characters.")
+        case WireCodecError.incompatibleProtocol:
+            AgentFailure(
+                code: .incompatibleProtocol,
+                message: "The WALI app and agent versions do not match.",
+                recoverySuggestion: "Quit WALI completely, then reopen it."
+            )
+        default:
+            AgentFailure(code: .internalFailure, message: error.localizedDescription)
+        }
+    }
+}
+
+private extension EngineSnapshot {
+    var wireValue: AgentSnapshot {
+        AgentSnapshot(
+            revision: revision,
+            playback: isPausedByUser ? .paused : (displays.contains { $0.assignedItemID != nil } ? .playing : .idle),
+            items: items.map(\.wireValue),
+            displays: displays.map(\.wireValue),
+            imports: imports.map(\.wireValue),
+            preferences: preferences.wireValue,
+            resourceUsage: resourceUsage.wireValue
+        )
+    }
+}
+
+private extension EngineLibraryItem {
+    var wireValue: AgentLibraryItem {
+        .init(
+            id: id,
+            name: name,
+            createdAt: createdAt,
+            duration: duration,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            masterURL: masterURL,
+            previewURL: previewURL,
+            posterURL: posterURL,
+            contentDigest: contentDigest,
+            isFavorite: isFavorite
+        )
+    }
+}
+
+private extension EngineDisplay {
+    var wireValue: AgentDisplay {
+        .init(
+            id: id,
+            name: name,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            isMain: isMain,
+            assignedItemID: assignedItemID,
+            isOnline: isOnline
+        )
+    }
+}
+
+private extension EngineImportJob {
+    var wireValue: AgentImportJob {
+        .init(
+            id: id,
+            fileName: fileName,
+            phase: .init(rawValue: phase.rawValue) ?? .failed,
+            progress: progress,
+            detail: detail,
+            createdAt: createdAt
+        )
+    }
+}
+
+private extension EnginePreferences {
+    var wireValue: AgentPreferences {
+        .init(
+            launchAtLogin: launchAtLogin,
+            pauseOnBattery: pauseOnBattery,
+            pauseWhenOccluded: pauseWhenOccluded,
+            scaling: .init(rawValue: scaling.rawValue) ?? .fill,
+            muted: muted
+        )
+    }
+}
+
+private extension AgentPreferences {
+    var engineValue: EnginePreferences {
+        .init(
+            launchAtLogin: launchAtLogin,
+            pauseOnBattery: pauseOnBattery,
+            pauseWhenOccluded: pauseWhenOccluded,
+            scaling: .init(rawValue: scaling.rawValue) ?? .fill,
+            muted: muted
+        )
+    }
+}
+
+private extension EngineResourceUsage {
+    var wireValue: AgentResourceUsage {
+        .init(
+            activePlayers: activePlayers,
+            residentMemoryBytes: residentMemoryBytes,
+            isLowPowerModeEnabled: isLowPowerModeEnabled,
+            thermalState: thermalState
+        )
+    }
+}

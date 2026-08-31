@@ -37,6 +37,11 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: Sources/WALIApp
+      - path: Config/LaunchAgents
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
     info:
       path: Config/Generated/WALI-Info.plist
       properties:
@@ -45,6 +50,8 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSApplicationCategoryType: public.app-category.lifestyle
         NSHighResolutionCapable: true
+        WALIControlServiceName: "$(WALI_AGENT_CONTROL_SERVICE_NAME)"
+        WALIAgentLaunchAgentPlistName: "$(WALI_AGENT_BUNDLE_IDENTIFIER).plist"
     settings:
       base:
         GENERATE_INFOPLIST_FILE: NO
@@ -100,6 +107,7 @@ targets:
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSUIElement: true
         NSHighResolutionCapable: true
+        WALIControlServiceName: "$(WALI_AGENT_CONTROL_SERVICE_NAME)"
     settings:
       base:
         GENERATE_INFOPLIST_FILE: NO
@@ -291,4 +299,3 @@ schemes:
       config: Release
     management:
       shared: true
-
