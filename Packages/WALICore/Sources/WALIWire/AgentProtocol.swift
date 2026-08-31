@@ -38,8 +38,11 @@ public enum AgentCommand: Codable, Sendable, Hashable {
     case cancelImport(jobID: UUID)
     case apply(itemID: UUID, displayIDs: [String])
     case setPlaybackPaused(Bool)
+    case nextWallpaper
+    case stopWallpaper
     case renameItem(itemID: UUID, name: String)
     case removeItem(itemID: UUID)
+    case restoreItem(itemID: UUID)
     case setPreferences(AgentPreferences)
     case revealItem(itemID: UUID)
     case openForegroundApp
@@ -249,23 +252,44 @@ public struct AgentPreferences: Codable, Sendable, Hashable {
         case fit
     }
 
+    public enum Quality: String, Codable, Sendable, Hashable {
+        case automatic
+        case efficiency
+        case quality
+    }
+
+    public enum LowPowerBehavior: String, Codable, Sendable, Hashable {
+        case pause
+        case reduceQuality
+        case continuePlaying
+    }
+
     public let launchAtLogin: Bool
+    public let startPaused: Bool
     public let pauseOnBattery: Bool
     public let pauseWhenOccluded: Bool
     public let scaling: Scaling
+    public let quality: Quality
+    public let lowPowerBehavior: LowPowerBehavior
     public let muted: Bool
 
     public init(
         launchAtLogin: Bool = false,
+        startPaused: Bool = false,
         pauseOnBattery: Bool = false,
         pauseWhenOccluded: Bool = true,
         scaling: Scaling = .fill,
+        quality: Quality = .automatic,
+        lowPowerBehavior: LowPowerBehavior = .pause,
         muted: Bool = true
     ) {
         self.launchAtLogin = launchAtLogin
+        self.startPaused = startPaused
         self.pauseOnBattery = pauseOnBattery
         self.pauseWhenOccluded = pauseWhenOccluded
         self.scaling = scaling
+        self.quality = quality
+        self.lowPowerBehavior = lowPowerBehavior
         self.muted = muted
     }
 }
@@ -275,16 +299,22 @@ public struct AgentResourceUsage: Codable, Sendable, Hashable {
     public let residentMemoryBytes: UInt64
     public let isLowPowerModeEnabled: Bool
     public let thermalState: String
+    public let storageUsedBytes: UInt64
+    public let storageLimitBytes: UInt64?
 
     public init(
         activePlayers: Int = 0,
         residentMemoryBytes: UInt64 = 0,
         isLowPowerModeEnabled: Bool = false,
-        thermalState: String = "nominal"
+        thermalState: String = "nominal",
+        storageUsedBytes: UInt64 = 0,
+        storageLimitBytes: UInt64? = nil
     ) {
         self.activePlayers = max(0, activePlayers)
         self.residentMemoryBytes = residentMemoryBytes
         self.isLowPowerModeEnabled = isLowPowerModeEnabled
         self.thermalState = thermalState
+        self.storageUsedBytes = storageUsedBytes
+        self.storageLimitBytes = storageLimitBytes
     }
 }

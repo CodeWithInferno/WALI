@@ -44,11 +44,20 @@ public actor AgentCommandRouter {
             case let .setPlaybackPaused(isPaused):
                 return try await mutate(request, action: .setPaused(isPaused))
 
+            case .nextWallpaper:
+                return try await mutate(request, action: .nextWallpaper)
+
+            case .stopWallpaper:
+                return try await mutate(request, action: .stopWallpaper)
+
             case let .renameItem(itemID, name):
                 return try await mutate(request, action: .rename(itemID: itemID, name: name))
 
             case let .removeItem(itemID):
                 return try await mutate(request, action: .remove(itemID: itemID))
+
+            case let .restoreItem(itemID):
+                return try await mutate(request, action: .restore(itemID: itemID))
 
             case let .setPreferences(preferences):
                 return try await mutate(
@@ -228,9 +237,12 @@ private extension EnginePreferences {
     var wireValue: AgentPreferences {
         .init(
             launchAtLogin: launchAtLogin,
+            startPaused: startPaused,
             pauseOnBattery: pauseOnBattery,
             pauseWhenOccluded: pauseWhenOccluded,
             scaling: .init(rawValue: scaling.rawValue) ?? .fill,
+            quality: .init(rawValue: quality.rawValue) ?? .automatic,
+            lowPowerBehavior: .init(rawValue: lowPowerBehavior.rawValue) ?? .pause,
             muted: muted
         )
     }
@@ -240,9 +252,12 @@ private extension AgentPreferences {
     var engineValue: EnginePreferences {
         .init(
             launchAtLogin: launchAtLogin,
+            startPaused: startPaused,
             pauseOnBattery: pauseOnBattery,
             pauseWhenOccluded: pauseWhenOccluded,
             scaling: .init(rawValue: scaling.rawValue) ?? .fill,
+            quality: .init(rawValue: quality.rawValue) ?? .automatic,
+            lowPowerBehavior: .init(rawValue: lowPowerBehavior.rawValue) ?? .pause,
             muted: muted
         )
     }
@@ -254,7 +269,9 @@ private extension EngineResourceUsage {
             activePlayers: activePlayers,
             residentMemoryBytes: residentMemoryBytes,
             isLowPowerModeEnabled: isLowPowerModeEnabled,
-            thermalState: thermalState
+            thermalState: thermalState,
+            storageUsedBytes: storageUsedBytes,
+            storageLimitBytes: storageLimitBytes
         )
     }
 }

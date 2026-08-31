@@ -6,6 +6,7 @@ public struct EngineSnapshot: Codable, Sendable, Hashable {
     public var revision: EngineRevision
     public var isPausedByUser: Bool
     public var items: [EngineLibraryItem]
+    public var trashedItems: [EngineLibraryItem]
     public var displays: [EngineDisplay]
     public var imports: [EngineImportJob]
     public var preferences: EnginePreferences
@@ -15,6 +16,7 @@ public struct EngineSnapshot: Codable, Sendable, Hashable {
         revision: EngineRevision = .init(rawValue: 0),
         isPausedByUser: Bool = false,
         items: [EngineLibraryItem] = [],
+        trashedItems: [EngineLibraryItem] = [],
         displays: [EngineDisplay] = [],
         imports: [EngineImportJob] = [],
         preferences: EnginePreferences = .init(),
@@ -23,6 +25,7 @@ public struct EngineSnapshot: Codable, Sendable, Hashable {
         self.revision = revision
         self.isPausedByUser = isPausedByUser
         self.items = items
+        self.trashedItems = trashedItems
         self.displays = displays
         self.imports = imports
         self.preferences = preferences
@@ -140,23 +143,44 @@ public struct EnginePreferences: Codable, Sendable, Hashable {
         case fit
     }
 
+    public enum Quality: String, Codable, Sendable, Hashable {
+        case automatic
+        case efficiency
+        case quality
+    }
+
+    public enum LowPowerBehavior: String, Codable, Sendable, Hashable {
+        case pause
+        case reduceQuality
+        case continuePlaying
+    }
+
     public var launchAtLogin: Bool
+    public var startPaused: Bool
     public var pauseOnBattery: Bool
     public var pauseWhenOccluded: Bool
     public var scaling: Scaling
+    public var quality: Quality
+    public var lowPowerBehavior: LowPowerBehavior
     public var muted: Bool
 
     public init(
         launchAtLogin: Bool = false,
+        startPaused: Bool = false,
         pauseOnBattery: Bool = false,
         pauseWhenOccluded: Bool = true,
         scaling: Scaling = .fill,
+        quality: Quality = .automatic,
+        lowPowerBehavior: LowPowerBehavior = .pause,
         muted: Bool = true
     ) {
         self.launchAtLogin = launchAtLogin
+        self.startPaused = startPaused
         self.pauseOnBattery = pauseOnBattery
         self.pauseWhenOccluded = pauseWhenOccluded
         self.scaling = scaling
+        self.quality = quality
+        self.lowPowerBehavior = lowPowerBehavior
         self.muted = muted
     }
 }
@@ -166,16 +190,22 @@ public struct EngineResourceUsage: Codable, Sendable, Hashable {
     public var residentMemoryBytes: UInt64
     public var isLowPowerModeEnabled: Bool
     public var thermalState: String
+    public var storageUsedBytes: UInt64
+    public var storageLimitBytes: UInt64?
 
     public init(
         activePlayers: Int = 0,
         residentMemoryBytes: UInt64 = 0,
         isLowPowerModeEnabled: Bool = false,
-        thermalState: String = "nominal"
+        thermalState: String = "nominal",
+        storageUsedBytes: UInt64 = 0,
+        storageLimitBytes: UInt64? = nil
     ) {
         self.activePlayers = max(0, activePlayers)
         self.residentMemoryBytes = residentMemoryBytes
         self.isLowPowerModeEnabled = isLowPowerModeEnabled
         self.thermalState = thermalState
+        self.storageUsedBytes = storageUsedBytes
+        self.storageLimitBytes = storageLimitBytes
     }
 }

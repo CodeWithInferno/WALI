@@ -9,8 +9,12 @@ public enum EngineAction: Sendable {
     case replaceDisplays([EngineDisplay])
     case apply(itemID: UUID, displayIDs: [String])
     case setPaused(Bool)
+    case nextWallpaper
+    case stopWallpaper
     case rename(itemID: UUID, name: String)
     case remove(itemID: UUID)
+    case restore(itemID: UUID)
+    case purgeTrashed(itemID: UUID)
     case setPreferences(EnginePreferences)
     case setResourceUsage(EngineResourceUsage)
 }
@@ -22,6 +26,7 @@ public enum EngineEffect: Sendable, Hashable {
     case stopRendering(itemID: UUID)
     case setPlaybackPaused(Bool)
     case removeArtifacts(itemID: UUID)
+    case scheduleTrashPurge(itemID: UUID)
     case updateLaunchAtLogin(Bool)
     case persist
 }
@@ -160,6 +165,26 @@ public actor RuntimeEngine {
             state.isPausedByUser = isPaused
             return [.setPlaybackPaused(isPaused)]
 
+        case .nextWallpaper:
+            guard !state.items.isEmpty else { return [] }
+            let displayIDs = state.displays.filter(\.isOnline).map(\.id)
+            let activeItemID = state.displays.compactMap(\.assignedItemID).first
+            let currentIndex = activeItemID.flatMap { id in state.items.firstIndex(where: { $0.id == id }) }
+            let nextIndex = currentIndex.map { state.items.index(after: $0) } ?? state.items.startIndex
+            let wrappedIndex = nextIndex == state.items.endIndex ? state.items.startIndex : nextIndex
+            let item = state.items[wrappedIndex]
+            for index in state.displays.indices where state.displays[index].isOnline {
+                state.displays[index].assignedItemID = item.id
+            }
+            return [.render(item: item, displayIDs: displayIDs)]
+
+        case .stopWallpaper:
+            let assignedIDs = Set(state.displays.compactMap(\.assignedItemID))
+            for index in state.displays.indices {
+                state.displays[index].assignedItemID = nil
+            }
+            return assignedIDs.map { .stopRendering(itemID: $0) }
+
         case let .rename(itemID, proposedName):
             let name = proposedName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty, name.count <= 120 else { throw EngineError.invalidName }
@@ -170,14 +195,30 @@ public actor RuntimeEngine {
             return []
 
         case let .remove(itemID):
-            guard state.items.contains(where: { $0.id == itemID }) else {
+            guard let item = state.items.first(where: { $0.id == itemID }) else {
                 throw EngineError.itemNotFound(itemID)
             }
             state.items.removeAll { $0.id == itemID }
+            state.trashedItems.removeAll { $0.id == itemID }
+            state.trashedItems.append(item)
             for index in state.displays.indices where state.displays[index].assignedItemID == itemID {
                 state.displays[index].assignedItemID = nil
             }
-            return [.stopRendering(itemID: itemID), .removeArtifacts(itemID: itemID)]
+            return [.stopRendering(itemID: itemID), .scheduleTrashPurge(itemID: itemID)]
+
+        case let .restore(itemID):
+            guard let item = state.trashedItems.first(where: { $0.id == itemID }) else {
+                throw EngineError.itemNotFound(itemID)
+            }
+            state.trashedItems.removeAll { $0.id == itemID }
+            state.items.append(item)
+            state.items.sort { $0.createdAt > $1.createdAt }
+            return []
+
+        case let .purgeTrashed(itemID):
+            guard state.trashedItems.contains(where: { $0.id == itemID }) else { return [] }
+            state.trashedItems.removeAll { $0.id == itemID }
+            return [.removeArtifacts(itemID: itemID)]
 
         case let .setPreferences(preferences):
             let launchAtLoginChanged = state.preferences.launchAtLogin != preferences.launchAtLogin
