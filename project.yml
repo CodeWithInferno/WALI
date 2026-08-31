@@ -108,6 +108,7 @@ targets:
         LSUIElement: true
         NSHighResolutionCapable: true
         WALIControlServiceName: "$(WALI_AGENT_CONTROL_SERVICE_NAME)"
+        WALITranscoderServiceName: "$(WALI_TRANSCODER_BUNDLE_IDENTIFIER)"
     settings:
       base:
         GENERATE_INFOPLIST_FILE: NO
@@ -163,6 +164,7 @@ targets:
         CFBundleDisplayName: WALI Transcoder
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        WALIExpectedClientBundleIdentifier: "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
         XPCService:
           ServiceType: Application
     settings:

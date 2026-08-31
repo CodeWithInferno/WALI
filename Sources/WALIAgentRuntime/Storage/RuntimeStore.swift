@@ -267,7 +267,8 @@ public actor RuntimeStore {
             throw StorageError.missingJob
         }
         if persisted.job.header.terminalOutcome == .cancelled { return }
-        guard persisted.job.header.phase == .attemptActive else {
+        guard persisted.job.header.phase == .attemptActive ||
+                persisted.job.header.phase == .awaitingInstallation else {
             throw StorageError.jobNotInstallable
         }
         var attempts = persisted.job.attempts
@@ -295,6 +296,12 @@ public actor RuntimeStore {
             committedResult: nil
         )
         try replacePersistedJob(persisted, with: job)
+        let stagingURL = paths.staging.appendingPathComponent(
+            persisted.stagingDirectoryName,
+            isDirectory: true
+        )
+        try? FileManager.default.removeItem(at: stagingURL)
+        _ = try garbageCollect()
     }
 
     /// Persists intent and source authorization before worker dispatch.
@@ -562,10 +569,19 @@ public actor RuntimeStore {
         state = current
         let referenced = Set(current.library.flatMap { $0.artifacts.map(\.digest.value) })
         let leased = Set(current.leases.map(\.digest.value))
+        // Publishing an artifact and committing its library record are separate
+        // durable steps. Keep every live install journal's verified object alive
+        // so an unrelated cancellation/GC cannot tear it out between those steps.
+        let installing = Set(current.installJournals.lazy
+            .filter { $0.phase != .committed && $0.phase != .cleaned }
+            .compactMap { $0.verifiedDigest?.value })
         var removed = 0
         for url in try objectFiles() {
             let digest = url.deletingPathExtension().lastPathComponent
-            guard !referenced.contains(digest), !leased.contains(digest) else { continue }
+            guard !referenced.contains(digest),
+                  !leased.contains(digest),
+                  !installing.contains(digest)
+            else { continue }
             try FileManager.default.removeItem(at: url)
             removed += 1
         }

@@ -77,19 +77,15 @@ public struct WALIAppRootView: View {
         .onAppear(perform: synchronizeSelection)
         .onChange(of: model.snapshot.displays) { _, _ in synchronizeDisplays() }
         .onChange(of: model.snapshot.wallpapers) { _, _ in synchronizeWallpaperSelection() }
+        .onChange(of: model.settingsPresentationRequest) { _, _ in showsSettings = true }
         .background(keyboardCommands)
         .accessibilityIdentifier("WALI.MainWindow")
     }
 
     private var sidebar: some View {
         List(selection: $route) {
-            Section {
-                sidebarRow(.discover)
-            }
-
             Section("My WALI") {
                 sidebarRow(.library)
-                sidebarRow(.playlists)
                 sidebarRow(.downloads, badge: activeTransferCount)
             }
 
@@ -122,8 +118,6 @@ public struct WALIAppRootView: View {
     @ViewBuilder
     private var content: some View {
         switch route {
-        case .discover:
-            DiscoverUnavailableView()
         case .library:
             LibrarySurface(
                 wallpapers: filteredWallpapers,
@@ -136,8 +130,6 @@ public struct WALIAppRootView: View {
                 onReveal: { actions.send(.revealWallpaper(itemID: $0.id)) },
                 onDrop: importVideos
             )
-        case .playlists:
-            PlaylistsSurface()
         case .downloads:
             DownloadsSurface(transfers: model.snapshot.transfers) { transferID in
                 actions.send(.cancelTransfer(id: transferID))
@@ -346,17 +338,13 @@ public struct WALIAppRootView: View {
 }
 
 private enum AppRoute: String, CaseIterable, Hashable {
-    case discover
     case library
-    case playlists
     case downloads
     case create
 
     var title: String {
         switch self {
-        case .discover: "Discover"
         case .library: "Library"
-        case .playlists: "Playlists"
         case .downloads: "Downloads"
         case .create: "Create"
         }
@@ -364,9 +352,7 @@ private enum AppRoute: String, CaseIterable, Hashable {
 
     var symbolName: String {
         switch self {
-        case .discover: "sparkles.rectangle.stack"
         case .library: "square.grid.2x2"
-        case .playlists: "rectangle.stack"
         case .downloads: "arrow.down.circle"
         case .create: "wand.and.stars"
         }
@@ -374,9 +360,7 @@ private enum AppRoute: String, CaseIterable, Hashable {
 
     var detailHint: String {
         switch self {
-        case .discover: "A curated catalog can be added later. Local wallpapers always remain available."
         case .library: "Select a wallpaper to see details and display controls."
-        case .playlists: "Build a playlist from wallpapers in your library."
         case .downloads: "Import and conversion progress appears here."
         case .create: "Import a video to create a wallpaper."
         }

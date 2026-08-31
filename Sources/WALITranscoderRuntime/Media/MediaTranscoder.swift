@@ -6,6 +6,27 @@ import UniformTypeIdentifiers
 import VideoToolbox
 import WALIModel
 
+public enum MediaPipelinePhase: String, Codable, Sendable, Hashable {
+    case inspecting
+    case hashingSource = "hashing_source"
+    case transcodingMaster = "transcoding_master"
+    case transcodingPreview = "transcoding_preview"
+    case generatingPoster = "generating_poster"
+    case verifyingOutputs = "verifying_outputs"
+    case complete
+}
+
+/// Monotonic progress within one pipeline phase.
+public struct MediaPipelineProgress: Codable, Sendable, Hashable {
+    public let phase: MediaPipelinePhase
+    public let fractionCompleted: Double
+
+    public init(phase: MediaPipelinePhase, fractionCompleted: Double) {
+        self.phase = phase
+        self.fractionCompleted = min(max(fractionCompleted, 0), 1)
+    }
+}
+
 /// Deterministic video-first conversion using Apple media frameworks.
 public struct MediaTranscoder: Sendable {
     private let inspector = MediaInspector()
@@ -14,13 +35,17 @@ public struct MediaTranscoder: Sendable {
 
     public func transcode(
         _ request: MediaTranscodeRequest,
-        progress: @escaping @Sendable (MediaPipelineProgress) -> Void = { _ in }
+        progress: @escaping @Sendable (MediaPipelineProgress) -> () = { _ in }
     ) async throws -> MediaTranscodeResult {
         try Task.checkCancellation()
         progress(.init(phase: .inspecting, fractionCompleted: 0))
         let sourceInspection = try await inspector.inspectVideo(
             at: request.sourceURL,
             byteLimit: request.sourceByteLimit
+        )
+        try requireAvailableStorage(
+            for: sourceInspection,
+            stagingDirectoryURL: request.stagingDirectoryURL
         )
         progress(.init(phase: .inspecting, fractionCompleted: 1))
 
@@ -81,6 +106,30 @@ public struct MediaTranscoder: Sendable {
         return result
     }
 
+    private func requireAvailableStorage(
+        for inspection: MediaInspection,
+        stagingDirectoryURL: URL
+    ) throws {
+        // Master and preview are capped at 40 and 3 Mbps. Staged output and
+        // the agent-owned verification copy coexist briefly during install.
+        let estimatedOutput = inspection.durationSeconds * 43_000_000 / 8
+        let workingSet = estimatedOutput * 2 + Double(512 * 1_024 * 1_024)
+        guard workingSet.isFinite, workingSet > 0, workingSet < Double(UInt64.max) else {
+            throw MediaPipelineError.insufficientStorage(requiredBytes: .max, availableBytes: 0)
+        }
+        let required = UInt64(workingSet.rounded(.up))
+        let values = try stagingDirectoryURL.resourceValues(
+            forKeys: [.volumeAvailableCapacityForImportantUsageKey]
+        )
+        let available = UInt64(max(0, values.volumeAvailableCapacityForImportantUsage ?? 0))
+        guard available >= required else {
+            throw MediaPipelineError.insufficientStorage(
+                requiredBytes: required,
+                availableBytes: available
+            )
+        }
+    }
+
     private func makeAttemptDirectory(for request: MediaTranscodeRequest) throws -> URL {
         let manager = FileManager.default
         do {
@@ -120,7 +169,7 @@ public struct MediaTranscoder: Sendable {
         outputURL: URL,
         preview: Bool,
         phase: MediaPipelinePhase,
-        progress: @escaping @Sendable (MediaPipelineProgress) -> Void
+        progress: @escaping @Sendable (MediaPipelineProgress) -> ()
     ) async throws {
         let sourceAsset = AVURLAsset(url: sourceURL)
         let duration = try await sourceAsset.load(.duration)

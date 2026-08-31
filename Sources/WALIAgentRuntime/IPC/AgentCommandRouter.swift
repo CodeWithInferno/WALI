@@ -6,10 +6,34 @@ import WALIWire
 
 public typealias EngineEffectHandler = @Sendable (EngineEffect, EngineSnapshot) async throws -> Void
 
+private actor TransactionGate {
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !isLocked {
+            isLocked = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            isLocked = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 /// Maps the versioned wire protocol onto the transport-neutral engine.
 public actor AgentCommandRouter {
     private let engine: RuntimeEngine
     private let effectHandler: EngineEffectHandler
+    private let transactionGate = TransactionGate()
 
     public init(
         restoring snapshot: EngineSnapshot = .init(),
@@ -90,7 +114,15 @@ public actor AgentCommandRouter {
                 return response(for: request, snapshot: await engine.snapshot())
 
             case .quit:
-                await MainActor.run { NSApplication.shared.terminate(nil) }
+                await MainActor.run {
+                    DistributedNotificationCenter.default().postNotificationName(
+                        Notification.Name("com.wali.quitAll"),
+                        object: nil,
+                        userInfo: nil,
+                        deliverImmediately: true
+                    )
+                    NSApplication.shared.terminate(nil)
+                }
                 return response(for: request, snapshot: await engine.snapshot())
             }
         } catch {
@@ -106,9 +138,36 @@ public actor AgentCommandRouter {
         _ action: EngineAction,
         idempotencyKey: UUID = UUID()
     ) async throws -> EngineSnapshot {
-        let transaction = try await engine.perform(action, idempotencyKey: idempotencyKey)
-        try await execute(transaction)
-        return transaction.snapshot
+        await transactionGate.acquire()
+        do {
+            let transaction = try await engine.perform(action, idempotencyKey: idempotencyKey)
+            try await execute(transaction)
+            await transactionGate.release()
+            return transaction.snapshot
+        } catch {
+            await transactionGate.release()
+            throw error
+        }
+    }
+
+    /// Applies an internal multi-step transition without allowing a user
+    /// command to interleave between its crash-consistent phases.
+    @discardableResult
+    public func performInternal(_ actions: [EngineAction]) async throws -> EngineSnapshot {
+        await transactionGate.acquire()
+        do {
+            var snapshot = await engine.snapshot()
+            for action in actions {
+                let transaction = try await engine.perform(action)
+                try await execute(transaction)
+                snapshot = transaction.snapshot
+            }
+            await transactionGate.release()
+            return snapshot
+        } catch {
+            await transactionGate.release()
+            throw error
+        }
     }
 
     public func snapshot() async -> EngineSnapshot {
@@ -116,13 +175,20 @@ public actor AgentCommandRouter {
     }
 
     private func mutate(_ request: AgentRequest, action: EngineAction) async throws -> AgentResponse {
-        let transaction = try await engine.perform(
-            action,
-            idempotencyKey: request.idempotencyKey,
-            expectedRevision: request.expectedRevision
-        )
-        try await execute(transaction)
-        return response(for: request, snapshot: transaction.snapshot)
+        await transactionGate.acquire()
+        do {
+            let transaction = try await engine.perform(
+                action,
+                idempotencyKey: request.idempotencyKey,
+                expectedRevision: request.expectedRevision
+            )
+            try await execute(transaction)
+            await transactionGate.release()
+            return response(for: request, snapshot: transaction.snapshot)
+        } catch {
+            await transactionGate.release()
+            throw error
+        }
     }
 
     private func execute(_ transaction: EngineTransaction) async throws {

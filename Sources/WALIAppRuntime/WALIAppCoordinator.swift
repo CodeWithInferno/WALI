@@ -14,6 +14,9 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     private var pollingTask: Task<Void, Never>?
     private var lastSnapshot: AgentSnapshot?
     private var quitObserver: (any NSObjectProtocol)?
+    private var settingsObserver: (any NSObjectProtocol)?
+    private var pendingActions: [WALIUIAction] = []
+    private var actionTask: Task<Void, Never>?
 
     public init(
         model: WALIAppModel = WALIAppModel(),
@@ -38,6 +41,18 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
                 }
             }
         }
+        if settingsObserver == nil {
+            settingsObserver = DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name("com.wali.openSettings"),
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    self?.model.settingsPresentationRequest &+= 1
+                }
+            }
+        }
         pollingTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -56,39 +71,82 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     public func stop() {
         pollingTask?.cancel()
         pollingTask = nil
+        actionTask?.cancel()
+        actionTask = nil
+        pendingActions.removeAll()
         if let quitObserver {
             DistributedNotificationCenter.default().removeObserver(quitObserver)
             self.quitObserver = nil
+        }
+        if let settingsObserver {
+            DistributedNotificationCenter.default().removeObserver(settingsObserver)
+            self.settingsObserver = nil
         }
         connection.invalidate()
     }
 
     public func send(_ action: WALIUIAction) {
-        Task { @MainActor [weak self] in
-            await self?.perform(action)
+        pendingActions.append(action)
+        guard actionTask == nil else { return }
+        actionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled, !pendingActions.isEmpty {
+                let next = pendingActions.removeFirst()
+                await perform(next)
+            }
+            actionTask = nil
         }
     }
 
     private func perform(_ action: WALIUIAction) async {
         do {
-            if case let .updatePreferences(preferences) = action {
-                try lifecycle.setMainApplicationLaunchAtLogin(preferences.launchAtLogin)
-            }
             guard let command = try command(for: action) else { return }
-            let expectedRevision: EngineRevision?
-            switch command {
-            case .snapshot, .handshake, .openForegroundApp, .revealItem, .quit:
-                expectedRevision = nil
-            default:
-                expectedRevision = lastSnapshot?.revision
-            }
-            let snapshot = try await connection.send(command, expectedRevision: expectedRevision)
+            let previousPreferences = lastSnapshot?.preferences
+            let snapshot = try await sendWithSingleStaleRetry(command)
             apply(snapshot, clearNotice: true)
+            if case let .updatePreferences(preferences) = action,
+               previousPreferences?.launchAtLogin != preferences.launchAtLogin {
+                do {
+                    try lifecycle.setMainApplicationLaunchAtLogin(preferences.launchAtLogin)
+                } catch {
+                    if let previousPreferences {
+                        let rollback = try await sendWithSingleStaleRetry(
+                            .setPreferences(previousPreferences)
+                        )
+                        apply(rollback)
+                    }
+                    throw error
+                }
+            }
         } catch {
             present(error: error)
-            if (error as? AgentFailure)?.code == .staleRevision {
-                await refresh()
+        }
+    }
+
+    private func sendWithSingleStaleRetry(_ command: AgentCommand) async throws -> AgentSnapshot {
+        let idempotencyKey = UUID()
+        for attempt in 0...1 {
+            do {
+                return try await connection.send(
+                    command,
+                    expectedRevision: expectedRevision(for: command),
+                    idempotencyKey: idempotencyKey
+                )
+            } catch let failure as AgentFailure
+                where failure.code == .staleRevision && attempt == 0 {
+                let refreshed = try await connection.send(.snapshot)
+                apply(refreshed)
             }
+        }
+        throw AgentConnectionError.unavailable
+    }
+
+    private func expectedRevision(for command: AgentCommand) -> EngineRevision? {
+        switch command {
+        case .snapshot, .handshake, .openForegroundApp, .revealItem, .quit:
+            nil
+        default:
+            lastSnapshot?.revision
         }
     }
 
@@ -136,6 +194,7 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
             return nil
         case .openSettings:
             NSApplication.shared.activate(ignoringOtherApps: true)
+            model.settingsPresentationRequest &+= 1
             return nil
         case .quit:
             return .quit
@@ -249,13 +308,20 @@ private extension AgentImportJob {
         return WALITransferPresentation(
             id: id,
             title: fileName,
-            detail: detail ?? phase.displayName,
+            detail: phase.isTerminal ? phase.displayName : (detail ?? phase.displayName),
             state: state
         )
     }
 }
 
 private extension AgentImportJob.Phase {
+    var isTerminal: Bool {
+        switch self {
+        case .complete, .cancelled: true
+        default: false
+        }
+    }
+
     var displayName: String {
         switch self {
         case .queued: "Waiting"

@@ -16,6 +16,7 @@ public enum EngineAction: Sendable {
     case remove(itemID: UUID)
     case restore(itemID: UUID)
     case purgeTrashed(itemID: UUID)
+    case finalizeTrashPurge(itemID: UUID)
     case setPreferences(EnginePreferences)
     case setResourceUsage(EngineResourceUsage)
 }
@@ -239,8 +240,11 @@ public actor RuntimeEngine {
 
         case let .purgeTrashed(itemID):
             guard state.trashedItems.contains(where: { $0.id == itemID }) else { return [] }
-            state.trashedItems.removeAll { $0.id == itemID }
             return [.removeArtifacts(itemID: itemID)]
+
+        case let .finalizeTrashPurge(itemID):
+            state.trashedItems.removeAll { $0.id == itemID }
+            return []
 
         case let .setPreferences(preferences):
             let launchAtLoginChanged = state.preferences.launchAtLogin != preferences.launchAtLogin

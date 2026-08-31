@@ -6,12 +6,19 @@ import WALIWire
 
 /// The agent-owned root view hosted by the LSUIElement composition root.
 public struct WALIAgentRootView: View {
-    /// Creates the agent root view.
-    public init() {}
+    private let status: WALIRendererPresentation
+    private let actions: any WALIUIActionHandling
 
-    /// The placeholder status surface for the foundation scaffold.
+    /// Creates the agent-owned status surface.
+    public init(
+        status: WALIRendererPresentation = .stopped,
+        actions: any WALIUIActionHandling = NoopWALIUIActionHandler()
+    ) {
+        self.status = status
+        self.actions = actions
+    }
+
     public var body: some View {
-        StatusPanel()
+        StatusPanel(status: status, actions: actions)
     }
 }
-

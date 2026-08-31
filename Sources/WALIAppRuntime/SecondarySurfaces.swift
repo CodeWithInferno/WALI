@@ -183,28 +183,6 @@ private struct TransferRow: View {
     }
 }
 
-struct DiscoverUnavailableView: View {
-    var body: some View {
-        ContentUnavailableView {
-            Label("Discover Is Offline", systemImage: "sparkles.rectangle.stack")
-        } description: {
-            Text("The public catalog is not part of this release. Everything already in your Library remains available offline.")
-        }
-        .accessibilityIdentifier("WALI.Discover")
-    }
-}
-
-struct PlaylistsSurface: View {
-    var body: some View {
-        ContentUnavailableView {
-            Label("No Playlists Yet", systemImage: "rectangle.stack")
-        } description: {
-            Text("Playlist rotation will arrive after the core wallpaper experience is complete.")
-        }
-        .accessibilityIdentifier("WALI.Playlists")
-    }
-}
-
 struct NoticeBanner: View {
     let kind: WALINoticeKind
     let title: String

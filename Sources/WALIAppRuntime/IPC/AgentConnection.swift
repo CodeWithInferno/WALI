@@ -18,11 +18,45 @@ public enum AgentConnectionError: LocalizedError {
     }
 }
 
+private final class AgentOneShotContinuation<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+
+    init(_ continuation: CheckedContinuation<Value, Error>) {
+        self.continuation = continuation
+    }
+
+    func resume(with result: Result<Value, Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
+    }
+}
+
+private final class AgentConnectionEndHandler: @unchecked Sendable {
+    private weak var owner: AgentConnection?
+    private let identifier: UUID
+
+    init(owner: AgentConnection, identifier: UUID) {
+        self.owner = owner
+        self.identifier = identifier
+    }
+
+    func notify() {
+        Task { @MainActor [weak owner] in
+            owner?.connectionEnded(identifier)
+        }
+    }
+}
+
 /// Reconnecting foreground transport for the local agent's single XPC method.
 @MainActor
 public final class AgentConnection {
     private let serviceName: String
     private var connection: NSXPCConnection?
+    private var connectionID: UUID?
 
     public init(serviceName: String = AgentServiceName.current) {
         self.serviceName = serviceName
@@ -56,30 +90,26 @@ public final class AgentConnection {
     public func invalidate() {
         connection?.invalidate()
         connection = nil
+        connectionID = nil
     }
 
     private func perform(_ request: Data) async throws -> Data {
         let connection = activeConnection()
         return try await withCheckedThrowingContinuation { continuation in
-            var resumed = false
-            let finish: (Result<Data, Error>) -> Void = { result in
-                guard !resumed else { return }
-                resumed = true
-                continuation.resume(with: result)
-            }
+            let oneShot = AgentOneShotContinuation<Data>(continuation)
             guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
-                finish(.failure(error))
+                oneShot.resume(with: .failure(error))
             }) as? WALIAgentXPCProtocol else {
-                finish(.failure(AgentConnectionError.invalidProxy))
+                oneShot.resume(with: .failure(AgentConnectionError.invalidProxy))
                 return
             }
             proxy.perform(request) { data, error in
                 if let error {
-                    finish(.failure(error))
+                    oneShot.resume(with: .failure(error))
                 } else if let data {
-                    finish(.success(data))
+                    oneShot.resume(with: .success(data))
                 } else {
-                    finish(.failure(AgentConnectionError.emptyResponse))
+                    oneShot.resume(with: .failure(AgentConnectionError.emptyResponse))
                 }
             }
         }
@@ -88,17 +118,22 @@ public final class AgentConnection {
     private func activeConnection() -> NSXPCConnection {
         if let connection { return connection }
 
+        let identifier = UUID()
         let newConnection = NSXPCConnection(machServiceName: serviceName)
+        let endHandler = AgentConnectionEndHandler(owner: self, identifier: identifier)
         newConnection.remoteObjectInterface = NSXPCInterface(with: WALIAgentXPCProtocol.self)
-        newConnection.interruptionHandler = { [weak self] in
-            Task { @MainActor in self?.connection = nil }
-        }
-        newConnection.invalidationHandler = { [weak self] in
-            Task { @MainActor in self?.connection = nil }
-        }
+        newConnection.interruptionHandler = { endHandler.notify() }
+        newConnection.invalidationHandler = { endHandler.notify() }
         newConnection.resume()
         connection = newConnection
+        connectionID = identifier
         return newConnection
+    }
+
+    fileprivate func connectionEnded(_ identifier: UUID) {
+        guard connectionID == identifier else { return }
+        connection = nil
+        connectionID = nil
     }
 }
 

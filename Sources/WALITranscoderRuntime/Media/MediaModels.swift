@@ -21,7 +21,7 @@ public enum MediaArtifactKind: String, Codable, Sendable, Hashable, CaseIterable
 
 /// A bounded, immutable media conversion request.
 public struct MediaTranscodeRequest: Codable, Sendable, Hashable {
-    public static let maximumSourceByteCount: UInt64 = 100 * 1_024 * 1_024 * 1_024
+    public static let maximumSourceByteCount: UInt64 = 20 * 1_024 * 1_024 * 1_024
 
     public let attempt: MediaAttemptID
     public let sourceURL: URL
@@ -130,27 +130,6 @@ public struct MediaTranscodeResult: Codable, Sendable, Hashable {
     }
 }
 
-public enum MediaPipelinePhase: String, Codable, Sendable, Hashable {
-    case inspecting
-    case hashingSource = "hashing_source"
-    case transcodingMaster = "transcoding_master"
-    case transcodingPreview = "transcoding_preview"
-    case generatingPoster = "generating_poster"
-    case verifyingOutputs = "verifying_outputs"
-    case complete
-}
-
-/// Monotonic progress within one pipeline phase.
-public struct MediaPipelineProgress: Codable, Sendable, Hashable {
-    public let phase: MediaPipelinePhase
-    public let fractionCompleted: Double
-
-    public init(phase: MediaPipelinePhase, fractionCompleted: Double) {
-        self.phase = phase
-        self.fractionCompleted = min(max(fractionCompleted, 0), 1)
-    }
-}
-
 public enum MediaPipelineError: Error, Sendable, Equatable {
     case invalidFileURL
     case sourceMissing
@@ -169,6 +148,7 @@ public enum MediaPipelineError: Error, Sendable, Equatable {
     case posterGenerationFailed(String)
     case outputVerificationFailed(MediaArtifactKind)
     case incompleteOutput
+    case insufficientStorage(requiredBytes: UInt64, availableBytes: UInt64)
 }
 
 extension MediaPipelineError: LocalizedError {
@@ -191,6 +171,8 @@ extension MediaPipelineError: LocalizedError {
         case let .posterGenerationFailed(message): "Poster generation failed: \(message)"
         case let .outputVerificationFailed(kind): "Generated \(kind.rawValue) verification failed."
         case .incompleteOutput: "The conversion did not produce every required artifact."
+        case let .insufficientStorage(requiredBytes, availableBytes):
+            "This import needs about \(requiredBytes.formatted(.byteCount(style: .file))) free, but only \(availableBytes.formatted(.byteCount(style: .file))) is available."
         }
     }
 }

@@ -49,6 +49,9 @@ public struct MediaTypeID: Codable, Sendable, Hashable {
     /// WALI's H.264 video media tag.
     public static let waliVideoH264 = MediaTypeID(unchecked: "wali.video.h264")
 
+    /// WALI's HEVC video media tag.
+    public static let waliVideoHEVC = MediaTypeID(unchecked: "wali.video.hevc")
+
     /// WALI's HEIC image media tag.
     public static let waliImageHEIC = MediaTypeID(unchecked: "wali.image.heic")
 

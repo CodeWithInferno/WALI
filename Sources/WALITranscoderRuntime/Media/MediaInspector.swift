@@ -5,7 +5,7 @@ import WALIModel
 
 /// Bounded AVFoundation inspection and streaming content identity.
 public struct MediaInspector: Sendable {
-    public static let maximumDurationSeconds: Double = 24 * 60 * 60
+    public static let maximumDurationSeconds: Double = 30 * 60
     public static let maximumDimension: Double = 16_384
     public static let maximumFrameRate: Double = 240
 

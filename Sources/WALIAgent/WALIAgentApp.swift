@@ -13,7 +13,10 @@ struct WALIAgentApp: App {
         WALIMenuBarScene(model: controller.model, actions: controller)
 
         Settings {
-            WALIAgentRootView()
+            WALIAgentRootView(
+                status: controller.model.snapshot.renderer,
+                actions: controller
+            )
         }
     }
 }

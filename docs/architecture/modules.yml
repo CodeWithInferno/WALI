@@ -211,6 +211,10 @@ modules:
     stability: stable_contract
     current_capabilities:
       - module_availability_marker
+      - bounded_versioned_agent_protocol
+      - bounded_agent_worker_protocol
+      - size_checked_wire_codecs
+      - xpc_protocol_interfaces
     target_responsibility: Bounded versioned transport-neutral DTOs and stable wire errors.
     current_target:
       build_system: swift_package
@@ -252,6 +256,10 @@ modules:
     stability: stable_interface
     current_capabilities:
       - module_availability_marker
+      - revisioned_idempotent_command_engine
+      - display_assignment_reconciliation
+      - durable_import_orchestration
+      - recoverable_soft_delete_policy
     target_responsibility: Transport-neutral use cases, durable jobs, revisions, and orchestration policy.
     current_target:
       build_system: swift_package
@@ -292,7 +300,10 @@ modules:
     owner_role: presentation_maintainer
     stability: stable_interface
     current_capabilities:
-      - placeholder_status_panel
+      - ui_facing_presentation_models
+      - ui_action_handling_contract
+      - reusable_status_panel
+      - accessible_status_presentation
     target_responsibility: Reusable native presentation with no persistence, XPC, or renderer ownership.
     current_target:
       build_system: xcode
@@ -322,7 +333,13 @@ modules:
     owner_role: foreground_runtime_maintainer
     stability: adapter
     current_capabilities:
-      - placeholder_root_view
+      - connected_native_application_shell
+      - native_library_create_and_download_surfaces
+      - adaptive_artwork_grid_and_detail
+      - settings_shortcuts_and_accessibility
+      - agent_xpc_client_and_lifecycle
+      - snapshot_presentation_and_actions
+      - import_picker_and_drag_drop
     target_responsibility: Foreground intentions, snapshot presentation, settings, and diagnostics UI adapters.
     current_target:
       build_system: xcode
@@ -353,7 +370,12 @@ modules:
     owner_role: agent_runtime_maintainer
     stability: adapter
     current_capabilities:
-      - placeholder_root_view
+      - engine_host_and_command_router
+      - authenticated_mach_service
+      - per_display_wallpaper_renderer
+      - crash_recoverable_content_store
+      - import_and_transcoder_orchestration
+      - native_menu_bar_scene
     target_responsibility: Host Engine, rendering, jobs, storage, and system-event adapters.
     current_target:
       build_system: xcode
@@ -383,7 +405,10 @@ modules:
     owner_role: media_worker_maintainer
     stability: adapter
     current_capabilities:
-      - permissive_process_scoped_listener_placeholder
+      - authenticated_agent_private_xpc_listener
+      - bounded_media_inspection
+      - hardware_hevc_transcoding
+      - heic_poster_generation
     target_responsibility: Execute bounded immutable media attempts and return untrusted claims.
     current_target:
       build_system: xcode
@@ -417,7 +442,7 @@ modules:
     owner_role: foreground_runtime_maintainer
     stability: adapter
     current_capabilities:
-      - placeholder_window_scene
+      - connected_native_window_scene
     target_responsibility: WALI.app composition root for foreground intentions and snapshots.
     current_target:
       build_system: xcode
@@ -444,7 +469,9 @@ modules:
     owner_role: agent_runtime_maintainer
     stability: adapter
     current_capabilities:
-      - placeholder_settings_scene
+      - long_lived_agent_composition
+      - native_menu_bar_scene
+      - settings_scene
     target_responsibility: WALIAgent.app composition root and long-lived per-user Engine host.
     current_target:
       build_system: xcode

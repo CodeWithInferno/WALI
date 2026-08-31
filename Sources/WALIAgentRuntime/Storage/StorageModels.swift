@@ -75,6 +75,7 @@ public struct StoredArtifact: Codable, Sendable, Hashable {
 public struct CommittedLibraryRecord: Codable, Sendable, Hashable {
     public let item: LibraryItem
     public let release: AssetRelease
+    public let sourceDigest: ContentDigest
     public let importedAt: Date
     public let sourceFileName: String
     public let artifacts: [StoredArtifact]
@@ -82,6 +83,7 @@ public struct CommittedLibraryRecord: Codable, Sendable, Hashable {
     public init(
         item: LibraryItem,
         release: AssetRelease,
+        sourceDigest: ContentDigest,
         importedAt: Date = Date(),
         sourceFileName: String,
         artifacts: [StoredArtifact]
@@ -97,6 +99,7 @@ public struct CommittedLibraryRecord: Codable, Sendable, Hashable {
         }
         self.item = item
         self.release = release
+        self.sourceDigest = sourceDigest
         self.importedAt = importedAt
         self.sourceFileName = sourceFileName
         self.artifacts = artifacts.sorted { $0.role.rawValue < $1.role.rawValue }

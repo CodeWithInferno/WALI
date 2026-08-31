@@ -74,10 +74,41 @@ private enum LocalClientValidator {
 
         let ownTeam = ownInfo[kSecCodeInfoTeamIdentifier as String] as? String
         let clientTeam = clientInfo[kSecCodeInfoTeamIdentifier as String] as? String
-        if let ownTeam, let clientTeam {
-            return ownTeam == clientTeam
+        if isAdHocDebugBuild, ownTeam == nil, clientTeam == nil {
+            return true
         }
-        return (Bundle.main.bundleIdentifier ?? "").contains(".debug.")
+        guard let ownTeam,
+              ownTeam == clientTeam,
+              let requirement = peerRequirement(identifier: expectedClientIdentifier, team: ownTeam)
+        else {
+            return false
+        }
+        return SecCodeCheckValidity(client, [], requirement) == errSecSuccess
+    }
+
+    private static var isAdHocDebugBuild: Bool {
+        (Bundle.main.bundleIdentifier ?? "").contains(".debug.")
+    }
+
+    private static func peerRequirement(identifier: String, team: String) -> SecRequirement? {
+        let validIdentifier = identifier.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-")).contains($0)
+        }
+        let validTeam = !team.isEmpty && team.unicodeScalars.allSatisfy {
+            CharacterSet.alphanumerics.contains($0)
+        }
+        guard validIdentifier, validTeam else { return nil }
+        let expression = "anchor apple generic and identifier \"\(identifier)\" "
+            + "and certificate leaf[subject.OU] = \"\(team)\""
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString(
+            expression as CFString,
+            [],
+            &requirement
+        ) == errSecSuccess else {
+            return nil
+        }
+        return requirement
     }
 
     private static var expectedClientIdentifier: String {

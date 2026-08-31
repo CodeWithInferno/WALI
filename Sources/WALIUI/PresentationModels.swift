@@ -41,9 +41,14 @@ public struct WALIUISnapshot: Equatable, Sendable {
 @Observable
 public final class WALIAppModel {
     public var snapshot: WALIUISnapshot
+    public var settingsPresentationRequest: UInt64
 
-    public init(snapshot: WALIUISnapshot = .empty) {
+    public init(
+        snapshot: WALIUISnapshot = .empty,
+        settingsPresentationRequest: UInt64 = 0
+    ) {
         self.snapshot = snapshot
+        self.settingsPresentationRequest = settingsPresentationRequest
     }
 }
 

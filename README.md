@@ -2,7 +2,11 @@
 
 WALI is an open-source, native macOS live-wallpaper system focused on efficient playback, honest resource use, automatic video preparation, and first-class Mac interaction.
 
-> **Status:** pre-alpha foundation. The repository currently contains architecture, design rules, and a buildable multi-process scaffold; it is not yet a usable wallpaper release.
+> **Status:** functional local pre-release. The native library, per-display
+> renderer, background Engine host, local XPC boundaries, durable storage, and
+> video import/transcode path are implemented. Distribution is still gated on
+> real-team signing, notarization, and physical-hardware endurance and Spaces
+> verification; this is not yet a supported public release.
 
 ## Product direction
 
@@ -19,36 +23,30 @@ WALI cannot and will not bypass FileVault preboot, SIP, protected login UI, or a
 
 ## Architecture
 
-Current scaffold:
+Current implementation:
 
 ```text
-WALI.app              placeholder window; embeds WALIAgent.app
-WALIAgent.app         placeholder scene; embeds WALITranscoder.xpc
-WALITranscoder.xpc    permissive process-scoped listener placeholder
+WALI.app              native library, create/download surfaces, settings, and XPC client
+WALIAgent.app         Engine, renderer, menu-bar, persistence, and import authority
+WALITranscoder.xpc    agent-private HEVC/HEIC media worker with a bounded XPC contract
 WALIModel             immutable records and pure playback/import-job reducers
-WALIWire              package-scoped marker depending only on WALIModel
-WALIEngine            package-scoped marker depending only on WALIModel
-WALIUI                status-view placeholder
+WALIWire              bounded versioned app/agent and agent/worker DTOs and codecs
+WALIEngine            revisioned, idempotent use cases and orchestration policy
+WALIUI                reusable native presentation models and status panel
 ```
 
-Target before product behavior:
+The foreground process sends intentions and presents snapshots; the agent owns
+mutable runtime state, display reconciliation, playback, import jobs, and local
+storage. Imported videos are inspected and converted to silent HEVC playback
+variants plus an HEIC poster by the embedded worker, then independently
+verified and published into the agent's content-addressed store. The checked-in
+renderer uses native AppKit wallpaper windows and AVFoundation playback and
+reacts to display and system-power changes.
 
-```text
-WALI.app                  foreground intentions and snapshot presentation
-WALIAgent.app             Engine host and sole runtime/persistence authority
-WALITranscoder.xpc        agent-private bounded media worker
-WALIModel                 immutable values and policies
-WALIWire                  bounded/versioned DTOs
-WALIEngine                use cases, jobs, and orchestration
-WALIUI                    reusable native presentation
-```
-
-No Engine orchestration, app↔agent IPC, renderer, durable persistence,
-filesystem behavior, or storage is implemented. WALIModel implements Task 4
-values and package-scoped reducers; WALIWire and WALIEngine remain linkage
-markers only. `WALICore` remains the local package reference/path, not an
-imported module or product.
-`ARCHITECTURE.md` distinguishes current and target graphs.
+Compatibility surfaces remain conservative: an implementation is not recorded
+as a versioned compatibility guarantee until its required fixtures pass.
+`WALICore` remains the local package reference/path, not an imported module or
+product. `ARCHITECTURE.md` defines the ownership and dependency graph.
 
 Start with:
 
@@ -93,6 +91,21 @@ Development uses `com.wali.development.*`, automatic Apple Development signing,
 and `group.com.wali.development.shared`; the supplied team must be authorized
 for those identifiers. Release retains `com.wali.*` and
 `group.com.wali.shared`.
+
+### Remaining release gates
+
+- Exercise the embedded login item and both authenticated XPC boundaries with
+  real Apple Development and Developer ID team identities, including upgrade,
+  relaunch, and reconnect behavior.
+- Archive, notarize, staple, install, and pass Gatekeeper validation using the
+  actual distribution credentials and production identifiers.
+- Complete physical-hardware endurance runs for sustained playback and imports,
+  sleep/wake and lock/unlock, low-power and thermal states, display hot-plug and
+  scale changes, and multiple Spaces/full-screen configurations.
+
+Credential-free Debug and Release builds prove the project graph and bundle
+shape only. They do not prove the external signing lifecycle, notarization, or
+real display/window-server behavior above.
 
 ## Principles
 
