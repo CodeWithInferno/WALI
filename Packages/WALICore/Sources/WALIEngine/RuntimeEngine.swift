@@ -71,7 +71,7 @@ public actor RuntimeEngine {
         expectedRevision: EngineRevision? = nil
     ) throws -> EngineTransaction {
         if let prior = completedTransactions[idempotencyKey] {
-            return prior
+            return EngineTransaction(snapshot: prior.snapshot, effects: [])
         }
 
         if let expectedRevision, expectedRevision.rawValue != state.revision.rawValue {

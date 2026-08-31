@@ -28,7 +28,7 @@ final class WallpaperWindow: NSWindow {
         isReleasedWhenClosed = false
         animationBehavior = .none
         level = NSWindow.Level(
-            rawValue: Int(CGWindowLevelForKey(.desktopWindow)) - 1
+            rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) - 1
         )
         collectionBehavior = [
             .canJoinAllSpaces,

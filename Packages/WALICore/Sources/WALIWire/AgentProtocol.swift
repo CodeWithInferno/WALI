@@ -95,6 +95,10 @@ public struct AgentFailure: Codable, Sendable, Hashable, Error {
     }
 }
 
+extension AgentFailure: LocalizedError {
+    public var errorDescription: String? { message }
+}
+
 /// The complete UI-facing state at one monotonic engine revision.
 public struct AgentSnapshot: Codable, Sendable, Hashable {
     public let revision: EngineRevision
@@ -153,6 +157,7 @@ public struct AgentLibraryItem: Codable, Sendable, Hashable, Identifiable {
     public let previewURL: URL
     public let posterURL: URL
     public let contentDigest: String
+    public let byteCount: UInt64
     public let isFavorite: Bool
 
     public init(
@@ -166,6 +171,7 @@ public struct AgentLibraryItem: Codable, Sendable, Hashable, Identifiable {
         previewURL: URL,
         posterURL: URL,
         contentDigest: String,
+        byteCount: UInt64 = 0,
         isFavorite: Bool = false
     ) {
         self.id = id
@@ -178,6 +184,7 @@ public struct AgentLibraryItem: Codable, Sendable, Hashable, Identifiable {
         self.previewURL = previewURL
         self.posterURL = posterURL
         self.contentDigest = contentDigest
+        self.byteCount = byteCount
         self.isFavorite = isFavorite
     }
 }
@@ -188,6 +195,7 @@ public struct AgentDisplay: Codable, Sendable, Hashable, Identifiable {
     public let pixelWidth: Int
     public let pixelHeight: Int
     public let isMain: Bool
+    public let isBuiltIn: Bool
     public let assignedItemID: UUID?
     public let isOnline: Bool
 
@@ -197,6 +205,7 @@ public struct AgentDisplay: Codable, Sendable, Hashable, Identifiable {
         pixelWidth: Int,
         pixelHeight: Int,
         isMain: Bool,
+        isBuiltIn: Bool = false,
         assignedItemID: UUID? = nil,
         isOnline: Bool = true
     ) {
@@ -205,6 +214,7 @@ public struct AgentDisplay: Codable, Sendable, Hashable, Identifiable {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.isMain = isMain
+        self.isBuiltIn = isBuiltIn
         self.assignedItemID = assignedItemID
         self.isOnline = isOnline
     }
@@ -296,6 +306,7 @@ public struct AgentPreferences: Codable, Sendable, Hashable {
 
 public struct AgentResourceUsage: Codable, Sendable, Hashable {
     public let activePlayers: Int
+    public let cpuPercent: Double
     public let residentMemoryBytes: UInt64
     public let isLowPowerModeEnabled: Bool
     public let thermalState: String
@@ -304,6 +315,7 @@ public struct AgentResourceUsage: Codable, Sendable, Hashable {
 
     public init(
         activePlayers: Int = 0,
+        cpuPercent: Double = 0,
         residentMemoryBytes: UInt64 = 0,
         isLowPowerModeEnabled: Bool = false,
         thermalState: String = "nominal",
@@ -311,6 +323,7 @@ public struct AgentResourceUsage: Codable, Sendable, Hashable {
         storageLimitBytes: UInt64? = nil
     ) {
         self.activePlayers = max(0, activePlayers)
+        self.cpuPercent = max(0, cpuPercent)
         self.residentMemoryBytes = residentMemoryBytes
         self.isLowPowerModeEnabled = isLowPowerModeEnabled
         self.thermalState = thermalState

@@ -201,6 +201,7 @@ private extension EngineLibraryItem {
             previewURL: previewURL,
             posterURL: posterURL,
             contentDigest: contentDigest,
+            byteCount: byteCount,
             isFavorite: isFavorite
         )
     }
@@ -214,6 +215,7 @@ private extension EngineDisplay {
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
             isMain: isMain,
+            isBuiltIn: isBuiltIn,
             assignedItemID: assignedItemID,
             isOnline: isOnline
         )
@@ -267,6 +269,7 @@ private extension EngineResourceUsage {
     var wireValue: AgentResourceUsage {
         .init(
             activePlayers: activePlayers,
+            cpuPercent: cpuPercent,
             residentMemoryBytes: residentMemoryBytes,
             isLowPowerModeEnabled: isLowPowerModeEnabled,
             thermalState: thermalState,

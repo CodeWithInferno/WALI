@@ -101,6 +101,7 @@ public final class SystemEventSource {
             distributedCenter.removeObserver(token)
         }
         distributedTokens.removeAll(keepingCapacity: false)
+        pauseReasons.removeAll(keepingCapacity: false)
     }
 
     private func observe(

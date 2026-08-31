@@ -5,9 +5,8 @@ import WALIAppRuntime
 struct WALIApp: App {
     var body: some Scene {
         WindowGroup("WALI") {
-            WALIAppRootView()
+            WALIConnectedAppRootView()
         }
-        .defaultSize(width: 720, height: 480)
+        .defaultSize(width: 1120, height: 720)
     }
 }
-

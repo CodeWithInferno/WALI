@@ -44,6 +44,7 @@ public struct EngineLibraryItem: Codable, Sendable, Hashable, Identifiable {
     public let previewURL: URL
     public let posterURL: URL
     public let contentDigest: String
+    public let byteCount: UInt64
     public var isFavorite: Bool
 
     public init(
@@ -57,6 +58,7 @@ public struct EngineLibraryItem: Codable, Sendable, Hashable, Identifiable {
         previewURL: URL,
         posterURL: URL,
         contentDigest: String,
+        byteCount: UInt64 = 0,
         isFavorite: Bool = false
     ) {
         self.id = id
@@ -69,6 +71,7 @@ public struct EngineLibraryItem: Codable, Sendable, Hashable, Identifiable {
         self.previewURL = previewURL
         self.posterURL = posterURL
         self.contentDigest = contentDigest
+        self.byteCount = byteCount
         self.isFavorite = isFavorite
     }
 }
@@ -79,6 +82,7 @@ public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
     public var pixelWidth: Int
     public var pixelHeight: Int
     public var isMain: Bool
+    public var isBuiltIn: Bool
     public var assignedItemID: UUID?
     public var isOnline: Bool
 
@@ -88,6 +92,7 @@ public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
         pixelWidth: Int,
         pixelHeight: Int,
         isMain: Bool,
+        isBuiltIn: Bool = false,
         assignedItemID: UUID? = nil,
         isOnline: Bool = true
     ) {
@@ -96,6 +101,7 @@ public struct EngineDisplay: Codable, Sendable, Hashable, Identifiable {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.isMain = isMain
+        self.isBuiltIn = isBuiltIn
         self.assignedItemID = assignedItemID
         self.isOnline = isOnline
     }
@@ -187,6 +193,7 @@ public struct EnginePreferences: Codable, Sendable, Hashable {
 
 public struct EngineResourceUsage: Codable, Sendable, Hashable {
     public var activePlayers: Int
+    public var cpuPercent: Double
     public var residentMemoryBytes: UInt64
     public var isLowPowerModeEnabled: Bool
     public var thermalState: String
@@ -195,6 +202,7 @@ public struct EngineResourceUsage: Codable, Sendable, Hashable {
 
     public init(
         activePlayers: Int = 0,
+        cpuPercent: Double = 0,
         residentMemoryBytes: UInt64 = 0,
         isLowPowerModeEnabled: Bool = false,
         thermalState: String = "nominal",
@@ -202,6 +210,7 @@ public struct EngineResourceUsage: Codable, Sendable, Hashable {
         storageLimitBytes: UInt64? = nil
     ) {
         self.activePlayers = max(0, activePlayers)
+        self.cpuPercent = max(0, cpuPercent)
         self.residentMemoryBytes = residentMemoryBytes
         self.isLowPowerModeEnabled = isLowPowerModeEnabled
         self.thermalState = thermalState
