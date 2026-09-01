@@ -82,6 +82,7 @@ int main(void) { return 0; }
 EOF
     xcrun clang \
         -mmacosx-version-min=15.0 \
+        -framework AVKit \
         "${fixture_root}/main.c" \
         -o "${app_path}/Contents/MacOS/WALI"
     cp \
@@ -369,6 +370,21 @@ expect_verifier_failure \
     Debug \
     "${debug_dylib}" \
     "internal module is dynamically linked"
+
+missing_avkit="$(new_fixture \
+    missing-avkit \
+    com.wali.debug.WALI \
+    com.wali.debug.WALIAgent \
+    com.wali.debug.WALITranscoder)"
+xcrun clang \
+    -mmacosx-version-min=15.0 \
+    "${TEMP_ROOT}/missing-avkit/main.c" \
+    -o "${missing_avkit}/Contents/MacOS/WALI"
+expect_verifier_failure \
+    "missing-avkit" \
+    Debug \
+    "${missing_avkit}" \
+    "WALI app runtime does not link AVKit.framework"
 
 main_xpc="$(new_fixture \
     main-xpc \

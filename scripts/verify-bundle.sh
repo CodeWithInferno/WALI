@@ -262,6 +262,25 @@ for bundle_path in "${bundle_paths[@]}"; do
         executables+=("${debug_dylib}")
     done
 done
+
+app_runtime_executables=("${APP_PATH}/Contents/MacOS/WALI")
+for debug_dylib in "${APP_PATH}/Contents/MacOS/"*.debug.dylib; do
+    [[ -e "${debug_dylib}" ]] || continue
+    app_runtime_executables+=("${debug_dylib}")
+done
+
+app_links_avkit=false
+for executable in "${app_runtime_executables[@]}"; do
+    linkage="$(/usr/bin/otool -L "${executable}")" ||
+        fail "otool could not inspect ${executable}"
+    if [[ "${linkage}" == *"/System/Library/Frameworks/AVKit.framework/"* ]]; then
+        app_links_avkit=true
+        break
+    fi
+done
+[[ "${app_links_avkit}" == true ]] ||
+    fail "WALI app runtime does not link AVKit.framework"
+
 internal_link_markers=(
     "WALIModel"
     "WALIWire"
@@ -299,4 +318,3 @@ else
 fi
 printf 'Verified %s WALI.app identities, nested topology, %s, versions, and static internal linkage\n' \
     "${CONFIGURATION}" "${signing_summary}"
-

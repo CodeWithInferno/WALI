@@ -65,6 +65,7 @@ targets:
           CODE_SIGN_ENTITLEMENTS: Config/WALI.entitlements
     dependencies:
       - target: WALIAppRuntime
+      - sdk: AVKit.framework
       - target: WALIAgent
         embed: true
         link: false
