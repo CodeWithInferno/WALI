@@ -105,6 +105,7 @@ public struct LockScreenContinuityResult: Sendable, Hashable {
 /// the user's live Apple wallpaper store.
 public actor LockScreenContinuityCoordinator {
     public typealias RefreshHandler = @Sendable () async -> ()
+    public typealias PermissionPreflight = @Sendable ([URL]) throws -> Void
 
     private static let maximumMasterBytes: UInt64 = 4 * 1_024 * 1_024 * 1_024
     private static let maximumPosterBytes: UInt64 = 128 * 1_024 * 1_024
@@ -117,17 +118,26 @@ public actor LockScreenContinuityCoordinator {
     private let ownedLibraryRoot: URL
     private let systemBuild: String
     private let refreshHandler: RefreshHandler
+    private let permissionPreflight: PermissionPreflight
+    private let permissionClock = ContinuousClock()
+    private var permissionPreflightValidUntil: ContinuousClock.Instant?
 
     public init(
         paths: LockScreenStorePaths,
         ownedLibraryRoot: URL,
         systemBuild: String = LockScreenCompatibilityEpoch.currentSystemBuild(),
-        refreshHandler: @escaping RefreshHandler = {}
+        refreshHandler: @escaping RefreshHandler = {},
+        permissionPreflight: PermissionPreflight? = nil
     ) {
         self.paths = paths
         self.ownedLibraryRoot = ownedLibraryRoot.standardizedFileURL
         self.systemBuild = systemBuild
         self.refreshHandler = refreshHandler
+        self.permissionPreflight = permissionPreflight ?? { directories in
+            for directory in directories {
+                try LockScreenFileIO.requireTransactionalWriteAccess(to: directory)
+            }
+        }
     }
 
     public static func live(
@@ -154,7 +164,11 @@ public actor LockScreenContinuityCoordinator {
         assignments: [LockScreenWallpaperAssignment]
     ) throws {
         if !enabled, !hasOwnedJournal { return }
-        _ = try makePreflightPlan(enabled: enabled, assignments: assignments)
+        _ = try makePreflightPlan(
+            enabled: enabled,
+            assignments: assignments,
+            forcePermissionPreflight: enabled
+        )
     }
 
     @discardableResult
@@ -282,15 +296,13 @@ public actor LockScreenContinuityCoordinator {
         )
     }
 
-    private func validateStore() throws {
+    private func validateStore(forcePermissionPreflight: Bool) throws {
         guard LockScreenCompatibilityEpoch.supportedSystemBuilds.contains(systemBuild) else {
             let verified = LockScreenCompatibilityEpoch.supportedSystemBuilds.sorted().joined(separator: ", ")
             throw LockScreenCompatibilityError.unsupportedSystem(
                 "Verified build: \(verified); current build: \(systemBuild)."
             )
         }
-        try LockScreenFileIO.requireDirectory(paths.videosDirectory)
-        try LockScreenFileIO.requireDirectory(paths.thumbnailsDirectory)
         let journalDirectory = paths.journalURL.deletingLastPathComponent()
         let assetJournalDirectory = paths.assetJournalURL.deletingLastPathComponent()
         guard Self.isContained(journalDirectory, in: ownedLibraryRoot),
@@ -300,19 +312,46 @@ public actor LockScreenContinuityCoordinator {
         guard journalDirectory.standardizedFileURL == assetJournalDirectory.standardizedFileURL else {
             throw LockScreenCompatibilityError.unsafePath("Rollback journals must share WALI’s metadata directory.")
         }
-        try AerialManifestEditor(manifestURL: paths.manifestURL).validate()
-        try WallpaperStoreEditor(indexURL: paths.indexURL, journalURL: paths.journalURL).validate()
+        do {
+            try LockScreenFileIO.requireDirectory(paths.videosDirectory)
+            try LockScreenFileIO.requireDirectory(paths.thumbnailsDirectory)
+            try AerialManifestEditor(manifestURL: paths.manifestURL).validate()
+            try WallpaperStoreEditor(indexURL: paths.indexURL, journalURL: paths.journalURL).validate()
+        } catch {
+            throw LockScreenFileIO.actionableTransactionalWriteError(error)
+        }
         try LockScreenFileIO.requireDirectory(journalDirectory)
         _ = try loadAssetJournal()
+        if !forcePermissionPreflight,
+           let validUntil = permissionPreflightValidUntil,
+           permissionClock.now < validUntil {
+            return
+        }
+        let writeDirectories = [
+            paths.videosDirectory,
+            paths.thumbnailsDirectory,
+            paths.manifestURL.deletingLastPathComponent(),
+            paths.indexURL.deletingLastPathComponent(),
+        ]
+        do {
+            try permissionPreflight(writeDirectories)
+        } catch {
+            throw LockScreenFileIO.actionableTransactionalWriteError(error)
+        }
+        // The manifest and Store directories are event-monitored. Cache only
+        // long enough for the probe's own coalesced event to avoid a feedback
+        // loop; explicit false-to-true validation always forces a fresh probe.
+        permissionPreflightValidUntil = permissionClock.now.advanced(by: .seconds(5))
     }
 
     /// Builds and validates the complete cross-file transaction before any
     /// Apple manifest, Index, asset file, or WALI journal is mutated.
     private func makePreflightPlan(
         enabled: Bool,
-        assignments: [LockScreenWallpaperAssignment]
+        assignments: [LockScreenWallpaperAssignment],
+        forcePermissionPreflight: Bool = false
     ) throws -> PreflightPlan {
-        try validateStore()
+        try validateStore(forcePermissionPreflight: forcePermissionPreflight)
         let eligible = enabled ? try eligibleAssignments(assignments) : []
         let grouped = Dictionary(grouping: eligible, by: \.itemID)
         guard grouped.count <= AerialManifestEditor.maximumOwnedAssets else {

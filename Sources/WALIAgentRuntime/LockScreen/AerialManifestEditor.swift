@@ -9,6 +9,7 @@ public enum LockScreenCompatibilityError: LocalizedError, Sendable {
     case ownershipConflict(String)
     case unsupportedSchema(String)
     case assetRejected(String)
+    case permissionDenied
 
     public var errorDescription: String? {
         switch self {
@@ -26,6 +27,8 @@ public enum LockScreenCompatibilityError: LocalizedError, Sendable {
             "This wallpaper-store format has not been verified. \(detail)"
         case let .assetRejected(detail):
             "The wallpaper could not be prepared for the Lock Screen. \(detail)"
+        case .permissionDenied:
+            "Lock Screen continuity needs Full Disk Access for WALI Agent. Open System Settings > Privacy & Security > Full Disk Access, enable WALI Agent, then try again."
         }
     }
 }
@@ -353,6 +356,47 @@ enum LockScreenFileIO {
         }
     }
 
+    /// Exercises the same sibling-file capability used by the transactional
+    /// writers. A successful probe is one byte and is removed before return.
+    static func requireTransactionalWriteAccess(to directory: URL) throws {
+        try requireDirectory(directory)
+        let probe = directory.appendingPathComponent(
+            ".wali-permission-probe-\(UUID().uuidString)",
+            isDirectory: false
+        )
+        let descriptor = Darwin.open(
+            probe.path,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            S_IRUSR | S_IWUSR
+        )
+        guard descriptor >= 0 else {
+            throw transactionalWriteError(errno)
+        }
+        var probeExists = true
+        defer {
+            _ = Darwin.close(descriptor)
+            if probeExists {
+                _ = Darwin.unlink(probe.path)
+            }
+        }
+
+        var byte: UInt8 = 0
+        let written = withUnsafeBytes(of: &byte) { buffer in
+            Darwin.write(descriptor, buffer.baseAddress, buffer.count)
+        }
+        guard written == 1 else {
+            throw transactionalWriteError(errno)
+        }
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw transactionalWriteError(errno)
+        }
+        guard Darwin.unlink(probe.path) == 0 else {
+            throw transactionalWriteError(errno)
+        }
+        probeExists = false
+        try syncDirectory(directory)
+    }
+
     static func atomicWrite(
         _ data: Data,
         to destination: URL,
@@ -506,5 +550,27 @@ enum LockScreenFileIO {
         guard descriptor >= 0 else { throw POSIXError(.EIO) }
         defer { Darwin.close(descriptor) }
         guard Darwin.fsync(descriptor) == 0 else { throw POSIXError(.EIO) }
+    }
+
+    private static func transactionalWriteError(_ code: Int32) -> Error {
+        if code == EACCES || code == EPERM {
+            return LockScreenCompatibilityError.permissionDenied
+        }
+        return POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+    }
+
+    static func actionableTransactionalWriteError(_ error: Error) -> Error {
+        if case LockScreenCompatibilityError.permissionDenied = error {
+            return error
+        }
+        let cocoaError = error as NSError
+        if cocoaError.domain == NSPOSIXErrorDomain,
+           [Int(EACCES), Int(EPERM)].contains(cocoaError.code) {
+            return LockScreenCompatibilityError.permissionDenied
+        }
+        if let underlying = cocoaError.userInfo[NSUnderlyingErrorKey] as? Error {
+            return actionableTransactionalWriteError(underlying)
+        }
+        return error
     }
 }

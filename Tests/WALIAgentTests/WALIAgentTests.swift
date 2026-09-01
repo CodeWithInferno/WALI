@@ -444,6 +444,142 @@ final class WALIAgentTests: XCTestCase {
         ).isEmpty)
     }
 
+    func testPermissionPreflightChecksEveryAppleWriteDirectoryWithoutResidue() async throws {
+        let destination: [(LockScreenStorePaths) -> URL] = [
+            { $0.videosDirectory },
+            { $0.thumbnailsDirectory },
+            { $0.manifestURL.deletingLastPathComponent() },
+            { $0.indexURL.deletingLastPathComponent() },
+        ]
+
+        for deniedIndex in destination.indices {
+            let fixture = try makeCoordinatorFixture(indexHasDisplay: true)
+            let appleDirectories = [
+                fixture.paths.videosDirectory,
+                fixture.paths.thumbnailsDirectory,
+                fixture.paths.manifestURL.deletingLastPathComponent(),
+                fixture.paths.indexURL.deletingLastPathComponent(),
+            ]
+            let contentsBefore = try appleDirectories.map {
+                try Set(FileManager.default.contentsOfDirectory(atPath: $0.path))
+            }
+            let manifestBefore = try Data(contentsOf: fixture.paths.manifestURL)
+            let indexBefore = try Data(contentsOf: fixture.paths.indexURL)
+            let coordinator = LockScreenContinuityCoordinator(
+                paths: fixture.paths,
+                ownedLibraryRoot: fixture.ownedRoot,
+                systemBuild: "25F80",
+                permissionPreflight: { directories in
+                    XCTAssertEqual(directories, appleDirectories)
+                    for (index, directory) in directories.enumerated() {
+                        if index == deniedIndex { throw POSIXError(.EACCES) }
+                        try LockScreenFileIO.requireTransactionalWriteAccess(to: directory)
+                    }
+                }
+            )
+
+            var caughtError: Error?
+            do {
+                try await coordinator.validate(
+                    enabled: true,
+                    assignments: [.init(
+                        displayID: "uuid:\(displayID.uuidString)",
+                        itemID: assetA,
+                        name: "Synthetic",
+                        masterURL: fixture.master,
+                        posterURL: fixture.poster
+                    )]
+                )
+            } catch {
+                caughtError = error
+            }
+            guard let caughtError else {
+                XCTFail("A denied Apple-store destination must reject opt-in preflight")
+                continue
+            }
+            XCTAssertTrue(caughtError.localizedDescription.contains("Full Disk Access"))
+            XCTAssertTrue(caughtError.localizedDescription.contains("WALI Agent"))
+            XCTAssertTrue(caughtError.localizedDescription.contains(
+                "System Settings > Privacy & Security > Full Disk Access"
+            ))
+            XCTAssertEqual(try Data(contentsOf: fixture.paths.manifestURL), manifestBefore)
+            XCTAssertEqual(try Data(contentsOf: fixture.paths.indexURL), indexBefore)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.journalURL.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.assetJournalURL.path))
+            for (directory, expectedContents) in zip(appleDirectories, contentsBefore) {
+                XCTAssertEqual(
+                    try Set(FileManager.default.contentsOfDirectory(atPath: directory.path)),
+                    expectedContents
+                )
+            }
+        }
+    }
+
+    func testPermissionErrorsMapToFullDiskAccessGuidance() {
+        let direct = LockScreenFileIO.actionableTransactionalWriteError(POSIXError(.EACCES))
+        XCTAssertTrue(direct.localizedDescription.contains("Full Disk Access"))
+        XCTAssertTrue(direct.localizedDescription.contains("WALI Agent"))
+
+        let nested = NSError(
+            domain: NSCocoaErrorDomain,
+            code: NSFileReadNoPermissionError,
+            userInfo: [NSUnderlyingErrorKey: POSIXError(.EPERM)]
+        )
+        let mappedNested = LockScreenFileIO.actionableTransactionalWriteError(nested)
+        XCTAssertTrue(mappedNested.localizedDescription.contains("Full Disk Access"))
+        XCTAssertTrue(mappedNested.localizedDescription.contains("WALI Agent"))
+
+        let unrelated = LockScreenCompatibilityError.malformedStore("Synthetic schema failure")
+        XCTAssertEqual(
+            LockScreenFileIO.actionableTransactionalWriteError(unrelated).localizedDescription,
+            unrelated.localizedDescription
+        )
+    }
+
+    func testPermissionDenialPreservesPreparedRecoveryJournalAndAppleStores() async throws {
+        let fixture = try makeCoordinatorFixture(indexHasDisplay: true)
+        let preparedJournal = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1,
+            "transactionID": UUID().uuidString,
+            "phase": "prepared",
+            "records": [[
+                "id": assetA.uuidString,
+                "mayRemove": true,
+            ]],
+            "refreshPending": true,
+        ], options: [.sortedKeys])
+        try preparedJournal.write(to: fixture.paths.assetJournalURL)
+        let manifestBefore = try Data(contentsOf: fixture.paths.manifestURL)
+        let indexBefore = try Data(contentsOf: fixture.paths.indexURL)
+        let coordinator = LockScreenContinuityCoordinator(
+            paths: fixture.paths,
+            ownedLibraryRoot: fixture.ownedRoot,
+            systemBuild: "25F80",
+            permissionPreflight: { _ in throw POSIXError(.EPERM) }
+        )
+
+        var caughtError: Error?
+        do {
+            _ = try await coordinator.reconcile(enabled: false, assignments: [])
+        } catch {
+            caughtError = error
+        }
+        XCTAssertNotNil(caughtError)
+        XCTAssertTrue(caughtError?.localizedDescription.contains("Full Disk Access") == true)
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.manifestURL), manifestBefore)
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.indexURL), indexBefore)
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.assetJournalURL), preparedJournal)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.journalURL.path))
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(
+            at: fixture.paths.videosDirectory,
+            includingPropertiesForKeys: nil
+        ).isEmpty)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(
+            at: fixture.paths.thumbnailsDirectory,
+            includingPropertiesForKeys: nil
+        ).isEmpty)
+    }
+
     func testRefreshPendingSurvivesCommitUntilRefreshRequest() async throws {
         let fixture = try makeCoordinatorFixture(indexHasDisplay: false)
         try JSONSerialization.data(withJSONObject: [
@@ -524,7 +660,7 @@ final class WALIAgentTests: XCTestCase {
     func testPreferencePreflightFailureLeavesEngineStateUnchanged() async {
         let router = AgentCommandRouter { step, _ in
             if case .preflight(.setPreferences) = step {
-                throw RegressionFailure.rejectedPreflight
+                throw LockScreenCompatibilityError.permissionDenied
             }
             return .unchanged
         }
@@ -532,9 +668,11 @@ final class WALIAgentTests: XCTestCase {
             lockScreenContinuityEnabled: true
         ))))
 
-        guard case .failure = response.result else {
+        guard case let .failure(failure) = response.result else {
             return XCTFail("A rejected opt-in preflight must fail before persistence")
         }
+        XCTAssertTrue(failure.localizedDescription.contains("Full Disk Access"))
+        XCTAssertTrue(failure.localizedDescription.contains("WALI Agent"))
         let snapshot = await router.snapshot()
         XCTAssertFalse(snapshot.preferences.lockScreenContinuityEnabled)
         XCTAssertEqual(snapshot.revision.rawValue, 0)
@@ -906,8 +1044,4 @@ private final class LockedCounter: @unchecked Sendable {
     func increment() {
         lock.withLock { storage += 1 }
     }
-}
-
-private enum RegressionFailure: Error {
-    case rejectedPreflight
 }
