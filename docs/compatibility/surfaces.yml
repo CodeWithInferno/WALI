@@ -62,9 +62,9 @@ surfaces:
     owner_role: domain_maintainer
     implementation: implemented
     version:
-      current: { epoch: 1, revision: 0 }
+      current: { epoch: 1, revision: 1 }
       readable_epochs:
-        - { epoch: 1, minimum_revision: 0, maximum_revision: 0 }
+        - { epoch: 1, minimum_revision: 1, maximum_revision: 1 }
       additive_compatibility: declared_ranges_only
     product_compatibility:
       minimum_reader: 0.1.0
@@ -423,9 +423,9 @@ surfaces:
     owner_role: compatibility_maintainer
     implementation: implemented
     version:
-      current: { epoch: 1, revision: 0 }
+      current: { epoch: 1, revision: 1 }
       readable_epochs:
-        - { epoch: 1, minimum_revision: 0, maximum_revision: 0 }
+        - { epoch: 1, minimum_revision: 1, maximum_revision: 1 }
       additive_compatibility: declared_ranges_only
     product_compatibility:
       minimum_reader: 0.1.0
@@ -441,7 +441,7 @@ surfaces:
         - Fixtures/LockScreen/modern-aerial-v1.json
     details:
       support_scope: session_lock_screen_only
-      implementation_gate: accepted_adr_0008
+      implementation_gate: accepted_adr_0009
       fixture_policy: redacted_version_gated_store
       verified_system_builds: [25F80]
       manifest_version: 1
@@ -451,9 +451,12 @@ surfaces:
       shot_prefix: CUSTOM_WALI_
       maximum_owned_assets: 8
       unknown_newer_policy: reject_before_write
-      global_default_policy: never_mutate
-      missing_display_policy: synthesize_top_level_override_only
-      synthesized_display_rollback_policy: remove_exact_owned_node_only
+      global_default_policy: transactional_current_user_linked
+      selection_policy: main_display_single_asset
+      active_override_policy: clear_displays_and_spaces_restore_exact
+      rollback_policy: exact_four_root_preimage_with_conflict_detection
+      agent_quiesce_policy: before_managed_manifest_or_index_write
+      daemon_timestamp_policy: allow_last_set_and_last_use_drift_only
 
   - id: diagnostic_export
     kind: diagnostic_export

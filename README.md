@@ -25,6 +25,8 @@ limited to verified macOS build 25F80. Apple may change this format at any
 update; WALI then fails closed until a new fixture-backed epoch is accepted.
 Because macOS protects the current-user wallpaper store, this optional adapter
 requires Full Disk Access for WALI Agent; normal desktop playback does not.
+It mirrors the main display's wallpaper through macOS's current-user global
+linked selection and restores the prior global/display/Space values on disable.
 Desktop and Lock Screen playback timelines are independent.
 
 ## Architecture

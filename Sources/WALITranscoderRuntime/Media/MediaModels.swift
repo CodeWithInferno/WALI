@@ -56,6 +56,8 @@ public struct MediaInspection: Codable, Sendable, Hashable {
     public let hasAudio: Bool
     public let isHDR: Bool
     public let videoCodec: String
+    public let bitDepth: UInt16?
+    public let hevcProfileIDC: UInt8?
 
     public init(
         byteCount: UInt64,
@@ -64,7 +66,9 @@ public struct MediaInspection: Codable, Sendable, Hashable {
         nominalFrameRate: Double,
         hasAudio: Bool,
         isHDR: Bool,
-        videoCodec: String
+        videoCodec: String,
+        bitDepth: UInt16? = nil,
+        hevcProfileIDC: UInt8? = nil
     ) {
         self.byteCount = byteCount
         self.pixelSize = pixelSize
@@ -73,6 +77,8 @@ public struct MediaInspection: Codable, Sendable, Hashable {
         self.hasAudio = hasAudio
         self.isHDR = isHDR
         self.videoCodec = videoCodec
+        self.bitDepth = bitDepth
+        self.hevcProfileIDC = hevcProfileIDC
     }
 }
 
@@ -160,7 +166,7 @@ extension MediaPipelineError: LocalizedError {
         case .sourceIsSymbolicLink: "Symbolic-link sources are not accepted."
         case let .sourceTooLarge(limit): "The source exceeds the \(limit)-byte import limit."
         case .unreadableAsset: "The media file cannot be read by AVFoundation."
-        case .missingVideoTrack: "The media file does not contain a video track."
+        case .missingVideoTrack: "The media file must contain exactly one video track."
         case .invalidDuration: "The media duration is empty or unsupported."
         case .unsupportedDimensions: "The media dimensions are empty or exceed WALI's limits."
         case .unsupportedFrameRate: "The media frame rate exceeds WALI's limit."

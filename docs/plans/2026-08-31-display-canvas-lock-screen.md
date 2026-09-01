@@ -14,7 +14,7 @@
 2. Display geometry is additive, bounded, optional wire data and remains backward-decodable.
 3. Each display tile shows its durable wallpaper assignment and scaling state.
 4. Lock Screen support is opt-in, session-lock-only, and version-gated to verified store formats.
-5. Apple and other applications' Aerial categories, assets, and display/Space choices are never deleted or rewritten wholesale.
+5. Apple and other applications' Aerial categories and assets are never deleted; the accepted macOS 26 compatibility epoch temporarily replaces and journals the four current-user global selection roots only.
 6. All Apple-store writes use staging, validation, backup metadata, atomic replacement, and WALI-owned identifiers.
 7. FileVault preboot, other users, and unauthenticated loginwindow are never claimed or modified.
 8. Desktop playback continues independently if Lock Screen registration fails.
@@ -61,13 +61,15 @@
 - Modify: `scripts/check-architecture.rb`
 - Modify: `Tests/Architecture/check-architecture-tests.sh`
 - Create: `Fixtures/LockScreen/modern-aerial-v1.json`
+- Create: `docs/adr/0009-global-linked-lock-screen-activation.md`
 
 **Steps:**
 1. Record project-owner approval from the 2026-08-31 autonomous implementation mandate.
 2. Limit support to the authenticated current-user session and the verified macOS 26 store epoch.
 3. Define ownership prefixes, copied asset layout, maximum custom assets, rollback rules, and OS fail-closed behavior.
 4. Update the compatibility registry and policy checker so implementation requires the accepted ADR and redacted fixture.
-5. Run architecture mutation tests and the real repository check.
+5. Supersede the unsafe per-display activation mechanism with the verified revision-1 global linked contract while preserving ADR 0008 as historical context.
+6. Run architecture mutation tests and the real repository check.
 
 ### Task 4: Implement transactional Aerial registration
 
@@ -82,11 +84,12 @@
 1. Build deterministic editors that operate on injected roots and reject unknown/malformed schemas before writes.
 2. Derive stable WALI asset IDs from library item IDs and copy verified master MOVs plus generated PNG thumbnails into the per-user Aerial store.
 3. Merge only `WALI` category/subcategory/assets while retaining every unrelated manifest value.
-4. Patch only selected display/Space choice nodes to the Aerial provider and record the replaced choices in a WALI-owned rollback journal.
-5. Stage and validate JSON/plists, fsync, then atomically replace; recover interrupted transactions on next startup.
-6. Refresh the current user's `WallpaperAgent` only after a committed transaction.
-7. Reconcile on apply, startup, display/Space change, and detected Apple catalog replacement.
-8. Exercise editors against temporary copies before any live store mutation.
+4. Select the main display's assignment and transactionally replace `AllSpacesAndDisplays` and `SystemDefault` with the verified global linked Aerial choice while clearing `Displays` and `Spaces`.
+5. Journal the exact prior values of all four managed roots, fail closed on external drift, and restore them exactly on disable.
+6. Quiesce the current user's `WallpaperAgent` before a required store mutation, then stage, validate, fsync, and atomically replace; recover interrupted transactions on next startup.
+7. Refresh the current user's `WallpaperAgent` and Aerial extension only after a committed transaction.
+8. Reconcile on apply, startup, display/Space change, and detected Apple catalog replacement.
+9. Exercise editors against temporary copies before any live store mutation.
 
 ### Task 5: Add opt-in preference and user-facing state
 
@@ -102,7 +105,7 @@
 1. Add a backward-compatible `lockScreenContinuityEnabled` preference defaulting off.
 2. Add a clear settings toggle labeled experimental/private integration with authenticated-session and FileVault caveats.
 3. Enabling performs a dry validation before mutation; failure leaves desktop behavior unchanged and surfaces recovery text.
-4. Disabling removes only WALI-owned manifest/assets and restores recorded choices only when they still point to WALI.
+4. Disabling removes only WALI-owned manifest/assets and restores the exact four-root preimage only while the managed global structure remains WALI-owned.
 5. Leave it disabled in the current installation until isolated editor checks and explicit live verification are complete.
 
 ### Task 6: Verify and publish the second checkpoint

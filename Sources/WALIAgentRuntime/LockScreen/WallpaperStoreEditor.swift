@@ -16,34 +16,53 @@ public struct WallpaperStoreEditResult: Sendable, Hashable {
     public let patchedNodeCount: Int
 }
 
-/// Transactional, display-scoped editor for the verified current-user
-/// WallpaperAgent Index.plist shape. Global and Space-default choices are
-/// deliberately outside this adapter's authority.
+/// Transactional editor for the verified macOS 26 current-user global linked
+/// wallpaper selection. Its authority is limited to four exact top-level
+/// values; every other Index.plist value is carried through untouched.
 public struct WallpaperStoreEditor: Sendable {
     public static let provider = "com.apple.wallpaper.choice.aerials"
+
     private static let maximumStoreBytes: UInt64 = 64 * 1_024 * 1_024
     private static let maximumJournalBytes: UInt64 = 4 * 1_024 * 1_024
     private static let maximumNodes = 512
-    private static let maximumManagedIDsPerNode = 8
+    private static let maximumManagedIDs = 8
+    private static let managedKeys = [
+        "AllSpacesAndDisplays",
+        "SystemDefault",
+        "Displays",
+        "Spaces",
+    ]
 
     public let indexURL: URL
     public let journalURL: URL
+    private let now: @Sendable () -> Date
 
     public init(indexURL: URL, journalURL: URL) {
+        self.init(indexURL: indexURL, journalURL: journalURL, now: { Date() })
+    }
+
+    public init(
+        indexURL: URL,
+        journalURL: URL,
+        now: @escaping @Sendable () -> Date
+    ) {
         self.indexURL = indexURL
         self.journalURL = journalURL
+        self.now = now
     }
 
     /// Runs complete schema, scope, ownership and rollback validation without
     /// writing either the Apple store or WALI's journal.
+    @discardableResult
     public func preflight(
         assignments: [WallpaperStoreAssignment],
         knownOwnedAssetIDs: Set<UUID> = []
-    ) throws {
-        _ = try makePlan(
+    ) throws -> WallpaperStoreEditResult {
+        let plan = try makePlan(
             assignments: assignments,
             knownOwnedAssetIDs: knownOwnedAssetIDs
         )
+        return Self.editResult(for: plan, includeRecoveredCommit: false)
     }
 
     @discardableResult
@@ -67,10 +86,7 @@ public struct WallpaperStoreEditor: Sendable {
             }
         }
         try saveJournal(plan.committedJournal)
-        return WallpaperStoreEditResult(
-            changed: plan.nextData != nil || plan.recoveredCommittedChange,
-            patchedNodeCount: plan.committedJournal.records.count
-        )
+        return Self.editResult(for: plan, includeRecoveredCommit: true)
     }
 
     public func validate() throws {
@@ -78,236 +94,174 @@ public struct WallpaperStoreEditor: Sendable {
         _ = try loadJournal()
     }
 
+    private static func editResult(
+        for plan: ReconciliationPlan,
+        includeRecoveredCommit: Bool
+    ) -> WallpaperStoreEditResult {
+        .init(
+            changed: plan.nextData != nil
+                || (includeRecoveredCommit && plan.recoveredCommittedChange),
+            patchedNodeCount: plan.targetAssetID == nil ? 0 : managedKeys.count
+        )
+    }
+
     private func makePlan(
         assignments: [WallpaperStoreAssignment],
         knownOwnedAssetIDs: Set<UUID>
     ) throws -> ReconciliationPlan {
-        guard Set(assignments.map(\.displayUUID)).count == assignments.count else {
-            throw LockScreenCompatibilityError.malformedStore("Duplicate display assignments were requested.")
+        guard assignments.count <= 1 else {
+            throw LockScreenCompatibilityError.assetRejected(
+                "The verified Lock Screen store accepts only the main display wallpaper."
+            )
         }
+        let desiredAssetID = assignments.first?.assetID
         let loaded = try loadStore()
         let journal = try loadJournal()
-        let existingNodePaths = try Self.displayNodePaths(in: loaded.root)
-        let existingPathSet = Set(existingNodePaths.map(\.path))
-        let requested = Dictionary(uniqueKeysWithValues: assignments.map {
-            ($0.displayUUID.uuidString.uppercased(), $0.assetID)
-        })
-        let topLevelDisplayIDs = Set(existingNodePaths.compactMap { entry in
-            entry.path.hasPrefix("Displays/") ? entry.displayUUID : nil
-        })
-        let missingTopLevelPaths = Set(Set(requested.keys).subtracting(topLevelDisplayIDs).map {
-            "Displays/\($0)/Linked/Content/Choices"
-        })
-        let desiredEntries = existingNodePaths.compactMap { entry in
-            requested[entry.displayUUID].map { (entry.path, $0) }
-        } + missingTopLevelPaths.compactMap { path in
-            Self.displayUUID(inChoicePath: path).flatMap { requested[$0].map { (path, $0) } }
-        }
-        guard desiredEntries.count <= Self.maximumNodes else {
-            throw LockScreenCompatibilityError.malformedStore("Too many wallpaper choice nodes.")
-        }
-        let desiredPaths = Dictionary(uniqueKeysWithValues: desiredEntries)
-        let recordsByPath = Dictionary(uniqueKeysWithValues: journal.records.map { ($0.path, $0) })
-        let loadedDigest = Self.digest(loaded.data)
-        let recoveredCommittedChange: Bool
-        if journal.phase == .prepared {
-            let targetIsReflected = try Self.preparedTargetIsReflected(
-                    journal,
-                    in: loaded.root,
-                    existingPaths: existingPathSet
+
+        let originals: [WallpaperRootValue]
+        let currentValues: [WallpaperRootValue]
+        let currentAssetID: UUID?
+        let matchedPreparedTarget: Bool
+        if journal.originalValues.isEmpty {
+            guard journal == .empty else {
+                throw LockScreenCompatibilityError.unsupportedSchema(
+                    "The global wallpaper rollback journal is incomplete."
                 )
-            recoveredCommittedChange = journal.targetIndexDigest == loadedDigest
-                || targetIsReflected
+            }
+            guard desiredAssetID != nil else {
+                return .init(
+                    loaded: loaded,
+                    nextData: nil,
+                    preparedJournal: nil,
+                    committedJournal: .empty,
+                    recoveredCommittedChange: false,
+                    targetAssetID: nil
+                )
+            }
+            let referenced = Self.referencedAerialAssetIDs(in: loaded.root)
+            guard referenced.isDisjoint(with: knownOwnedAssetIDs) else {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "The store already references a WALI-owned asset without rollback metadata."
+                )
+            }
+            originals = try Self.snapshotManagedValues(in: loaded.root)
+            currentValues = originals
+            currentAssetID = nil
+            matchedPreparedTarget = false
         } else {
-            recoveredCommittedChange = false
-        }
-
-        var root = loaded.root
-        for record in journal.records where desiredPaths[record.path] == nil {
-            guard existingPathSet.contains(record.path) else { continue }
-            let current = Self.currentChoices(in: root, path: record.path)
-            if record.createdDisplayNode {
-                if let currentID = Self.aerialAssetID(in: current) {
-                    if Set(record.managedAssetIDs).contains(currentID) {
-                        guard try Self.isExactSynthesizedDisplayNode(
-                            in: root,
-                            choicePath: record.path,
-                            assetID: currentID
-                        ) else {
-                            throw LockScreenCompatibilityError.ownershipConflict(
-                                "A WALI-created display override changed outside WALI; it was preserved."
-                            )
-                        }
-                        root = try Self.removingSynthesizedDisplayNode(
-                            atChoicePath: record.path,
-                            in: root
-                        )
-                    } else if knownOwnedAssetIDs.contains(currentID) {
-                        throw LockScreenCompatibilityError.ownershipConflict(
-                            "A WALI-created display override points to another owned asset; it was preserved."
-                        )
-                    }
-                }
-                // A removed node or one with an external choice is no longer
-                // WALI-owned. Preserve it and retire the stale record.
-                continue
-            }
-            if Self.pointsToAnyAsset(current, assetIDs: Set(record.managedAssetIDs)) {
-                root = try Self.restoring(record, in: root)
-            }
-            // Preserve externally changed nodes while retiring their stale
-            // record. Removed displays and Spaces are also safely retired.
-        }
-
-        var committedRecords: [WallpaperChoiceJournalRecord] = []
-        for (path, assetID) in desiredPaths.sorted(by: { $0.key < $1.key }) {
-            let current = Self.currentChoices(in: root, path: path)
-            let originalChoices: Data?
-            let createdDisplayNode: Bool
-            if let existing = recordsByPath[path] {
-                let isManaged = Self.pointsToAnyAsset(
+            originals = journal.originalValues
+            let current = try Self.snapshotManagedValues(in: loaded.root)
+            currentValues = current
+            switch journal.phase {
+            case .committed:
+                guard Self.managedStateMatchesAllowingDaemonDates(
                     current,
-                    assetIDs: Set(existing.managedAssetIDs).union([assetID])
-                )
-                let isPreparedOriginal = if journal.phase == .prepared,
-                                            journal.expectedIndexDigest == loadedDigest {
-                    try Self.matchesRecordedOriginal(current, record: existing)
-                } else {
-                    false
-                }
-                guard isManaged || isPreparedOriginal else {
+                    journal.targetValues
+                ) else {
                     throw LockScreenCompatibilityError.ownershipConflict(
-                        "A display choice changed outside WALI; it was preserved."
+                        "A managed global wallpaper value changed outside WALI; it was preserved."
                     )
                 }
-                if existing.createdDisplayNode,
-                   isManaged,
-                   let currentID = Self.aerialAssetID(in: current) {
-                    guard try Self.isExactSynthesizedDisplayNode(
-                        in: root,
-                        choicePath: path,
-                        assetID: currentID
-                    ) else {
-                        throw LockScreenCompatibilityError.ownershipConflict(
-                            "A WALI-created display override changed outside WALI; it was preserved."
-                        )
-                    }
-                }
-                originalChoices = existing.originalChoices
-                createdDisplayNode = existing.createdDisplayNode
-            } else {
-                if missingTopLevelPaths.contains(path) {
-                    guard current == nil else {
-                        throw LockScreenCompatibilityError.ownershipConflict(
-                            "A missing display override appeared during reconciliation; it was preserved."
-                        )
-                    }
-                    originalChoices = nil
-                    createdDisplayNode = true
-                } else if let currentID = Self.aerialAssetID(in: current),
-                   knownOwnedAssetIDs.contains(currentID) {
-                    guard currentID == assetID else {
-                        throw LockScreenCompatibilityError.ownershipConflict(
-                            "A new display choice points to a different WALI asset; it was preserved."
-                        )
-                    }
-                    originalChoices = try Self.inheritedOriginalChoices(
-                        forNewPath: path,
-                        managedAssetID: currentID,
-                        from: journal.records
-                    )
-                    createdDisplayNode = false
+                currentAssetID = journal.targetAssetID
+                matchedPreparedTarget = false
+            case .prepared:
+                if Self.managedStateMatchesAllowingDaemonDates(
+                    current,
+                    journal.targetValues
+                ) {
+                    currentAssetID = journal.targetAssetID
+                    matchedPreparedTarget = true
+                } else if Self.managedStateMatchesAllowingDaemonDates(
+                    current,
+                    journal.sourceValues
+                ) {
+                    currentAssetID = journal.sourceAssetID
+                    matchedPreparedTarget = false
                 } else {
-                    originalChoices = try current.map(Self.encodePlistValue)
-                    createdDisplayNode = false
-                }
-            }
-            committedRecords.append(.init(
-                path: path,
-                originalChoices: originalChoices,
-                managedAssetIDs: [assetID],
-                targetAssetID: assetID,
-                createdDisplayNode: createdDisplayNode
-            ))
-            let replacement = try Self.wallpaperChoices(assetID: assetID)
-            if !Self.propertyListsEqual(current, replacement) {
-                if createdDisplayNode, !existingPathSet.contains(path) {
-                    root = try Self.addingSynthesizedDisplayNode(
-                        choices: replacement,
-                        atChoicePath: path,
-                        in: root
+                    throw LockScreenCompatibilityError.ownershipConflict(
+                        "An interrupted global wallpaper transaction no longer matches its source or target."
                     )
-                } else {
-                    root = try Self.settingChoices(replacement, at: path, in: root)
                 }
             }
         }
 
-        guard committedRecords.count <= Self.maximumNodes else {
-            throw LockScreenCompatibilityError.malformedStore("Too many wallpaper choice nodes.")
+        let desiredValues: [WallpaperRootValue]
+        if desiredAssetID == currentAssetID {
+            desiredValues = currentValues
+        } else if journal.phase == .prepared,
+                  desiredAssetID == journal.targetAssetID {
+            desiredValues = journal.targetValues
+        } else if let desiredAssetID {
+            desiredValues = try Self.activeValues(
+                from: originals,
+                assetID: desiredAssetID,
+                timestamp: now()
+            )
+        } else {
+            desiredValues = originals
         }
-        committedRecords.sort { $0.path < $1.path }
-        let committedJournal = WallpaperChoiceJournal(
-            phase: .committed,
-            records: committedRecords
-        )
+        let nextRoot = try Self.applying(desiredValues, to: loaded.root)
+        let committedJournal: WallpaperGlobalJournal = if let desiredAssetID {
+            .init(
+                phase: .committed,
+                originalValues: originals,
+                sourceValues: [],
+                targetValues: desiredValues,
+                managedAssetIDs: [desiredAssetID],
+                targetAssetID: desiredAssetID
+            )
+        } else {
+            .empty
+        }
         try Self.validateJournal(committedJournal)
+        _ = try Self.encodedJournal(committedJournal)
 
-        let hasStoreChange = !NSDictionary(dictionary: loaded.root).isEqual(to: root)
-        guard hasStoreChange else {
+        guard !Self.rootValuesEqual(currentValues, desiredValues) else {
             return .init(
                 loaded: loaded,
                 nextData: nil,
                 preparedJournal: nil,
                 committedJournal: committedJournal,
-                recoveredCommittedChange: recoveredCommittedChange
+                recoveredCommittedChange: journal.phase == .prepared && matchedPreparedTarget,
+                targetAssetID: desiredAssetID
             )
         }
 
         let nextData = try PropertyListSerialization.data(
-            fromPropertyList: root,
+            fromPropertyList: nextRoot,
             format: loaded.format,
             options: 0
         )
         _ = try Self.decodeAndValidateStore(nextData)
-        let committedByPath = Dictionary(
-            uniqueKeysWithValues: committedRecords.map { ($0.path, $0) }
-        )
-        var transitionRecords: [WallpaperChoiceJournalRecord] = []
-        for path in Set(journal.records.map(\.path)).union(committedRecords.map(\.path)).sorted() {
-            let prior = recordsByPath[path]
-            let post = committedByPath[path]
-            guard existingPathSet.contains(path) || post?.createdDisplayNode == true else { continue }
-            let original = prior?.originalChoices ?? post?.originalChoices
-            let managed = Set(prior?.managedAssetIDs ?? [])
-                .union(post?.managedAssetIDs ?? [])
-            guard !managed.isEmpty,
-                  managed.count <= Self.maximumManagedIDsPerNode else {
-                throw LockScreenCompatibilityError.ownershipConflict(
-                    "A wallpaper choice transition exceeds WALI’s ownership bound."
-                )
-            }
-            transitionRecords.append(.init(
-                path: path,
-                originalChoices: original,
-                managedAssetIDs: managed.sorted { $0.uuidString < $1.uuidString },
-                targetAssetID: post?.targetAssetID,
-                createdDisplayNode: prior?.createdDisplayNode ?? post?.createdDisplayNode ?? false
-            ))
+        let managedIDs = Set(journal.managedAssetIDs)
+            .union(currentAssetID.map { [$0] } ?? [])
+            .union(desiredAssetID.map { [$0] } ?? [])
+        guard !managedIDs.isEmpty,
+              managedIDs.count <= Self.maximumManagedIDs else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "The global wallpaper transition exceeds WALI's ownership bound."
+            )
         }
-        let preparedJournal = WallpaperChoiceJournal(
+        let preparedJournal = WallpaperGlobalJournal(
             phase: .prepared,
             expectedIndexDigest: Self.digest(loaded.data),
             targetIndexDigest: Self.digest(nextData),
-            records: transitionRecords
+            originalValues: originals,
+            sourceValues: currentValues,
+            targetValues: desiredValues,
+            managedAssetIDs: managedIDs.sorted { $0.uuidString < $1.uuidString },
+            sourceAssetID: currentAssetID,
+            targetAssetID: desiredAssetID
         )
         try Self.validateJournal(preparedJournal)
+        _ = try Self.encodedJournal(preparedJournal)
         return .init(
             loaded: loaded,
             nextData: nextData,
             preparedJournal: preparedJournal,
             committedJournal: committedJournal,
-            recoveredCommittedChange: recoveredCommittedChange
+            recoveredCommittedChange: matchedPreparedTarget,
+            targetAssetID: desiredAssetID
         )
     }
 
@@ -330,214 +284,258 @@ public struct WallpaperStoreEditor: Sendable {
                 format: &format
             )
         } catch {
-            throw LockScreenCompatibilityError.malformedStore("Index.plist is not a valid property list.")
-        }
-        guard let root = object as? [String: Any],
-              root["Displays"] is [String: Any],
-              root["Spaces"] is [String: Any],
-              root.keys.count <= maximumNodes else {
-            throw LockScreenCompatibilityError.unsupportedSchema(
-                "Expected the verified display-and-Space Index.plist layout."
+            throw LockScreenCompatibilityError.malformedStore(
+                "Index.plist is not a valid property list."
             )
         }
-        _ = try displayNodePaths(in: root)
+        guard let root = object as? [String: Any],
+              root.keys.count <= maximumNodes else {
+            throw LockScreenCompatibilityError.unsupportedSchema(
+                "Expected the verified global linked Index.plist layout."
+            )
+        }
+        try validateManagedRootShape(root)
         return (root, format)
     }
 
-    private func loadJournal() throws -> WallpaperChoiceJournal {
-        guard FileManager.default.fileExists(atPath: journalURL.path) else {
-            return WallpaperChoiceJournal(phase: .committed, records: [])
+    private static func validateManagedRootShape(_ root: [String: Any]) throws {
+        guard let displays = root["Displays"] as? [String: Any],
+              let spaces = root["Spaces"] as? [String: Any],
+              displays.count <= maximumNodes,
+              spaces.count <= maximumNodes,
+              displays.values.allSatisfy({ $0 is [String: Any] }),
+              spaces.values.allSatisfy({ $0 is [String: Any] }) else {
+            throw LockScreenCompatibilityError.unsupportedSchema(
+                "The global display or Space maps are missing or malformed."
+            )
         }
+        try validateGlobalLinkedNode(root["AllSpacesAndDisplays"], key: "AllSpacesAndDisplays")
+        try validateGlobalLinkedNode(root["SystemDefault"], key: "SystemDefault")
+    }
+
+    private static func validateGlobalLinkedNode(_ value: Any?, key: String) throws {
+        guard let node = value as? [String: Any],
+              node["Type"] as? String == "linked",
+              let linked = node["Linked"] as? [String: Any],
+              linked["LastSet"] is Date,
+              linked["LastUse"] is Date,
+              let content = linked["Content"] as? [String: Any],
+              let choices = content["Choices"] as? [Any],
+              choices.count == 1,
+              content["EncodedOptionValues"] is Data,
+              content["Shuffle"] as? String == "$null",
+              let choice = choices.first as? [String: Any],
+              choice["Provider"] is String,
+              choice["Configuration"] is Data,
+              choice["Files"] is [Any] else {
+            throw LockScreenCompatibilityError.unsupportedSchema(
+                "The verified \(key) linked node is missing or structurally different."
+            )
+        }
+    }
+
+    private func loadJournal() throws -> WallpaperGlobalJournal {
+        guard FileManager.default.fileExists(atPath: journalURL.path) else { return .empty }
         try LockScreenFileIO.requireRegularFile(
             journalURL,
             maximumBytes: Self.maximumJournalBytes
         )
         do {
             let journal = try JSONDecoder().decode(
-                WallpaperChoiceJournal.self,
+                WallpaperGlobalJournal.self,
                 from: Data(contentsOf: journalURL)
             )
-            guard journal.schemaVersion == 2 else {
-                throw LockScreenCompatibilityError.unsupportedSchema(
-                    "The WALI rollback journal is incompatible."
-                )
-            }
             try Self.validateJournal(journal)
             return journal
         } catch let error as LockScreenCompatibilityError {
             throw error
         } catch {
-            throw LockScreenCompatibilityError.malformedStore("The WALI rollback journal is invalid.")
+            throw LockScreenCompatibilityError.malformedStore(
+                "The WALI global rollback journal is invalid."
+            )
         }
     }
 
-    private func saveJournal(_ journal: WallpaperChoiceJournal) throws {
+    private func saveJournal(_ journal: WallpaperGlobalJournal) throws {
         try Self.validateJournal(journal)
         try LockScreenFileIO.requireDirectory(journalURL.deletingLastPathComponent())
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(journal)
-        guard data.count <= Self.maximumJournalBytes else {
-            throw LockScreenCompatibilityError.malformedStore("The WALI rollback journal exceeds its safety limit.")
-        }
+        let data = try Self.encodedJournal(journal)
         try LockScreenFileIO.atomicWrite(data, to: journalURL) { staged in
             let decoded = try JSONDecoder().decode(
-                WallpaperChoiceJournal.self,
+                WallpaperGlobalJournal.self,
                 from: Data(contentsOf: staged)
             )
             try Self.validateJournal(decoded)
         }
     }
 
-    private static func validateJournal(_ journal: WallpaperChoiceJournal) throws {
-        guard journal.schemaVersion == 2,
-              journal.records.count <= maximumNodes,
-              Set(journal.records.map(\.path)).count == journal.records.count else {
-            throw LockScreenCompatibilityError.unsupportedSchema("The WALI rollback journal is incompatible.")
+    private static func encodedJournal(_ journal: WallpaperGlobalJournal) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(journal)
+        guard data.count <= Self.maximumJournalBytes else {
+            throw LockScreenCompatibilityError.malformedStore(
+                "The WALI global rollback journal exceeds its safety limit."
+            )
+        }
+        return data
+    }
+
+    private static func validateJournal(_ journal: WallpaperGlobalJournal) throws {
+        let managed = Set(journal.managedAssetIDs)
+        guard journal.schemaVersion == 3,
+              managed.count == journal.managedAssetIDs.count,
+              managed.count <= maximumManagedIDs,
+              journal.targetAssetID.map(managed.contains) ?? true,
+              journal.sourceAssetID.map(managed.contains) ?? true else {
+            throw LockScreenCompatibilityError.unsupportedSchema(
+                "The WALI global rollback journal is incompatible."
+            )
         }
         switch journal.phase {
         case .prepared:
             guard journal.expectedIndexDigest?.count == SHA256.byteCount,
-                  journal.targetIndexDigest?.count == SHA256.byteCount else {
+                  journal.targetIndexDigest?.count == SHA256.byteCount,
+                  !journal.originalValues.isEmpty,
+                  !journal.sourceValues.isEmpty,
+                  !journal.targetValues.isEmpty,
+                  !managed.isEmpty else {
                 throw LockScreenCompatibilityError.unsupportedSchema(
-                    "An interrupted wallpaper transaction is missing its file identities."
+                    "An interrupted global wallpaper transaction is incomplete."
                 )
             }
         case .committed:
             guard journal.expectedIndexDigest == nil,
-                  journal.targetIndexDigest == nil else {
+                  journal.targetIndexDigest == nil,
+                  journal.sourceAssetID == nil,
+                  journal.sourceValues.isEmpty else {
                 throw LockScreenCompatibilityError.unsupportedSchema(
-                    "A committed wallpaper journal contains transaction identities."
+                    "A committed global wallpaper journal contains transaction state."
                 )
             }
-        }
-        for record in journal.records {
-            let managed = Set(record.managedAssetIDs)
-            guard Self.isDisplayChoicePath(record.path),
-                  !managed.isEmpty,
-                  managed.count == record.managedAssetIDs.count,
-                  managed.count <= maximumManagedIDsPerNode,
-                  record.targetAssetID.map(managed.contains) ?? true else {
-                throw LockScreenCompatibilityError.ownershipConflict(
-                    "The rollback journal contains an invalid or unbounded display record."
-                )
-            }
-            if journal.phase == .committed {
-                guard let target = record.targetAssetID,
-                      managed == [target] else {
+            if let target = journal.targetAssetID {
+                guard journal.managedAssetIDs == [target],
+                      !journal.originalValues.isEmpty,
+                      !journal.targetValues.isEmpty else {
                     throw LockScreenCompatibilityError.unsupportedSchema(
-                        "A committed wallpaper journal has no single managed target."
+                        "A committed global wallpaper journal has invalid ownership."
+                    )
+                }
+            } else {
+                guard managed.isEmpty,
+                      journal.originalValues.isEmpty,
+                      journal.targetValues.isEmpty else {
+                    throw LockScreenCompatibilityError.unsupportedSchema(
+                        "An inactive global wallpaper journal retained ownership."
                     )
                 }
             }
-            if let original = record.originalChoices {
-                _ = try decodeChoices(original)
+        }
+        for values in [journal.originalValues, journal.sourceValues, journal.targetValues]
+        where !values.isEmpty {
+            try validateRootValues(values)
+        }
+        if !journal.originalValues.isEmpty {
+            if journal.sourceAssetID == nil, !journal.sourceValues.isEmpty,
+               !rootValuesEqual(journal.sourceValues, journal.originalValues) {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A recorded global source does not match the original selection."
+                )
             }
-            if record.createdDisplayNode {
-                guard record.originalChoices == nil,
-                      Self.topLevelDisplayUUID(inChoicePath: record.path) != nil else {
-                    throw LockScreenCompatibilityError.ownershipConflict(
-                        "A synthesized display record has invalid rollback ownership."
-                    )
-                }
+            if journal.targetAssetID == nil, !journal.targetValues.isEmpty,
+               !rootValuesEqual(journal.targetValues, journal.originalValues) {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A recorded global rollback target does not match the original selection."
+                )
+            }
+            try validateActiveValues(journal.sourceValues, assetID: journal.sourceAssetID)
+            try validateActiveValues(journal.targetValues, assetID: journal.targetAssetID)
+        }
+    }
+
+    private static func validateRootValues(_ values: [WallpaperRootValue]) throws {
+        guard values.map(\.key) == managedKeys else {
+            throw LockScreenCompatibilityError.unsupportedSchema(
+                "The global wallpaper rollback roots are incomplete or reordered."
+            )
+        }
+        var root: [String: Any] = [:]
+        for value in values { root[value.key] = try decodePlistValue(value.value) }
+        try validateManagedRootShape(root)
+    }
+
+    private static func validateActiveValues(
+        _ values: [WallpaperRootValue],
+        assetID: UUID?
+    ) throws {
+        guard !values.isEmpty else { return }
+        if let assetID {
+            let root = try applying(values, to: [:])
+            guard let displays = root["Displays"] as? [String: Any], displays.isEmpty,
+                  let spaces = root["Spaces"] as? [String: Any], spaces.isEmpty,
+                  globalAssetID(in: root, key: "AllSpacesAndDisplays") == assetID,
+                  globalAssetID(in: root, key: "SystemDefault") == assetID else {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A recorded global target does not match its managed WALI asset."
+                )
             }
         }
     }
 
-    private struct LoadedStore {
-        let root: [String: Any]
-        let format: PropertyListSerialization.PropertyListFormat
-        let data: Data
+    private static func snapshotManagedValues(
+        in root: [String: Any]
+    ) throws -> [WallpaperRootValue] {
+        try managedKeys.map { key in
+            guard let value = root[key] else {
+                throw LockScreenCompatibilityError.unsupportedSchema(
+                    "The managed global wallpaper roots are incomplete."
+                )
+            }
+            return WallpaperRootValue(key: key, value: try encodePlistValue(value))
+        }
     }
 
-    private struct ReconciliationPlan {
-        let loaded: LoadedStore
-        let nextData: Data?
-        let preparedJournal: WallpaperChoiceJournal?
-        let committedJournal: WallpaperChoiceJournal
-        let recoveredCommittedChange: Bool
+    private static func activeValues(
+        from originals: [WallpaperRootValue],
+        assetID: UUID,
+        timestamp: Date
+    ) throws -> [WallpaperRootValue] {
+        var root = try applying(originals, to: [:])
+        let choices = try wallpaperChoices(assetID: assetID)
+        for key in ["AllSpacesAndDisplays", "SystemDefault"] {
+            guard var node = root[key] as? [String: Any],
+                  var linked = node["Linked"] as? [String: Any],
+                  var content = linked["Content"] as? [String: Any] else {
+                throw LockScreenCompatibilityError.unsupportedSchema(
+                    "A recorded global linked wallpaper node is malformed."
+                )
+            }
+            content["Choices"] = choices
+            linked["Content"] = content
+            linked["LastSet"] = timestamp
+            linked["LastUse"] = timestamp
+            node["Linked"] = linked
+            root[key] = node
+        }
+        root["Displays"] = [String: Any]()
+        root["Spaces"] = [String: Any]()
+        try validateManagedRootShape(root)
+        return try snapshotManagedValues(in: root)
     }
 
-    private struct DisplayNodePath: Hashable {
-        let displayUUID: String
-        let path: String
-    }
-
-    private static func displayNodePaths(in root: [String: Any]) throws -> [DisplayNodePath] {
-        guard let displays = root["Displays"] as? [String: Any],
-              let spaces = root["Spaces"] as? [String: Any],
-              displays.count <= maximumNodes,
-              spaces.count <= maximumNodes else {
-            throw LockScreenCompatibilityError.unsupportedSchema("Display or Space maps are missing or unbounded.")
+    private static func applying(
+        _ values: [WallpaperRootValue],
+        to base: [String: Any]
+    ) throws -> [String: Any] {
+        guard values.map(\.key) == managedKeys else {
+            throw LockScreenCompatibilityError.unsupportedSchema(
+                "The global wallpaper rollback roots are incomplete."
+            )
         }
-        var result: [DisplayNodePath] = []
-        for (rawID, value) in displays {
-            guard let id = UUID(uuidString: rawID),
-                  rawID == id.uuidString.uppercased(),
-                  value is [String: Any] else {
-                throw LockScreenCompatibilityError.unsupportedSchema("A display node is malformed.")
-            }
-            let displayID = id.uuidString.uppercased()
-            result.append(.init(
-                displayUUID: displayID,
-                path: "Displays/\(displayID)/Linked/Content/Choices"
-            ))
-        }
-        for (spaceID, value) in spaces {
-            guard let parsedSpaceID = UUID(uuidString: spaceID),
-                  spaceID == parsedSpaceID.uuidString.uppercased(),
-                  let space = value as? [String: Any],
-                  let spaceDisplays = space["Displays"] as? [String: Any],
-                  spaceDisplays.count <= maximumNodes else {
-                throw LockScreenCompatibilityError.unsupportedSchema("A Space node is malformed.")
-            }
-            for (rawID, displayValue) in spaceDisplays {
-                guard let id = UUID(uuidString: rawID),
-                      rawID == id.uuidString.uppercased(),
-                      displayValue is [String: Any] else {
-                    throw LockScreenCompatibilityError.unsupportedSchema("A Space display node is malformed.")
-                }
-                let displayID = id.uuidString.uppercased()
-                result.append(.init(
-                    displayUUID: displayID,
-                    path: "Spaces/\(spaceID)/Displays/\(displayID)/Linked/Content/Choices"
-                ))
-            }
-        }
-        guard result.count <= maximumNodes, Set(result.map(\.path)).count == result.count else {
-            throw LockScreenCompatibilityError.unsupportedSchema("Wallpaper choice nodes are duplicated or unbounded.")
-        }
-        for entry in result {
-            let components = entry.path.split(separator: "/").map(String.init)
-            let contentPath = Array(components.dropLast())
-            guard value(at: contentPath, in: root) is [String: Any] else {
-                throw LockScreenCompatibilityError.unsupportedSchema("A wallpaper content node is missing.")
-            }
-            if let choices = value(at: components, in: root), !(choices is [Any]) {
-                throw LockScreenCompatibilityError.unsupportedSchema("A Choices node is not an array.")
-            }
-        }
-        return result.sorted { $0.path < $1.path }
-    }
-
-    private static func isDisplayChoicePath(_ path: String) -> Bool {
-        let components = path.split(separator: "/").map(String.init)
-        if components.count == 5,
-           components[0] == "Displays",
-           Array(components[2...]) == ["Linked", "Content", "Choices"] {
-            return canonicalUUID(components[1])
-        }
-        if components.count == 7,
-           components[0] == "Spaces",
-           components[2] == "Displays",
-           Array(components[4...]) == ["Linked", "Content", "Choices"] {
-            return canonicalUUID(components[1]) && canonicalUUID(components[3])
-        }
-        return false
-    }
-
-    private static func canonicalUUID(_ value: String) -> Bool {
-        UUID(uuidString: value)?.uuidString.uppercased() == value
+        var root = base
+        for value in values { root[value.key] = try decodePlistValue(value.value) }
+        try validateManagedRootShape(root)
+        return root
     }
 
     private static func wallpaperChoices(assetID: UUID) throws -> [Any] {
@@ -553,18 +551,38 @@ public struct WallpaperStoreEditor: Sendable {
         ]]
     }
 
-    private static func pointsToAnyAsset(_ choices: [Any]?, assetIDs: Set<UUID>) -> Bool {
-        aerialAssetID(in: choices).map(assetIDs.contains) ?? false
-    }
-
-    private static func aerialAssetID(in choices: [Any]?) -> UUID? {
-        guard let choices,
+    private static func globalAssetID(in root: [String: Any], key: String) -> UUID? {
+        guard let node = root[key] as? [String: Any],
+              let linked = node["Linked"] as? [String: Any],
+              let content = linked["Content"] as? [String: Any],
+              let choices = content["Choices"] as? [Any],
               choices.count == 1,
               let choice = choices[0] as? [String: Any],
               choice["Provider"] as? String == provider,
-              let configuration = choice["Configuration"] as? Data else {
-            return nil
+              let configuration = choice["Configuration"] as? Data else { return nil }
+        return aerialAssetID(in: configuration)
+    }
+
+    private static func referencedAerialAssetIDs(in root: [String: Any]) -> Set<UUID> {
+        var result: Set<UUID> = []
+        for key in managedKeys { collectAerialAssetIDs(in: root[key], into: &result) }
+        return result
+    }
+
+    private static func collectAerialAssetIDs(in value: Any?, into result: inout Set<UUID>) {
+        if let dictionary = value as? [String: Any] {
+            if dictionary["Provider"] as? String == provider,
+               let configuration = dictionary["Configuration"] as? Data,
+               let assetID = aerialAssetID(in: configuration) {
+                result.insert(assetID)
+            }
+            for nested in dictionary.values { collectAerialAssetIDs(in: nested, into: &result) }
+        } else if let array = value as? [Any] {
+            for nested in array { collectAerialAssetIDs(in: nested, into: &result) }
         }
+    }
+
+    private static func aerialAssetID(in configuration: Data) -> UUID? {
         var format = PropertyListSerialization.PropertyListFormat.binary
         guard let decoded = try? PropertyListSerialization.propertyList(
             from: configuration,
@@ -572,215 +590,89 @@ public struct WallpaperStoreEditor: Sendable {
             format: &format
         ) as? [String: Any],
               format == .binary,
-              let rawID = decoded["assetID"] as? String,
-              let id = UUID(uuidString: rawID) else {
-            return nil
-        }
-        return id
+              let rawID = decoded["assetID"] as? String else { return nil }
+        return UUID(uuidString: rawID)
     }
 
-    private static func currentChoices(in root: [String: Any], path: String) -> [Any]? {
-        value(at: path.split(separator: "/").map(String.init), in: root) as? [Any]
-    }
-
-    private static func inheritedOriginalChoices(
-        forNewPath path: String,
-        managedAssetID: UUID,
-        from records: [WallpaperChoiceJournalRecord]
-    ) throws -> Data? {
-        guard let displayID = displayUUID(inChoicePath: path) else {
-            throw LockScreenCompatibilityError.unsafePath("A new display choice path is malformed.")
-        }
-        let displayPath = "Displays/\(displayID)/Linked/Content/Choices"
-        // A newly-created Space can inherit WALI's current display choice.
-        // The display node is the deterministic fallback; other Spaces may
-        // legitimately have distinct originals and retain their own records.
-        return records.first(where: {
-            $0.path == displayPath && $0.targetAssetID == managedAssetID
-        })?.originalChoices
-    }
-
-    private static func displayUUID(inChoicePath path: String) -> String? {
-        let components = path.split(separator: "/").map(String.init)
-        if components.count == 5, components[0] == "Displays" { return components[1] }
-        if components.count == 7,
-           components[0] == "Spaces",
-           components[2] == "Displays" {
-            return components[3]
-        }
-        return nil
-    }
-
-    private static func topLevelDisplayUUID(inChoicePath path: String) -> String? {
-        let components = path.split(separator: "/").map(String.init)
-        guard components.count == 5,
-              components[0] == "Displays",
-              Array(components[2...]) == ["Linked", "Content", "Choices"],
-              canonicalUUID(components[1]) else {
-            return nil
-        }
-        return components[1]
-    }
-
-    private static func addingSynthesizedDisplayNode(
-        choices: [Any],
-        atChoicePath path: String,
-        in root: [String: Any]
-    ) throws -> [String: Any] {
-        guard let displayID = topLevelDisplayUUID(inChoicePath: path),
-              var displays = root["Displays"] as? [String: Any],
-              displays[displayID] == nil else {
-            throw LockScreenCompatibilityError.ownershipConflict(
-                "A top-level display override could not be created safely."
-            )
-        }
-        displays[displayID] = [
-            "Linked": [
-                "Content": [
-                    "Choices": choices,
-                ],
-            ],
-        ]
-        var copy = root
-        copy["Displays"] = displays
-        return copy
-    }
-
-    private static func isExactSynthesizedDisplayNode(
-        in root: [String: Any],
-        choicePath path: String,
-        assetID: UUID
-    ) throws -> Bool {
-        let choices = try wallpaperChoices(assetID: assetID)
-        guard let displayID = topLevelDisplayUUID(inChoicePath: path),
-              let displays = root["Displays"] as? [String: Any],
-              let node = displays[displayID] as? [String: Any] else {
+    private static func rootValuesEqual(
+        _ lhs: [WallpaperRootValue],
+        _ rhs: [WallpaperRootValue]
+    ) -> Bool {
+        guard lhs.map(\.key) == rhs.map(\.key) else { return false }
+        do {
+            return try zip(lhs, rhs).allSatisfy { left, right in
+                propertyListsEqual(
+                    try decodePlistValue(left.value),
+                    try decodePlistValue(right.value)
+                )
+            }
+        } catch {
             return false
         }
-        let expected: [String: Any] = [
-            "Linked": [
-                "Content": [
-                    "Choices": choices,
-                ],
-            ],
-        ]
-        return NSDictionary(dictionary: node).isEqual(to: expected)
     }
 
-    private static func removingSynthesizedDisplayNode(
-        atChoicePath path: String,
-        in root: [String: Any]
-    ) throws -> [String: Any] {
-        guard let displayID = topLevelDisplayUUID(inChoicePath: path),
-              var displays = root["Displays"] as? [String: Any],
-              displays.removeValue(forKey: displayID) != nil else {
-            throw LockScreenCompatibilityError.ownershipConflict(
-                "A WALI-created display override could not be removed safely."
-            )
+    /// WallpaperAgent legitimately advances these timestamps after WALI has
+    /// committed a linked selection. No other managed-field drift is accepted.
+    private static func managedStateMatchesAllowingDaemonDates(
+        _ current: [WallpaperRootValue],
+        _ recorded: [WallpaperRootValue]
+    ) -> Bool {
+        guard current.map(\.key) == managedKeys,
+              recorded.map(\.key) == managedKeys else { return false }
+        do {
+            let currentRoot = try normalizedManagedState(current)
+            let recordedRoot = try normalizedManagedState(recorded)
+            return propertyListsEqual(currentRoot, recordedRoot)
+        } catch {
+            return false
         }
-        var copy = root
-        copy["Displays"] = displays
-        return copy
     }
 
-    private static func restoring(
-        _ record: WallpaperChoiceJournalRecord,
-        in root: [String: Any]
+    private static func normalizedManagedState(
+        _ values: [WallpaperRootValue]
     ) throws -> [String: Any] {
-        try settingChoices(
-            record.originalChoices.map { try decodeChoices($0) },
-            at: record.path,
-            in: root
+        var root = try applying(values, to: [:])
+        for key in ["AllSpacesAndDisplays", "SystemDefault"] {
+            guard var node = root[key] as? [String: Any],
+                  var linked = node["Linked"] as? [String: Any],
+                  linked["LastSet"] is Date,
+                  linked["LastUse"] is Date else {
+                throw LockScreenCompatibilityError.unsupportedSchema(
+                    "A recorded global linked wallpaper node is malformed."
+                )
+            }
+            linked.removeValue(forKey: "LastSet")
+            linked.removeValue(forKey: "LastUse")
+            node["Linked"] = linked
+            root[key] = node
+        }
+        return root
+    }
+
+    private static func propertyListsEqual(_ lhs: Any, _ rhs: Any) -> Bool {
+        NSDictionary(dictionary: ["value": lhs]).isEqual(to: ["value": rhs])
+    }
+
+    private static func encodePlistValue(_ value: Any) throws -> Data {
+        try PropertyListSerialization.data(
+            fromPropertyList: value,
+            format: .binary,
+            options: 0
         )
     }
 
-    private static func preparedTargetIsReflected(
-        _ journal: WallpaperChoiceJournal,
-        in root: [String: Any],
-        existingPaths: Set<String>
-    ) throws -> Bool {
-        guard journal.phase == .prepared else { return false }
-        var checkedExistingNode = false
-        for record in journal.records where existingPaths.contains(record.path) {
-            checkedExistingNode = true
-            let current = currentChoices(in: root, path: record.path)
-            if let target = record.targetAssetID {
-                guard pointsToAnyAsset(current, assetIDs: [target]) else { return false }
-            } else {
-                guard try matchesRecordedOriginal(current, record: record) else { return false }
-            }
+    private static func decodePlistValue(_ data: Data) throws -> Any {
+        do {
+            return try PropertyListSerialization.propertyList(
+                from: data,
+                options: [.mutableContainersAndLeaves],
+                format: nil
+            )
+        } catch {
+            throw LockScreenCompatibilityError.malformedStore(
+                "A recorded global wallpaper value is invalid."
+            )
         }
-        return checkedExistingNode
-    }
-
-    private static func matchesRecordedOriginal(
-        _ current: [Any]?,
-        record: WallpaperChoiceJournalRecord
-    ) throws -> Bool {
-        guard let data = record.originalChoices else { return current == nil }
-        guard let current else { return false }
-        return propertyListsEqual(current, try decodeChoices(data))
-    }
-
-    private static func decodeChoices(_ data: Data) throws -> [Any] {
-        var format = PropertyListSerialization.PropertyListFormat.binary
-        guard let decoded = try PropertyListSerialization.propertyList(
-            from: data,
-            options: [.mutableContainersAndLeaves],
-            format: &format
-        ) as? [Any] else {
-            throw LockScreenCompatibilityError.malformedStore("A rollback choice is invalid.")
-        }
-        return decoded
-    }
-
-    private static func encodePlistValue(_ value: [Any]) throws -> Data {
-        try PropertyListSerialization.data(fromPropertyList: value, format: .binary, options: 0)
-    }
-
-    private static func propertyListsEqual(_ lhs: [Any]?, _ rhs: [Any]) -> Bool {
-        guard let lhs else { return false }
-        return NSArray(array: lhs).isEqual(to: rhs)
-    }
-
-    private static func value(at path: [String], in root: [String: Any]) -> Any? {
-        var current: Any = root
-        for component in path {
-            guard let dictionary = current as? [String: Any],
-                  let next = dictionary[component] else { return nil }
-            current = next
-        }
-        return current
-    }
-
-    private static func settingChoices(
-        _ choices: [Any]?,
-        at path: String,
-        in root: [String: Any]
-    ) throws -> [String: Any] {
-        let components = path.split(separator: "/").map(String.init)
-        guard components.last == "Choices" else {
-            throw LockScreenCompatibilityError.unsafePath("A rollback node escaped Choices.")
-        }
-        return try setting(value: choices, at: components[...], in: root)
-    }
-
-    private static func setting(
-        value: Any?,
-        at path: ArraySlice<String>,
-        in dictionary: [String: Any]
-    ) throws -> [String: Any] {
-        guard let key = path.first else { return dictionary }
-        var copy = dictionary
-        if path.count == 1 {
-            copy[key] = value
-            return copy
-        }
-        guard let child = dictionary[key] as? [String: Any] else {
-            throw LockScreenCompatibilityError.unsupportedSchema("A wallpaper choice path is incomplete.")
-        }
-        copy[key] = try setting(value: value, at: path.dropFirst(), in: child)
-        return copy
     }
 
     private static func digest(_ data: Data) -> Data {
@@ -788,70 +680,72 @@ public struct WallpaperStoreEditor: Sendable {
     }
 }
 
-private struct WallpaperChoiceJournal: Codable, Sendable {
+private struct LoadedStore {
+    let root: [String: Any]
+    let format: PropertyListSerialization.PropertyListFormat
+    let data: Data
+}
+
+private struct ReconciliationPlan {
+    let loaded: LoadedStore
+    let nextData: Data?
+    let preparedJournal: WallpaperGlobalJournal?
+    let committedJournal: WallpaperGlobalJournal
+    let recoveredCommittedChange: Bool
+    let targetAssetID: UUID?
+}
+
+private struct WallpaperRootValue: Codable, Sendable, Equatable {
+    let key: String
+    let value: Data
+}
+
+private struct WallpaperGlobalJournal: Codable, Sendable, Equatable {
     enum Phase: String, Codable, Sendable {
         case prepared
         case committed
     }
 
+    static let empty = WallpaperGlobalJournal(
+        phase: .committed,
+        originalValues: [],
+        sourceValues: [],
+        targetValues: [],
+        managedAssetIDs: [],
+        targetAssetID: nil
+    )
+
     let schemaVersion: Int
     let phase: Phase
     let expectedIndexDigest: Data?
     let targetIndexDigest: Data?
-    let records: [WallpaperChoiceJournalRecord]
+    let originalValues: [WallpaperRootValue]
+    let sourceValues: [WallpaperRootValue]
+    let targetValues: [WallpaperRootValue]
+    let managedAssetIDs: [UUID]
+    let sourceAssetID: UUID?
+    let targetAssetID: UUID?
 
     init(
         phase: Phase,
         expectedIndexDigest: Data? = nil,
         targetIndexDigest: Data? = nil,
-        records: [WallpaperChoiceJournalRecord]
+        originalValues: [WallpaperRootValue],
+        sourceValues: [WallpaperRootValue],
+        targetValues: [WallpaperRootValue],
+        managedAssetIDs: [UUID],
+        sourceAssetID: UUID? = nil,
+        targetAssetID: UUID?
     ) {
-        schemaVersion = 2
+        schemaVersion = 3
         self.phase = phase
         self.expectedIndexDigest = expectedIndexDigest
         self.targetIndexDigest = targetIndexDigest
-        self.records = records
-    }
-}
-
-private struct WallpaperChoiceJournalRecord: Codable, Sendable {
-    let path: String
-    let originalChoices: Data?
-    let managedAssetIDs: [UUID]
-    let targetAssetID: UUID?
-    let createdDisplayNode: Bool
-
-    init(
-        path: String,
-        originalChoices: Data?,
-        managedAssetIDs: [UUID],
-        targetAssetID: UUID?,
-        createdDisplayNode: Bool = false
-    ) {
-        self.path = path
-        self.originalChoices = originalChoices
+        self.originalValues = originalValues
+        self.sourceValues = sourceValues
+        self.targetValues = targetValues
         self.managedAssetIDs = managedAssetIDs
+        self.sourceAssetID = sourceAssetID
         self.targetAssetID = targetAssetID
-        self.createdDisplayNode = createdDisplayNode
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case path
-        case originalChoices
-        case managedAssetIDs
-        case targetAssetID
-        case createdDisplayNode
-    }
-
-    init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        path = try container.decode(String.self, forKey: .path)
-        originalChoices = try container.decodeIfPresent(Data.self, forKey: .originalChoices)
-        managedAssetIDs = try container.decode([UUID].self, forKey: .managedAssetIDs)
-        targetAssetID = try container.decodeIfPresent(UUID.self, forKey: .targetAssetID)
-        createdDisplayNode = try container.decodeIfPresent(
-            Bool.self,
-            forKey: .createdDisplayNode
-        ) ?? false
     }
 }

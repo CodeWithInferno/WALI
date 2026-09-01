@@ -164,7 +164,7 @@ public struct MediaTranscoder: Sendable {
         }
     }
 
-    private func exportVideo(
+    func exportVideo(
         sourceURL: URL,
         outputURL: URL,
         preview: Bool,
@@ -195,7 +195,8 @@ public struct MediaTranscoder: Sendable {
         let output = AVAssetReaderVideoCompositionOutput(
             videoTracks: [sourceTrack],
             videoSettings: [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferPixelFormatTypeKey as String:
+                    kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
             ]
         )
         output.alwaysCopiesSampleData = false
@@ -313,9 +314,10 @@ public struct MediaTranscoder: Sendable {
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: plan.bitRate,
                 AVVideoExpectedSourceFrameRateKey: Int(plan.frameRate.rounded()),
-                AVVideoMaxKeyFrameIntervalKey: max(1, Int((plan.frameRate * 2).rounded())),
+                AVVideoMaxKeyFrameIntervalKey: max(1, Int(plan.frameRate.rounded())),
+                AVVideoMaxKeyFrameIntervalDurationKey: 1.0,
                 AVVideoAllowFrameReorderingKey: false,
-                AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main_AutoLevel as String,
+                AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel as String,
             ],
         ]
     }
@@ -351,10 +353,13 @@ public struct MediaTranscoder: Sendable {
         }
     }
 
-    private func videoClaim(kind: MediaArtifactKind, url: URL) async throws -> MediaArtifactClaim {
+    func videoClaim(kind: MediaArtifactKind, url: URL) async throws -> MediaArtifactClaim {
         let inspection = try await inspector.inspectVideo(at: url)
         guard !inspection.hasAudio,
-              inspection.videoCodec == "hvc1" || inspection.videoCodec == "hev1"
+              !inspection.isHDR,
+              inspection.videoCodec == "hvc1" || inspection.videoCodec == "hev1",
+              inspection.bitDepth == 10,
+              inspection.hevcProfileIDC == 2
         else {
             throw MediaPipelineError.outputVerificationFailed(kind)
         }

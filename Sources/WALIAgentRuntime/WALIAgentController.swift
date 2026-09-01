@@ -252,7 +252,7 @@ public final class WALIAgentController: WALIUIActionHandling {
         }
         try await lockScreenContinuity.validate(
             enabled: true,
-            assignments: Self.lockScreenAssignments(from: snapshot)
+            assignments: try await lockScreenAssignments(from: snapshot)
         )
     }
 
@@ -775,24 +775,56 @@ public final class WALIAgentController: WALIUIActionHandling {
 
     private func reconcileLockScreen(_ snapshot: EngineSnapshot) async throws {
         guard let lockScreenContinuity else { return }
+        let assignments: [LockScreenWallpaperAssignment] = if snapshot.preferences.lockScreenContinuityEnabled {
+            try await lockScreenAssignments(from: snapshot)
+        } else {
+            []
+        }
         _ = try await lockScreenContinuity.reconcile(
             enabled: snapshot.preferences.lockScreenContinuityEnabled,
-            assignments: Self.lockScreenAssignments(from: snapshot)
+            assignments: assignments
         )
     }
 
-    private static func lockScreenAssignments(
+    private func lockScreenAssignments(
         from snapshot: EngineSnapshot
+    ) async throws -> [LockScreenWallpaperAssignment] {
+        guard let runtimeStore else { throw WALIAgentRuntimeError.storageUnavailable }
+        return Self.lockScreenAssignments(
+            from: snapshot,
+            durable: try await runtimeStore.snapshot()
+        )
+    }
+
+    nonisolated static func lockScreenAssignments(
+        from snapshot: EngineSnapshot,
+        durable: RuntimeSnapshot
     ) -> [LockScreenWallpaperAssignment] {
         let items = Dictionary(uniqueKeysWithValues: snapshot.items.map { ($0.id, $0) })
+        let records = Dictionary(uniqueKeysWithValues: durable.library.compactMap { record in
+            UUID(uuidString: record.item.id.rawValue).map { ($0, record) }
+        })
         return snapshot.displays.compactMap { display in
             guard display.isOnline,
                   let itemID = display.assignedItemID,
                   let item = items[itemID] else { return nil }
+            let record = records[itemID]
+            let masterArtifact = record?.artifacts.first(where: { $0.role == .masterVideo })
+            let posterArtifact = record?.artifacts.first(where: { $0.role == .posterImage })
+            let masterBitDepth = record.flatMap { record -> UInt16? in
+                guard let masterID = masterArtifact?.digest else { return nil }
+                return record.release.artifacts.first(where: {
+                    $0.contentID == masterID
+                })?.characteristics.bitDepth
+            }
             return LockScreenWallpaperAssignment(
                 displayID: display.id,
+                isMain: display.isMain,
                 itemID: itemID,
                 name: item.name,
+                masterBitDepth: masterBitDepth,
+                masterArtifactSHA256: masterArtifact?.digest.value,
+                posterArtifactSHA256: posterArtifact?.digest.value,
                 masterURL: item.masterURL,
                 posterURL: item.posterURL
             )

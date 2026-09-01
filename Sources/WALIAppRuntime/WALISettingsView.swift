@@ -49,10 +49,10 @@ public struct WALISettingsView: View {
 
                 Section("Lock Screen") {
                     Toggle(
-                        "Show the current wallpaper after locking",
+                        "Show the main display wallpaper after locking",
                         isOn: $draft.lockScreenContinuityEnabled
                     )
-                    Text("Uses an independent playback timeline for this signed-in session. It is unavailable at FileVault startup. Turning it off restores choices still managed by WALI.")
+                    Text("Uses one global, independent playback timeline for this signed-in session. It is unavailable at FileVault startup. Turning it off restores the prior wallpaper choices when they remain safe to restore.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 

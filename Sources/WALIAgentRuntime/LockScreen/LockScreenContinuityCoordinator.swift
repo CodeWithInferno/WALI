@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 public enum LockScreenCompatibilityEpoch {
     public static let supportedSystemBuilds: Set<String> = ["25F80"]
     public static let manifestEpoch = 1
-    public static let manifestRevision = 0
+    public static let manifestRevision = 1
 
     public static func currentSystemBuild() -> String {
         var size = 0
@@ -74,21 +74,33 @@ public struct LockScreenStorePaths: Sendable, Hashable {
 
 public struct LockScreenWallpaperAssignment: Sendable, Hashable {
     public let displayID: String
+    public let isMain: Bool
     public let itemID: UUID
     public let name: String
+    public let masterBitDepth: UInt16?
+    public let masterArtifactSHA256: String?
+    public let posterArtifactSHA256: String?
     public let masterURL: URL
     public let posterURL: URL
 
     public init(
         displayID: String,
+        isMain: Bool,
         itemID: UUID,
         name: String,
+        masterBitDepth: UInt16?,
+        masterArtifactSHA256: String?,
+        posterArtifactSHA256: String?,
         masterURL: URL,
         posterURL: URL
     ) {
         self.displayID = displayID
+        self.isMain = isMain
         self.itemID = itemID
         self.name = name
+        self.masterBitDepth = masterBitDepth
+        self.masterArtifactSHA256 = masterArtifactSHA256
+        self.posterArtifactSHA256 = posterArtifactSHA256
         self.masterURL = masterURL
         self.posterURL = posterURL
     }
@@ -105,6 +117,7 @@ public struct LockScreenContinuityResult: Sendable, Hashable {
 /// the user's live Apple wallpaper store.
 public actor LockScreenContinuityCoordinator {
     public typealias RefreshHandler = @Sendable () async -> ()
+    public typealias QuiesceHandler = @Sendable () async throws -> ()
     public typealias PermissionPreflight = @Sendable ([URL]) throws -> Void
 
     private static let maximumMasterBytes: UInt64 = 4 * 1_024 * 1_024 * 1_024
@@ -118,21 +131,26 @@ public actor LockScreenContinuityCoordinator {
     private let ownedLibraryRoot: URL
     private let systemBuild: String
     private let refreshHandler: RefreshHandler
+    private let quiesceHandler: QuiesceHandler
     private let permissionPreflight: PermissionPreflight
     private let permissionClock = ContinuousClock()
     private var permissionPreflightValidUntil: ContinuousClock.Instant?
+    private var reconciliationActive = false
+    private var reconciliationWaiters: [CheckedContinuation<Void, Never>] = []
 
     public init(
         paths: LockScreenStorePaths,
         ownedLibraryRoot: URL,
         systemBuild: String = LockScreenCompatibilityEpoch.currentSystemBuild(),
         refreshHandler: @escaping RefreshHandler = {},
+        quiesceHandler: @escaping QuiesceHandler = {},
         permissionPreflight: PermissionPreflight? = nil
     ) {
         self.paths = paths
         self.ownedLibraryRoot = ownedLibraryRoot.standardizedFileURL
         self.systemBuild = systemBuild
         self.refreshHandler = refreshHandler
+        self.quiesceHandler = quiesceHandler
         self.permissionPreflight = permissionPreflight ?? { directories in
             for directory in directories {
                 try LockScreenFileIO.requireTransactionalWriteAccess(to: directory)
@@ -148,13 +166,16 @@ public actor LockScreenContinuityCoordinator {
             paths: .live(waliMetadataDirectory: waliMetadataDirectory),
             ownedLibraryRoot: ownedLibraryRoot,
             refreshHandler: {
-                await MainActor.run {
-                    for application in NSRunningApplication.runningApplications(
-                        withBundleIdentifier: "com.apple.wallpaper.agent"
-                    ) {
-                        _ = application.terminate()
-                    }
-                }
+                await Self.terminateApplications(bundleIdentifiers: [
+                    "com.apple.wallpaper.agent",
+                    "com.apple.wallpaper.extension.aerials",
+                ])
+            },
+            quiesceHandler: {
+                await Self.terminateApplications(bundleIdentifiers: [
+                    "com.apple.wallpaper.agent",
+                ])
+                try await Task.sleep(for: .seconds(1))
             }
         )
     }
@@ -176,91 +197,154 @@ public actor LockScreenContinuityCoordinator {
         enabled: Bool,
         assignments: [LockScreenWallpaperAssignment]
     ) async throws -> LockScreenContinuityResult {
+        await acquireReconciliationAccess()
+        var holdsReconciliationAccess = true
+        defer {
+            if holdsReconciliationAccess { releaseReconciliationAccess() }
+        }
+        try Task.checkCancellation()
         if !enabled, !hasOwnedJournal {
             return .init(changed: false, registeredAssets: 0, patchedNodes: 0)
         }
-        let plan = try makePreflightPlan(enabled: enabled, assignments: assignments)
-        let transactionID = UUID()
-        let eligible = plan.eligible
-        let grouped = Dictionary(grouping: eligible, by: \.itemID)
-
-        if eligible.isEmpty {
-            let cleanupIDs = plan.manifestOwnedIDs.union(plan.journalOwnedIDs)
-            try saveAssetJournal(.init(
-                transactionID: transactionID,
-                phase: .prepared,
-                records: cleanupIDs.sorted(by: { $0.uuidString < $1.uuidString }).map {
-                    .init(id: $0, mayRemove: true)
-                },
-                refreshPending: true
-            ))
-            let storeResult = try WallpaperStoreEditor(
-                indexURL: paths.indexURL,
-                journalURL: paths.journalURL
-            ).reconcile(assignments: [], knownOwnedAssetIDs: cleanupIDs)
-            let manifestResult = try AerialManifestEditor(
-                manifestURL: paths.manifestURL
-            ).reconcile(registrations: [])
-            try removeOwnedFiles(ids: manifestResult.removedAssetIDs.union(cleanupIDs))
-            let shouldRefresh = storeResult.changed
-                || manifestResult.changed
-                || !cleanupIDs.isEmpty
-                || plan.refreshPending
-            let pendingJournal = LockScreenAssetJournal(
-                transactionID: transactionID,
-                phase: .committed,
-                records: [],
-                refreshPending: shouldRefresh
-            )
-            try saveAssetJournal(pendingJournal)
-            if shouldRefresh { await refreshHandler() }
-            try finalizeRefresh(for: pendingJournal, removeJournals: true)
-            return .init(changed: shouldRefresh, registeredAssets: 0, patchedNodes: 0)
+        var plan = try makePreflightPlan(enabled: enabled, assignments: assignments)
+        var didQuiesce = false
+        if plan.requiresTransactionMutation {
+            try await quiesceHandler()
+            didQuiesce = true
+            plan = try makePreflightPlan(enabled: enabled, assignments: assignments)
+        }
+        if !plan.recoveryActions.isEmpty {
+            guard didQuiesce else {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A transaction recovery sibling cannot be finalized before quiescing."
+                )
+            }
+            for action in plan.recoveryActions {
+                try LockScreenFileIO.finalizeRecoveryFile(
+                    action.url,
+                    expectedDigest: action.digest,
+                    maximumBytes: action.maximumBytes
+                )
+            }
+            plan = try makePreflightPlan(enabled: enabled, assignments: assignments)
         }
 
-        let manifestEditor = AerialManifestEditor(manifestURL: paths.manifestURL)
+        if !plan.requiresTransactionMutation {
+            let shouldRefresh = plan.refreshPending
+            let currentJournal = try loadAssetJournal()
+            releaseReconciliationAccess()
+            holdsReconciliationAccess = false
+            if shouldRefresh {
+                await refreshHandler()
+                try finalizeRefresh(
+                    for: currentJournal,
+                    removeJournals: plan.eligible.isEmpty
+                )
+            }
+            return .init(
+                changed: shouldRefresh,
+                registeredAssets: plan.desiredIDs.count,
+                patchedNodes: 0
+            )
+        }
+        guard didQuiesce else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "The Lock Screen transaction changed after preview and was not allowed to write."
+            )
+        }
+
+        let transactionID = plan.transactionID
+        let eligible = plan.eligible
+        let grouped = Dictionary(grouping: eligible, by: \.itemID)
         let desiredIDs = plan.desiredIDs
-        let preparedIDs = plan.manifestOwnedIDs.union(plan.journalOwnedIDs).union(desiredIDs)
-        guard preparedIDs.count <= Self.maximumAssetJournalRecords else {
+        guard plan.preparedRecords.count <= Self.maximumAssetJournalRecords else {
             throw LockScreenCompatibilityError.ownershipConflict(
                 "The interrupted asset journal exceeds WALI’s recovery bound."
             )
         }
-        try saveAssetJournal(.init(
+        let preparedJournal = LockScreenAssetJournal(
             transactionID: transactionID,
             phase: .prepared,
-            records: preparedIDs.sorted(by: { $0.uuidString < $1.uuidString }).map {
-                .init(id: $0, mayRemove: true)
-            },
+            records: plan.preparedRecords,
             refreshPending: true
-        ))
+        )
+        try saveAssetJournal(preparedJournal)
 
-        var copiedFiles = false
+        let records = Dictionary(uniqueKeysWithValues: plan.preparedRecords.map { ($0.id, $0) })
+        let ownershipMarker = Self.assetOwnershipMarker(for: transactionID)
+        var assetFilesChanged = false
         var registrations: [AerialAssetRegistration] = []
-        for itemID in grouped.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
-            guard let assignment = grouped[itemID]?.first else { continue }
-            let videoURL = paths.videosDirectory.appendingPathComponent(
-                "\(itemID.uuidString.uppercased()).mov",
-                isDirectory: false
-            )
-            let thumbnailURL = paths.thumbnailsDirectory.appendingPathComponent(
-                "\(itemID.uuidString.uppercased()).png",
-                isDirectory: false
-            )
-            copiedFiles = try installVideo(from: assignment.masterURL, to: videoURL) || copiedFiles
-            guard let thumbnailData = plan.thumbnailDataByID[itemID] else {
-                throw LockScreenCompatibilityError.assetRejected("A prepared thumbnail is missing.")
+        for itemID in desiredIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let assignment = grouped[itemID]?.first,
+                  let asset = plan.desiredAssets[itemID],
+                  let record = records[itemID] else {
+                throw LockScreenCompatibilityError.assetRejected("A prepared asset is missing.")
             }
-            copiedFiles = try installThumbnail(thumbnailData, to: thumbnailURL) || copiedFiles
+            assetFilesChanged = try LockScreenFileIO.atomicInstallCopy(
+                from: asset.videoSourceURL,
+                to: assetVideoURL(for: itemID),
+                expectedDigest: record.video.expectedDigest,
+                targetDigest: asset.videoDigest,
+                maximumBytes: Self.maximumMasterBytes,
+                ownershipMarker: ownershipMarker,
+                recoveryURL: assetRecoveryURL(
+                    for: itemID,
+                    role: "video",
+                    transactionID: transactionID
+                )
+            ) || assetFilesChanged
+            assetFilesChanged = try LockScreenFileIO.atomicInstallData(
+                asset.thumbnailData,
+                to: assetThumbnailURL(for: itemID),
+                expectedDigest: record.thumbnail.expectedDigest,
+                targetDigest: asset.thumbnailDigest,
+                maximumBytes: Self.maximumPNGBytes,
+                ownershipMarker: ownershipMarker,
+                recoveryURL: assetRecoveryURL(
+                    for: itemID,
+                    role: "thumbnail",
+                    transactionID: transactionID
+                )
+            ) { staged in
+                guard CGImageSourceCreateWithURL(staged as CFURL, nil) != nil else {
+                    throw LockScreenCompatibilityError.assetRejected(
+                        "The staged PNG could not be decoded."
+                    )
+                }
+            } || assetFilesChanged
             registrations.append(.init(
                 id: itemID,
                 name: assignment.name,
-                videoURL: videoURL,
-                thumbnailURL: thumbnailURL
+                videoURL: assetVideoURL(for: itemID),
+                thumbnailURL: assetThumbnailURL(for: itemID)
             ))
         }
+        for record in plan.preparedRecords where !desiredIDs.contains(record.id) {
+            assetFilesChanged = try LockScreenFileIO.atomicRemove(
+                assetVideoURL(for: record.id),
+                expectedDigest: record.video.expectedDigest,
+                maximumBytes: Self.maximumMasterBytes,
+                recoveryURL: assetRecoveryURL(
+                    for: record.id,
+                    role: "video",
+                    transactionID: transactionID
+                )
+            ) || assetFilesChanged
+            assetFilesChanged = try LockScreenFileIO.atomicRemove(
+                assetThumbnailURL(for: record.id),
+                expectedDigest: record.thumbnail.expectedDigest,
+                maximumBytes: Self.maximumPNGBytes,
+                recoveryURL: assetRecoveryURL(
+                    for: record.id,
+                    role: "thumbnail",
+                    transactionID: transactionID
+                )
+            ) || assetFilesChanged
+        }
 
-        let manifestResult = try manifestEditor.reconcile(registrations: registrations)
+        let manifestResult = try AerialManifestEditor(
+            manifestURL: paths.manifestURL
+        ).reconcile(registrations: registrations)
         let storeResult = try WallpaperStoreEditor(
             indexURL: paths.indexURL,
             journalURL: paths.journalURL
@@ -268,27 +352,21 @@ public actor LockScreenContinuityCoordinator {
             assignments: plan.storeAssignments,
             knownOwnedAssetIDs: plan.manifestOwnedIDs.union(plan.journalOwnedIDs).union(desiredIDs)
         )
-        try removeOwnedFiles(
-            ids: manifestResult.removedAssetIDs.union(plan.journalOwnedIDs.subtracting(desiredIDs))
-        )
-        let shouldRefresh = copiedFiles
+        let shouldRefresh = assetFilesChanged
             || manifestResult.changed
             || storeResult.changed
             || plan.refreshPending
-        let committedRecords = desiredIDs.sorted(by: { $0.uuidString < $1.uuidString }).map {
-            LockScreenAssetJournalRecord(id: $0, mayRemove: true)
-        }
         let pendingJournal = LockScreenAssetJournal(
             transactionID: transactionID,
             phase: .committed,
-            records: committedRecords,
+            records: plan.committedRecords,
             refreshPending: shouldRefresh
         )
         try saveAssetJournal(pendingJournal)
-        if shouldRefresh {
-            await refreshHandler()
-            try finalizeRefresh(for: pendingJournal, removeJournals: false)
-        }
+        releaseReconciliationAccess()
+        holdsReconciliationAccess = false
+        if shouldRefresh { await refreshHandler() }
+        try finalizeRefresh(for: pendingJournal, removeJournals: eligible.isEmpty)
         return .init(
             changed: shouldRefresh,
             registeredAssets: registrations.count,
@@ -357,18 +435,54 @@ public actor LockScreenContinuityCoordinator {
         guard grouped.count <= AerialManifestEditor.maximumOwnedAssets else {
             throw LockScreenCompatibilityError.assetRejected("At most eight Lock Screen wallpapers can be active.")
         }
+        var desiredAssets: [UUID: PreparedLockScreenAsset] = [:]
         for assignment in eligible {
+            guard assignment.masterBitDepth == 10 else {
+                throw LockScreenCompatibilityError.assetRejected(
+                    "Re-import this wallpaper to prepare a verified 10-bit Lock Screen master."
+                )
+            }
             try validateOwnedSource(assignment.masterURL, maximumBytes: Self.maximumMasterBytes)
             try validateOwnedSource(assignment.posterURL, maximumBytes: Self.maximumPosterBytes)
-        }
-        var thumbnailDataByID: [UUID: Data] = [:]
-        for (itemID, assignments) in grouped {
-            guard let assignment = assignments.first else { continue }
+            let expectedMasterDigest = try Self.persistedDigest(
+                assignment.masterArtifactSHA256,
+                role: "master"
+            )
+            let expectedPosterDigest = try Self.persistedDigest(
+                assignment.posterArtifactSHA256,
+                role: "poster"
+            )
+            let masterDigest = try LockScreenFileIO.sha256(
+                of: assignment.masterURL,
+                maximumBytes: Self.maximumMasterBytes
+            )
+            let posterDigest = try LockScreenFileIO.sha256(
+                of: assignment.posterURL,
+                maximumBytes: Self.maximumPosterBytes
+            )
+            guard masterDigest == expectedMasterDigest, posterDigest == expectedPosterDigest else {
+                throw LockScreenCompatibilityError.assetRejected(
+                    "The verified library copy changed. Re-import this wallpaper before enabling Lock Screen continuity."
+                )
+            }
             let png = try Self.makePNG(from: assignment.posterURL)
             guard png.count <= Self.maximumPNGBytes else {
                 throw LockScreenCompatibilityError.assetRejected("The generated thumbnail is too large.")
             }
-            thumbnailDataByID[itemID] = png
+            guard try LockScreenFileIO.sha256(
+                of: assignment.posterURL,
+                maximumBytes: Self.maximumPosterBytes
+            ) == expectedPosterDigest else {
+                throw LockScreenCompatibilityError.assetRejected(
+                    "The verified poster changed while preparing it. Re-import this wallpaper."
+                )
+            }
+            desiredAssets[assignment.itemID] = .init(
+                videoSourceURL: assignment.masterURL,
+                videoDigest: masterDigest,
+                thumbnailData: png,
+                thumbnailDigest: LockScreenFileIO.sha256(of: png)
+            )
         }
 
         let desiredIDs = Set(grouped.keys)
@@ -376,33 +490,169 @@ public actor LockScreenContinuityCoordinator {
             manifestURL: paths.manifestURL
         ).preflight(desiredAssetIDs: desiredIDs)
         let assetJournal = try loadAssetJournal()
-        let journalOwnedIDs = Set(assetJournal.records.filter(\.mayRemove).map(\.id))
-        try preflightDestinations(
-            desiredIDs: desiredIDs,
-            ownedIDs: manifestOwnedIDs.union(journalOwnedIDs)
-        )
-        try preflightOwnedFiles(ids: manifestOwnedIDs.union(journalOwnedIDs).subtracting(desiredIDs))
+        let transactionID: UUID
+        if assetJournal.phase == .prepared {
+            guard let preparedTransactionID = assetJournal.transactionID else {
+                throw LockScreenCompatibilityError.unsupportedSchema(
+                    "A prepared WALI asset journal has no recovery transaction identifier."
+                )
+            }
+            transactionID = preparedTransactionID
+        } else {
+            transactionID = UUID()
+        }
+        let journalOwnedIDs = Set(assetJournal.records.map(\.id))
+        guard manifestOwnedIDs.isSubset(of: journalOwnedIDs) else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A WALI manifest asset has no digest-backed ownership journal."
+            )
+        }
+        let journalRecords = Dictionary(uniqueKeysWithValues: assetJournal.records.map { ($0.id, $0) })
+        var preparedRecords: [LockScreenAssetJournalRecord] = []
+        var recoveryActions: [LockScreenAssetRecoveryAction] = []
+        var assetFilesChanged = false
+        for id in journalOwnedIDs.union(desiredIDs).sorted(by: { $0.uuidString < $1.uuidString }) {
+            let existing = journalRecords[id]
+            let videoURL = assetVideoURL(for: id)
+            let thumbnailURL = assetThumbnailURL(for: id)
+            let videoRecoveryURL = assetRecoveryURL(
+                for: id,
+                role: "video",
+                transactionID: transactionID
+            )
+            let thumbnailRecoveryURL = assetRecoveryURL(
+                for: id,
+                role: "thumbnail",
+                transactionID: transactionID
+            )
+            let observedVideo = try observedDigest(
+                at: videoURL,
+                maximumBytes: Self.maximumMasterBytes,
+                authorizedBy: existing?.video
+            )
+            let observedThumbnail = try observedDigest(
+                at: thumbnailURL,
+                maximumBytes: Self.maximumPNGBytes,
+                authorizedBy: existing?.thumbnail
+            )
+            if assetJournal.phase == .prepared, let existing {
+                let ownershipMarker = Self.assetOwnershipMarker(for: transactionID)
+                try validatePreparedTargetProvenance(
+                    at: videoURL,
+                    observedDigest: observedVideo,
+                    transition: existing.video,
+                    ownershipMarker: ownershipMarker
+                )
+                try validatePreparedTargetProvenance(
+                    at: thumbnailURL,
+                    observedDigest: observedThumbnail,
+                    transition: existing.thumbnail,
+                    ownershipMarker: ownershipMarker
+                )
+                if let action = try recoveryAction(
+                    at: videoRecoveryURL,
+                    destinationDigest: observedVideo,
+                    transition: existing.video,
+                    ownershipMarker: ownershipMarker,
+                    maximumBytes: Self.maximumMasterBytes
+                ) {
+                    recoveryActions.append(action)
+                }
+                if let action = try recoveryAction(
+                    at: thumbnailRecoveryURL,
+                    destinationDigest: observedThumbnail,
+                    transition: existing.thumbnail,
+                    ownershipMarker: ownershipMarker,
+                    maximumBytes: Self.maximumPNGBytes
+                ) {
+                    recoveryActions.append(action)
+                }
+            } else if try LockScreenFileIO.nodeExists(videoRecoveryURL)
+                        || LockScreenFileIO.nodeExists(thumbnailRecoveryURL) {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A transaction recovery path was already occupied before journal publication."
+                )
+            }
+            let targetVideo = desiredAssets[id]?.videoDigest
+            let targetThumbnail = desiredAssets[id]?.thumbnailDigest
+            assetFilesChanged = assetFilesChanged
+                || observedVideo != targetVideo
+                || observedThumbnail != targetThumbnail
+            if targetVideo != nil || targetThumbnail != nil
+                || observedVideo != nil || observedThumbnail != nil {
+                preparedRecords.append(.init(
+                    id: id,
+                    video: .init(expectedDigest: observedVideo, targetDigest: targetVideo),
+                    thumbnail: .init(
+                        expectedDigest: observedThumbnail,
+                        targetDigest: targetThumbnail
+                    )
+                ))
+            }
+        }
+        let committedRecords = desiredIDs.sorted(by: { $0.uuidString < $1.uuidString }).compactMap {
+            id -> LockScreenAssetJournalRecord? in
+            guard let asset = desiredAssets[id] else { return nil }
+            return .init(
+                id: id,
+                video: .init(expectedDigest: asset.videoDigest, targetDigest: asset.videoDigest),
+                thumbnail: .init(
+                    expectedDigest: asset.thumbnailDigest,
+                    targetDigest: asset.thumbnailDigest
+                )
+            )
+        }
         let storeAssignments = try eligible.map { assignment -> WallpaperStoreAssignment in
             guard let displayID = Self.displayUUID(from: assignment.displayID) else {
                 throw LockScreenCompatibilityError.assetRejected("A display does not expose a stable UUID.")
             }
             return WallpaperStoreAssignment(displayUUID: displayID, assetID: assignment.itemID)
         }
-        try WallpaperStoreEditor(
+        let storePreview = try WallpaperStoreEditor(
             indexURL: paths.indexURL,
             journalURL: paths.journalURL
         ).preflight(
             assignments: storeAssignments,
             knownOwnedAssetIDs: manifestOwnedIDs.union(journalOwnedIDs).union(desiredIDs)
         )
+        let registrations = grouped.keys.sorted(by: { $0.uuidString < $1.uuidString }).compactMap {
+            itemID -> AerialAssetRegistration? in
+            guard let assignment = grouped[itemID]?.first else { return nil }
+            return .init(
+                id: itemID,
+                name: assignment.name,
+                videoURL: paths.videosDirectory.appendingPathComponent(
+                    "\(itemID.uuidString.uppercased()).mov"
+                ),
+                thumbnailURL: paths.thumbnailsDirectory.appendingPathComponent(
+                    "\(itemID.uuidString.uppercased()).png"
+                )
+            )
+        }
+        let manifestPreview = try AerialManifestEditor(
+            manifestURL: paths.manifestURL
+        ).preview(registrations: registrations)
+        let requiresManagedStoreMutation = storePreview.changed || manifestPreview.changed
+        let requiresJournalCommit = assetJournal.phase != .committed
+            || assetJournal.records != committedRecords
         return .init(
+            transactionID: transactionID,
             eligible: eligible,
             desiredIDs: desiredIDs,
             manifestOwnedIDs: manifestOwnedIDs,
             journalOwnedIDs: journalOwnedIDs,
             refreshPending: assetJournal.refreshPending,
-            thumbnailDataByID: thumbnailDataByID,
-            storeAssignments: storeAssignments
+            desiredAssets: desiredAssets,
+            preparedRecords: preparedRecords,
+            committedRecords: committedRecords,
+            recoveryActions: recoveryActions,
+            storeAssignments: storeAssignments,
+            requiresManagedStoreMutation: requiresManagedStoreMutation,
+            requiresTransactionMutation: assetFilesChanged
+                || requiresManagedStoreMutation
+                || requiresJournalCommit
+                || !recoveryActions.isEmpty
+                || (eligible.isEmpty && hasOwnedJournal)
         )
     }
 
@@ -411,19 +661,59 @@ public actor LockScreenContinuityCoordinator {
             || FileManager.default.fileExists(atPath: paths.assetJournalURL.path)
     }
 
+    /// Quiescing and refreshing suspend this actor. Keep the complete
+    /// cross-file transaction single-flight so a later reconcile cannot copy
+    /// or remove assets underneath an earlier suspended invocation.
+    private func acquireReconciliationAccess() async {
+        guard reconciliationActive else {
+            reconciliationActive = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            reconciliationWaiters.append(continuation)
+        }
+    }
+
+    private func releaseReconciliationAccess() {
+        guard !reconciliationWaiters.isEmpty else {
+            reconciliationActive = false
+            return
+        }
+        reconciliationWaiters.removeFirst().resume()
+    }
+
     private func eligibleAssignments(
         _ assignments: [LockScreenWallpaperAssignment]
     ) throws -> [LockScreenWallpaperAssignment] {
         var seenDisplays: Set<UUID> = []
-        var result: [LockScreenWallpaperAssignment] = []
+        var mainAssignment: LockScreenWallpaperAssignment?
         for assignment in assignments {
             guard let displayID = Self.displayUUID(from: assignment.displayID) else { continue }
             guard seenDisplays.insert(displayID).inserted else {
                 throw LockScreenCompatibilityError.assetRejected("A display assignment is duplicated.")
             }
-            result.append(assignment)
+            if assignment.isMain {
+                guard mainAssignment == nil else {
+                    throw LockScreenCompatibilityError.assetRejected(
+                        "More than one active display is marked as the main display."
+                    )
+                }
+                mainAssignment = assignment
+            }
         }
-        return result
+        return mainAssignment.map { [$0] } ?? []
+    }
+
+    private static func terminateApplications(bundleIdentifiers: Set<String>) async {
+        await MainActor.run {
+            for bundleIdentifier in bundleIdentifiers {
+                for application in NSRunningApplication.runningApplications(
+                    withBundleIdentifier: bundleIdentifier
+                ) {
+                    if !application.terminate() { _ = application.forceTerminate() }
+                }
+            }
+        }
     }
 
     private static func displayUUID(from stableID: String) -> UUID? {
@@ -446,80 +736,131 @@ public actor LockScreenContinuityCoordinator {
         }
     }
 
-    private func installVideo(from source: URL, to destination: URL) throws -> Bool {
-        if try LockScreenFileIO.nodeExists(destination) {
-            try LockScreenFileIO.requireRegularFile(destination, maximumBytes: Self.maximumMasterBytes)
-            if FileManager.default.contentsEqual(atPath: source.path, andPath: destination.path) {
-                return false
-            }
+    private static func persistedDigest(_ value: String?, role: String) throws -> Data {
+        guard let value,
+              value.utf8.count == 64,
+              value == value.lowercased() else {
+            throw LockScreenCompatibilityError.assetRejected(
+                "The persisted \(role) identity is missing. Re-import this wallpaper."
+            )
         }
-        try LockScreenFileIO.atomicCopy(
-            from: source,
-            to: destination,
-            maximumBytes: Self.maximumMasterBytes
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(32)
+        var index = value.startIndex
+        while index < value.endIndex {
+            let next = value.index(index, offsetBy: 2)
+            guard let byte = UInt8(value[index..<next], radix: 16) else {
+                throw LockScreenCompatibilityError.assetRejected(
+                    "The persisted \(role) identity is invalid. Re-import this wallpaper."
+                )
+            }
+            bytes.append(byte)
+            index = next
+        }
+        return Data(bytes)
+    }
+
+    private static func assetOwnershipMarker(for transactionID: UUID) -> Data {
+        Data(transactionID.uuidString.lowercased().utf8)
+    }
+
+    private func assetVideoURL(for id: UUID) -> URL {
+        paths.videosDirectory.appendingPathComponent(
+            "\(id.uuidString.uppercased()).mov",
+            isDirectory: false
         )
-        return true
     }
 
-    private func preflightDestinations(desiredIDs: Set<UUID>, ownedIDs: Set<UUID>) throws {
-        for id in desiredIDs {
-            let video = paths.videosDirectory.appendingPathComponent(
-                "\(id.uuidString.uppercased()).mov",
-                isDirectory: false
+    private func assetThumbnailURL(for id: UUID) -> URL {
+        paths.thumbnailsDirectory.appendingPathComponent(
+            "\(id.uuidString.uppercased()).png",
+            isDirectory: false
+        )
+    }
+
+    private func assetRecoveryURL(
+        for id: UUID,
+        role: String,
+        transactionID: UUID
+    ) -> URL {
+        let directory = role == "video" ? paths.videosDirectory : paths.thumbnailsDirectory
+        return directory.appendingPathComponent(
+            ".wali-\(transactionID.uuidString.lowercased())-"
+                + "\(id.uuidString.lowercased()).\(role)-recovery",
+            isDirectory: false
+        )
+    }
+
+    private func recoveryAction(
+        at url: URL,
+        destinationDigest: Data?,
+        transition: LockScreenAssetFileTransition,
+        ownershipMarker: Data,
+        maximumBytes: UInt64
+    ) throws -> LockScreenAssetRecoveryAction? {
+        guard try LockScreenFileIO.nodeExists(url) else { return nil }
+        let recoveryDigest = try LockScreenFileIO.sha256(of: url, maximumBytes: maximumBytes)
+        let hasOwnershipMarker = try LockScreenFileIO.hasOwnershipMarker(
+            at: url,
+            expected: ownershipMarker
+        )
+        let isOwnedStage = destinationDigest == transition.expectedDigest
+            && hasOwnershipMarker
+        let isDisplacedExpected = recoveryDigest == transition.expectedDigest
+            && destinationDigest == transition.targetDigest
+        guard isOwnedStage || isDisplacedExpected else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A transaction recovery sibling does not match its journaled asset transition."
             )
-            let thumbnail = paths.thumbnailsDirectory.appendingPathComponent(
-                "\(id.uuidString.uppercased()).png",
-                isDirectory: false
+        }
+        return .init(url: url, digest: recoveryDigest, maximumBytes: maximumBytes)
+    }
+
+    private func validatePreparedTargetProvenance(
+        at url: URL,
+        observedDigest: Data?,
+        transition: LockScreenAssetFileTransition,
+        ownershipMarker: Data
+    ) throws {
+        guard transition.expectedDigest != transition.targetDigest,
+              let targetDigest = transition.targetDigest,
+              observedDigest == targetDigest else {
+            return
+        }
+        guard try LockScreenFileIO.hasOwnershipMarker(at: url, expected: ownershipMarker) else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A prepared Lock Screen target lacks its transaction ownership marker."
             )
-            if try LockScreenFileIO.nodeExists(video) {
-                guard ownedIDs.contains(id) else {
-                    throw LockScreenCompatibilityError.ownershipConflict(
-                        "A non-WALI video already uses the requested asset filename."
-                    )
-                }
-                try LockScreenFileIO.requireRegularFile(video, maximumBytes: Self.maximumMasterBytes)
-            }
-            if try LockScreenFileIO.nodeExists(thumbnail) {
-                guard ownedIDs.contains(id) else {
-                    throw LockScreenCompatibilityError.ownershipConflict(
-                        "A non-WALI thumbnail already uses the requested asset filename."
-                    )
-                }
-                try LockScreenFileIO.requireRegularFile(thumbnail, maximumBytes: Self.maximumPNGBytes)
-            }
         }
     }
 
-    private func preflightOwnedFiles(ids: Set<UUID>) throws {
-        for id in ids {
-            let video = paths.videosDirectory.appendingPathComponent(
-                "\(id.uuidString.uppercased()).mov",
-                isDirectory: false
+    private func observedDigest(
+        at url: URL,
+        maximumBytes: UInt64,
+        authorizedBy transition: LockScreenAssetFileTransition?
+    ) throws -> Data? {
+        guard try LockScreenFileIO.nodeExists(url) else {
+            guard transition == nil
+                    || transition?.expectedDigest == nil
+                    || transition?.targetDigest == nil else {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A digest-journaled Lock Screen asset file is missing."
+                )
+            }
+            return nil
+        }
+        guard let transition else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "An unjournaled file already uses a requested Lock Screen asset path."
             )
-            let thumbnail = paths.thumbnailsDirectory.appendingPathComponent(
-                "\(id.uuidString.uppercased()).png",
-                isDirectory: false
+        }
+        let digest = try LockScreenFileIO.sha256(of: url, maximumBytes: maximumBytes)
+        guard digest == transition.expectedDigest || digest == transition.targetDigest else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A digest-journaled Lock Screen asset changed outside WALI."
             )
-            if try LockScreenFileIO.nodeExists(video) {
-                try LockScreenFileIO.requireRegularFile(video, maximumBytes: Self.maximumMasterBytes)
-            }
-            if try LockScreenFileIO.nodeExists(thumbnail) {
-                try LockScreenFileIO.requireRegularFile(thumbnail, maximumBytes: Self.maximumPNGBytes)
-            }
         }
-    }
-
-    private func installThumbnail(_ png: Data, to destination: URL) throws -> Bool {
-        if try LockScreenFileIO.nodeExists(destination) {
-            try LockScreenFileIO.requireRegularFile(destination, maximumBytes: Self.maximumPNGBytes)
-            if try Data(contentsOf: destination, options: [.mappedIfSafe]) == png { return false }
-        }
-        try LockScreenFileIO.atomicWrite(png, to: destination) { staged in
-            guard CGImageSourceCreateWithURL(staged as CFURL, nil) != nil else {
-                throw LockScreenCompatibilityError.assetRejected("The staged PNG could not be decoded.")
-            }
-        }
-        return true
+        return digest
     }
 
     private static func makePNG(from source: URL) throws -> Data {
@@ -549,42 +890,39 @@ public actor LockScreenContinuityCoordinator {
         return output as Data
     }
 
-    private func removeOwnedFiles(ids: Set<UUID>) throws {
-        for id in ids {
-            try LockScreenFileIO.removeRegularFileIfPresent(
-                paths.videosDirectory.appendingPathComponent(
-                    "\(id.uuidString.uppercased()).mov",
-                    isDirectory: false
-                ),
-                maximumBytes: Self.maximumMasterBytes
-            )
-            try LockScreenFileIO.removeRegularFileIfPresent(
-                paths.thumbnailsDirectory.appendingPathComponent(
-                    "\(id.uuidString.uppercased()).png",
-                    isDirectory: false
-                ),
-                maximumBytes: Self.maximumPNGBytes
-            )
-        }
-    }
-
     private func loadAssetJournal() throws -> LockScreenAssetJournal {
         guard FileManager.default.fileExists(atPath: paths.assetJournalURL.path) else {
             return .init(phase: .committed, records: [])
         }
         try LockScreenFileIO.requireRegularFile(paths.assetJournalURL, maximumBytes: 1_024 * 1_024)
         do {
+            let data = try Data(contentsOf: paths.assetJournalURL)
+            let schema = try JSONDecoder().decode(
+                LockScreenAssetJournalSchema.self,
+                from: data
+            )
+            guard schema.schemaVersion == 2 else {
+                throw LockScreenCompatibilityError.unsupportedSchema(
+                    "The WALI asset journal predates digest-backed ownership and will not be modified."
+                )
+            }
             let journal = try JSONDecoder().decode(
                 LockScreenAssetJournal.self,
-                from: Data(contentsOf: paths.assetJournalURL)
+                from: data
             )
-            guard journal.schemaVersion == 1,
+            guard journal.schemaVersion == 2,
                   journal.records.count <= Self.maximumAssetJournalRecords,
-                  journal.records.allSatisfy(\.mayRemove),
+                  journal.records.allSatisfy(Self.validAssetJournalRecord),
+                  Self.validAssetJournalPhase(journal),
                   Set(journal.records.map(\.id)).count == journal.records.count else {
                 throw LockScreenCompatibilityError.unsupportedSchema("The WALI asset journal is incompatible.")
             }
-            return journal
+            return .init(
+                transactionID: journal.transactionID,
+                phase: journal.phase,
+                records: journal.records.sorted { $0.id.uuidString < $1.id.uuidString },
+                refreshPending: journal.refreshPending
+            )
         } catch let error as LockScreenCompatibilityError {
             throw error
         } catch {
@@ -594,7 +932,8 @@ public actor LockScreenContinuityCoordinator {
 
     private func saveAssetJournal(_ journal: LockScreenAssetJournal) throws {
         guard journal.records.count <= Self.maximumAssetJournalRecords,
-              journal.records.allSatisfy(\.mayRemove),
+              journal.records.allSatisfy(Self.validAssetJournalRecord),
+              Self.validAssetJournalPhase(journal),
               Set(journal.records.map(\.id)).count == journal.records.count else {
             throw LockScreenCompatibilityError.ownershipConflict(
                 "The WALI asset journal exceeds its ownership bound."
@@ -608,9 +947,36 @@ public actor LockScreenContinuityCoordinator {
                 LockScreenAssetJournal.self,
                 from: Data(contentsOf: staged)
             )
-            guard decoded.schemaVersion == 1 else {
+            guard decoded.schemaVersion == 2,
+                  decoded.records.allSatisfy(Self.validAssetJournalRecord),
+                  Self.validAssetJournalPhase(decoded) else {
                 throw LockScreenCompatibilityError.unsupportedSchema("The staged WALI asset journal is incompatible.")
             }
+        }
+    }
+
+    private static func validAssetJournalRecord(_ record: LockScreenAssetJournalRecord) -> Bool {
+        func valid(_ transition: LockScreenAssetFileTransition) -> Bool {
+            let digests = [transition.expectedDigest, transition.targetDigest].compactMap { $0 }
+            return digests.allSatisfy { $0.count == 32 }
+        }
+        return valid(record.video)
+            && valid(record.thumbnail)
+            && [
+                record.video.expectedDigest,
+                record.video.targetDigest,
+                record.thumbnail.expectedDigest,
+                record.thumbnail.targetDigest,
+            ].contains(where: { $0 != nil })
+    }
+
+    private static func validAssetJournalPhase(_ journal: LockScreenAssetJournal) -> Bool {
+        guard journal.phase == .committed else { return true }
+        return journal.records.allSatisfy { record in
+            record.video.expectedDigest != nil
+                && record.video.expectedDigest == record.video.targetDigest
+                && record.thumbnail.expectedDigest != nil
+                && record.thumbnail.expectedDigest == record.thumbnail.targetDigest
         }
     }
 
@@ -647,13 +1013,32 @@ public actor LockScreenContinuityCoordinator {
 }
 
 private struct PreflightPlan: Sendable {
+    let transactionID: UUID
     let eligible: [LockScreenWallpaperAssignment]
     let desiredIDs: Set<UUID>
     let manifestOwnedIDs: Set<UUID>
     let journalOwnedIDs: Set<UUID>
     let refreshPending: Bool
-    let thumbnailDataByID: [UUID: Data]
+    let desiredAssets: [UUID: PreparedLockScreenAsset]
+    let preparedRecords: [LockScreenAssetJournalRecord]
+    let committedRecords: [LockScreenAssetJournalRecord]
+    let recoveryActions: [LockScreenAssetRecoveryAction]
     let storeAssignments: [WallpaperStoreAssignment]
+    let requiresManagedStoreMutation: Bool
+    let requiresTransactionMutation: Bool
+}
+
+private struct LockScreenAssetRecoveryAction: Sendable {
+    let url: URL
+    let digest: Data
+    let maximumBytes: UInt64
+}
+
+private struct PreparedLockScreenAsset: Sendable {
+    let videoSourceURL: URL
+    let videoDigest: Data
+    let thumbnailData: Data
+    let thumbnailDigest: Data
 }
 
 private struct LockScreenAssetJournal: Codable, Sendable, Equatable {
@@ -674,7 +1059,7 @@ private struct LockScreenAssetJournal: Codable, Sendable, Equatable {
         records: [LockScreenAssetJournalRecord],
         refreshPending: Bool = false
     ) {
-        schemaVersion = 1
+        schemaVersion = 2
         self.transactionID = transactionID
         self.phase = phase
         self.records = records
@@ -695,7 +1080,17 @@ private struct LockScreenAssetJournal: Codable, Sendable, Equatable {
     }
 }
 
+private struct LockScreenAssetJournalSchema: Decodable {
+    let schemaVersion: Int
+}
+
 private struct LockScreenAssetJournalRecord: Codable, Sendable, Equatable {
     let id: UUID
-    let mayRemove: Bool
+    let video: LockScreenAssetFileTransition
+    let thumbnail: LockScreenAssetFileTransition
+}
+
+private struct LockScreenAssetFileTransition: Codable, Sendable, Equatable {
+    let expectedDigest: Data?
+    let targetDigest: Data?
 }

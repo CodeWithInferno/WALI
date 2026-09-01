@@ -198,13 +198,14 @@ Extend through capabilities and adapters:
   boundary.
 - Storage implementations remain behind `RuntimeStore`.
 
-Desktop public APIs remain primary. ADR 0008 permits one private adapter for
+Desktop public APIs remain primary. ADR 0009 permits one private adapter for
 authenticated-session Lock Screen continuity on exact verified macOS builds.
-The agent registers WALI-owned copies with Apple's current-user Aerial provider
-and patches only matching display and Space-display choices. A missing
-top-level connected-display override may be synthesized from the verified
-fixture and is removed on rollback only while still exactly WALI-owned;
-global/system defaults and missing Space nodes are never written. Direct rendering
+The agent registers the main display's WALI-owned copy with Apple's current-user
+Aerial provider. While active, it transactionally selects that asset through
+both verified global linked values and clears the current user's display and
+Space override maps. The agent quiesces WallpaperAgent immediately before a
+required manifest or Index write, journals the exact four-value preimage, and
+restores it only while all managed structure remains WALI-owned. Direct rendering
 in protected Lock Screen UI, FileVault preboot, unauthenticated loginwindow,
 other users, elevated helpers, arbitrary plugins, sync, a remote catalog, and
 shared `/Users/Shared` storage remain unsupported or deferred.

@@ -203,17 +203,17 @@ enum ContentStorage {
         switch kind {
         case .hevcVideo:
             let asset = AVURLAsset(url: url)
+            let videoTracks = try await asset.loadTracks(withMediaType: .video)
             guard try await asset.load(.isReadable), try await asset.load(.isPlayable),
-                  let track = try await asset.loadTracks(withMediaType: .video).first,
+                  videoTracks.count == 1,
+                  let track = videoTracks.first,
                   try await asset.loadTracks(withMediaType: .audio).isEmpty
             else {
                 throw StorageError.unsupportedMedia
             }
             let descriptions = try await track.load(.formatDescriptions)
-            guard descriptions.contains(where: {
-                let subtype = CMFormatDescriptionGetMediaSubType($0)
-                return subtype == kCMVideoCodecType_HEVC
-            }) else {
+            guard !descriptions.isEmpty,
+                  descriptions.allSatisfy(Self.isAerialMain10) else {
                 throw StorageError.unsupportedMedia
             }
             let size = try await track.load(.naturalSize)
@@ -246,6 +246,96 @@ enum ContentStorage {
                 durationSeconds: nil
             )
         }
+    }
+
+    private static func isAerialMain10(_ description: CMFormatDescription) -> Bool {
+        let subtype = CMFormatDescriptionGetMediaSubType(description)
+        guard subtype == kCMVideoCodecType_HEVC || subtype == FourCharCode(0x6865_7631),
+              let extensions = CMFormatDescriptionGetExtensions(description) as? [String: Any],
+              let atoms = extensions[
+                  kCMFormatDescriptionExtension_SampleDescriptionExtensionAtoms as String
+              ] as? [String: Any],
+              let configuration = atoms["hvcC"] as? Data
+        else { return false }
+
+        let bitsKey = kCMFormatDescriptionExtension_BitsPerComponent as String
+        let bitsPerComponent: UInt16?
+        if let rawBits = extensions[bitsKey] {
+            guard let number = rawBits as? NSNumber,
+                  number.intValue >= 0,
+                  number.intValue <= Int(UInt16.max)
+            else { return false }
+            bitsPerComponent = number.uint16Value
+        } else {
+            bitsPerComponent = nil
+        }
+        return isAerialMain10(
+            configuration: configuration,
+            bitsPerComponent: bitsPerComponent
+        ) && isAerialSDRBT709(
+            colorPrimaries: extensions[
+                kCMFormatDescriptionExtension_ColorPrimaries as String
+            ] as? String,
+            transferFunction: extensions[
+                kCMFormatDescriptionExtension_TransferFunction as String
+            ] as? String,
+            yCbCrMatrix: extensions[
+                kCMFormatDescriptionExtension_YCbCrMatrix as String
+            ] as? String
+        )
+    }
+
+    static func isAerialMain10(
+        configuration: Data,
+        bitsPerComponent: UInt16?
+    ) -> Bool {
+        guard configuration.count >= 23,
+              configuration[0] == 1,
+              configuration[1] & 0x1f == 2,
+              configuration[13] & 0xf0 == 0xf0,
+              configuration[15] & 0xfc == 0xfc,
+              configuration[16] & 0xfc == 0xfc,
+              configuration[16] & 0x03 == 1,
+              configuration[17] & 0xf8 == 0xf8,
+              configuration[18] & 0xf8 == 0xf8,
+              configuration[17] & 0x07 == 2,
+              configuration[18] & 0x07 == 2,
+              bitsPerComponent == nil || bitsPerComponent == 10,
+              isStructurallyValidHEVCConfiguration(configuration)
+        else { return false }
+        return true
+    }
+
+    static func isAerialSDRBT709(
+        colorPrimaries: String?,
+        transferFunction: String?,
+        yCbCrMatrix: String?
+    ) -> Bool {
+        colorPrimaries == (kCVImageBufferColorPrimaries_ITU_R_709_2 as String)
+            && transferFunction == (kCVImageBufferTransferFunction_ITU_R_709_2 as String)
+            && yCbCrMatrix == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String)
+    }
+
+    private static func isStructurallyValidHEVCConfiguration(_ configuration: Data) -> Bool {
+        var cursor = 23
+        for _ in 0..<configuration[22] {
+            guard cursor + 3 <= configuration.count else { return false }
+            cursor += 1
+            let unitCount = Int(configuration[cursor]) << 8
+                | Int(configuration[cursor + 1])
+            cursor += 2
+            for _ in 0..<unitCount {
+                guard cursor + 2 <= configuration.count else { return false }
+                let unitLength = Int(configuration[cursor]) << 8
+                    | Int(configuration[cursor + 1])
+                cursor += 2
+                guard unitLength > 0, cursor + unitLength <= configuration.count else {
+                    return false
+                }
+                cursor += unitLength
+            }
+        }
+        return cursor == configuration.count
     }
 
     static func syncFile(_ url: URL) throws {

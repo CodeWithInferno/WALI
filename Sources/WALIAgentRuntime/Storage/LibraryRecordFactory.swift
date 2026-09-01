@@ -124,10 +124,13 @@ enum LibraryRecordFactory {
             contentID: stored.digest,
             byteCount: stored.byteCount,
             mediaType: stored.mediaKind == .hevcVideo ? .waliVideoHEVC : .waliImageHEIC,
+            // Every newly installed HEVC artifact reaches this point only after
+            // ContentStorage has independently verified Aerial-compatible
+            // SDR BT.709 Main10 bytes.
             characteristics: MediaCharacteristics(
                 pixelSize: stored.pixelSize,
                 duration: duration,
-                bitDepth: stored.mediaKind == .hevcVideo ? 8 : nil,
+                bitDepth: stored.mediaKind == .hevcVideo ? 10 : nil,
                 dynamicRange: stored.mediaKind == .hevcVideo ? .sdr : nil
             )
         )

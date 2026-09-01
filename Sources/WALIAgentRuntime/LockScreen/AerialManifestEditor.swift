@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -73,6 +74,31 @@ public struct AerialManifestEditor: Sendable {
     public func reconcile(
         registrations: [AerialAssetRegistration]
     ) throws -> AerialManifestEditResult {
+        let plan = try makePlan(registrations: registrations)
+        if plan.changed {
+            try LockScreenFileIO.atomicCompareAndSwap(
+                expected: plan.originalData,
+                replacement: plan.nextData,
+                at: manifestURL
+            ) { staged in
+                _ = try Self.decodeAndValidate(Data(contentsOf: staged))
+            }
+        }
+        return .init(changed: plan.changed, removedAssetIDs: plan.removedAssetIDs)
+    }
+
+    /// Computes the exact manifest mutation without publishing it. The
+    /// coordinator uses this to quiesce WallpaperAgent only for a real write.
+    public func preview(
+        registrations: [AerialAssetRegistration]
+    ) throws -> AerialManifestEditResult {
+        let plan = try makePlan(registrations: registrations)
+        return .init(changed: plan.changed, removedAssetIDs: plan.removedAssetIDs)
+    }
+
+    private func makePlan(
+        registrations: [AerialAssetRegistration]
+    ) throws -> ManifestPlan {
         guard registrations.count <= Self.maximumOwnedAssets,
               Set(registrations.map(\.id)).count == registrations.count else {
             throw LockScreenCompatibilityError.assetRejected("Too many or duplicate WALI assets.")
@@ -122,16 +148,9 @@ public struct AerialManifestEditor: Sendable {
         )
         _ = try Self.decodeAndValidate(nextData)
         let changed = nextData != normalizedOriginalData
-        if changed {
-            try LockScreenFileIO.atomicCompareAndSwap(
-                expected: originalData,
-                replacement: nextData,
-                at: manifestURL
-            ) { staged in
-                _ = try Self.decodeAndValidate(Data(contentsOf: staged))
-            }
-        }
-        return AerialManifestEditResult(
+        return ManifestPlan(
+            originalData: originalData,
+            nextData: nextData,
             changed: changed,
             removedAssetIDs: existingOwnedIDs.subtracting(desiredIDs)
         )
@@ -319,7 +338,16 @@ public struct AerialManifestEditor: Sendable {
     }
 }
 
+private struct ManifestPlan {
+    let originalData: Data
+    let nextData: Data
+    let changed: Bool
+    let removedAssetIDs: Set<UUID>
+}
+
 enum LockScreenFileIO {
+    private static let ownershipXattrName = "com.wali.lock-screen-transaction"
+
     static func nodeExists(_ url: URL) throws -> Bool {
         guard url.isFileURL else {
             throw LockScreenCompatibilityError.unsafePath("Expected a local filesystem node.")
@@ -419,7 +447,9 @@ enum LockScreenFileIO {
         var stagedIsSafeToRemove = true
         defer {
             if stagedIsSafeToRemove {
-                try? FileManager.default.removeItem(at: staged)
+                if Darwin.unlink(staged.path) == 0 {
+                    try? syncDirectory(staged.deletingLastPathComponent())
+                }
             }
         }
         try writeData(replacement, to: staged)
@@ -487,27 +517,397 @@ enum LockScreenFileIO {
         try syncDirectory(destination.deletingLastPathComponent())
     }
 
-    static func atomicCopy(
+    static func sha256(of data: Data) -> Data {
+        Data(SHA256.hash(data: data))
+    }
+
+    static func sha256(of url: URL, maximumBytes: UInt64) throws -> Data {
+        guard url.isFileURL else {
+            throw LockScreenCompatibilityError.unsafePath("Expected a local file.")
+        }
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { Darwin.close(descriptor) }
+        var information = stat()
+        guard Darwin.fstat(descriptor, &information) == 0,
+              (information.st_mode & S_IFMT) == S_IFREG,
+              information.st_size >= 0,
+              UInt64(information.st_size) <= maximumBytes else {
+            throw LockScreenCompatibilityError.unsafePath(
+                "A file is missing, symbolic, or exceeds its safety limit."
+            )
+        }
+        var hasher = SHA256()
+        var totalBytes: UInt64 = 0
+        var buffer = [UInt8](repeating: 0, count: 1_048_576)
+        while true {
+            try Task.checkCancellation()
+            let count: Int = buffer.withUnsafeMutableBytes { bytes in
+                var result: Int
+                repeat {
+                    result = Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+                } while result < 0 && errno == EINTR
+                return result
+            }
+            guard count >= 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            if count == 0 { break }
+            totalBytes += UInt64(count)
+            guard totalBytes <= maximumBytes else {
+                throw LockScreenCompatibilityError.unsafePath(
+                    "A file changed or exceeds its safety limit."
+                )
+            }
+            hasher.update(data: Data(buffer[0..<count]))
+        }
+        return Data(hasher.finalize())
+    }
+
+    static func atomicInstallCopy(
         from source: URL,
         to destination: URL,
-        maximumBytes: UInt64
-    ) throws {
+        expectedDigest: Data?,
+        targetDigest: Data,
+        maximumBytes: UInt64,
+        ownershipMarker: Data,
+        recoveryURL: URL
+    ) throws -> Bool {
         try requireRegularFile(source, maximumBytes: maximumBytes)
-        try requireDirectory(destination.deletingLastPathComponent())
-        if try nodeExists(destination) {
-            try requireRegularFile(destination, maximumBytes: maximumBytes)
+        return try atomicInstall(
+            to: destination,
+            expectedDigest: expectedDigest,
+            targetDigest: targetDigest,
+            maximumBytes: maximumBytes,
+            ownershipMarker: ownershipMarker,
+            recoveryURL: recoveryURL,
+            validate: { _ in }
+        ) { staged in
+            try streamCopy(
+                from: source,
+                to: staged,
+                maximumBytes: maximumBytes,
+                ownershipMarker: ownershipMarker
+            )
         }
-        let staged = destination.deletingLastPathComponent().appendingPathComponent(
-            ".wali-\(UUID().uuidString).tmp",
-            isDirectory: false
-        )
-        defer { try? FileManager.default.removeItem(at: staged) }
-        try streamCopy(from: source, to: staged, maximumBytes: maximumBytes)
-        try requireRegularFile(staged, maximumBytes: maximumBytes)
-        guard Darwin.rename(staged.path, destination.path) == 0 else {
+    }
+
+    static func atomicInstallData(
+        _ data: Data,
+        to destination: URL,
+        expectedDigest: Data?,
+        targetDigest: Data,
+        maximumBytes: UInt64,
+        ownershipMarker: Data,
+        recoveryURL: URL,
+        ownershipDidBecomeDurable: ((URL) throws -> Void)? = nil,
+        validate: (URL) throws -> Void
+    ) throws -> Bool {
+        guard UInt64(data.count) <= maximumBytes, sha256(of: data) == targetDigest else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "Prepared Lock Screen asset bytes do not match their digest."
+            )
+        }
+        return try atomicInstall(
+            to: destination,
+            expectedDigest: expectedDigest,
+            targetDigest: targetDigest,
+            maximumBytes: maximumBytes,
+            ownershipMarker: ownershipMarker,
+            recoveryURL: recoveryURL,
+            validate: validate
+        ) { staged in
+            try writeData(
+                data,
+                to: staged,
+                ownershipMarker: ownershipMarker,
+                ownershipDidBecomeDurable: ownershipDidBecomeDurable
+            )
+        }
+    }
+
+    static func atomicRemove(
+        _ destination: URL,
+        expectedDigest: Data?,
+        maximumBytes: UInt64,
+        recoveryURL: URL
+    ) throws -> Bool {
+        guard try nodeExists(destination) else {
+            guard expectedDigest == nil else {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A Lock Screen asset disappeared before its journaled removal."
+                )
+            }
+            return false
+        }
+        guard let expectedDigest, expectedDigest.count == SHA256.byteCount else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "WALI has no digest authority to remove a Lock Screen asset file."
+            )
+        }
+        try requireRegularFile(destination, maximumBytes: maximumBytes)
+        try requireSiblingRecoveryURL(recoveryURL, for: destination)
+        guard !(try nodeExists(recoveryURL)) else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A transaction recovery sibling already exists."
+            )
+        }
+        guard Darwin.renameatx_np(
+            AT_FDCWD,
+            destination.path,
+            AT_FDCWD,
+            recoveryURL.path,
+            UInt32(RENAME_EXCL)
+        ) == 0 else {
+            throw transactionalWriteError(errno)
+        }
+        let removedDigest: Data
+        do {
+            removedDigest = try sha256(of: recoveryURL, maximumBytes: maximumBytes)
+        } catch {
+            if Darwin.renameatx_np(
+                AT_FDCWD,
+                recoveryURL.path,
+                AT_FDCWD,
+                destination.path,
+                UInt32(RENAME_EXCL)
+            ) == 0 {
+                try syncDirectory(destination.deletingLastPathComponent())
+                throw error
+            }
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "An unreadable Lock Screen asset was preserved in a recovery sibling."
+            )
+        }
+        guard removedDigest == expectedDigest else {
+            if Darwin.renameatx_np(
+                AT_FDCWD,
+                recoveryURL.path,
+                AT_FDCWD,
+                destination.path,
+                UInt32(RENAME_EXCL)
+            ) == 0 {
+                try syncDirectory(destination.deletingLastPathComponent())
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A changed Lock Screen asset was restored without deletion."
+                )
+            }
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A changed Lock Screen asset was preserved in a recovery sibling."
+            )
+        }
+        guard Darwin.unlink(recoveryURL.path) == 0 else {
             throw transactionalWriteError(errno)
         }
         try syncDirectory(destination.deletingLastPathComponent())
+        return true
+    }
+
+    static func finalizeRecoveryFile(
+        _ recoveryURL: URL,
+        expectedDigest: Data,
+        maximumBytes: UInt64
+    ) throws {
+        guard expectedDigest.count == SHA256.byteCount else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A transaction recovery digest is invalid."
+            )
+        }
+        try requireRegularFile(recoveryURL, maximumBytes: maximumBytes)
+        guard try sha256(of: recoveryURL, maximumBytes: maximumBytes) == expectedDigest else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A transaction recovery sibling changed outside WALI."
+            )
+        }
+        guard Darwin.unlink(recoveryURL.path) == 0 else {
+            throw transactionalWriteError(errno)
+        }
+        try syncDirectory(recoveryURL.deletingLastPathComponent())
+    }
+
+    static func hasOwnershipMarker(at url: URL, expected: Data) throws -> Bool {
+        try ownershipMarker(at: url) == expected
+    }
+
+    private static func atomicInstall(
+        to destination: URL,
+        expectedDigest: Data?,
+        targetDigest: Data,
+        maximumBytes: UInt64,
+        ownershipMarker: Data,
+        recoveryURL: URL,
+        validate: (URL) throws -> Void,
+        stage: (URL) throws -> Void
+    ) throws -> Bool {
+        guard targetDigest.count == SHA256.byteCount,
+              expectedDigest == nil || expectedDigest?.count == SHA256.byteCount,
+              !ownershipMarker.isEmpty,
+              ownershipMarker.count <= 128 else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A Lock Screen asset digest is invalid."
+            )
+        }
+        try requireDirectory(destination.deletingLastPathComponent())
+        try requireSiblingRecoveryURL(recoveryURL, for: destination)
+        let staged = recoveryURL
+        guard !(try nodeExists(staged)) else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A transaction recovery sibling already exists."
+            )
+        }
+        var stagedIsSafeToRemove = false
+        defer {
+            if stagedIsSafeToRemove {
+                try? FileManager.default.removeItem(at: staged)
+            }
+        }
+        try stage(staged)
+        stagedIsSafeToRemove = true
+        try requireRegularFile(staged, maximumBytes: maximumBytes)
+        try validate(staged)
+        guard try sha256(of: staged, maximumBytes: maximumBytes) == targetDigest else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "The staged Lock Screen asset changed before installation."
+            )
+        }
+
+        if !(try nodeExists(destination)) {
+            guard expectedDigest == nil else {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A digest-journaled Lock Screen asset disappeared before replacement."
+                )
+            }
+            guard Darwin.renameatx_np(
+                AT_FDCWD,
+                staged.path,
+                AT_FDCWD,
+                destination.path,
+                UInt32(RENAME_EXCL)
+            ) == 0 else {
+                if errno == EEXIST {
+                    throw LockScreenCompatibilityError.ownershipConflict(
+                        "A file appeared at the Lock Screen asset path before installation."
+                    )
+                }
+                throw transactionalWriteError(errno)
+            }
+            stagedIsSafeToRemove = false
+            try syncDirectory(destination.deletingLastPathComponent())
+            return true
+        }
+
+        try requireRegularFile(destination, maximumBytes: maximumBytes)
+        let currentDigest = try sha256(of: destination, maximumBytes: maximumBytes)
+        if currentDigest == targetDigest {
+            guard expectedDigest == targetDigest else {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A file appeared or changed at the Lock Screen asset path before installation."
+                )
+            }
+            guard Darwin.unlink(staged.path) == 0 else {
+                throw transactionalWriteError(errno)
+            }
+            stagedIsSafeToRemove = false
+            try syncDirectory(destination.deletingLastPathComponent())
+            return false
+        }
+        guard let expectedDigest, currentDigest == expectedDigest else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A Lock Screen asset changed before replacement."
+            )
+        }
+        guard Darwin.renameatx_np(
+            AT_FDCWD,
+            staged.path,
+            AT_FDCWD,
+            destination.path,
+            UInt32(RENAME_SWAP)
+        ) == 0 else {
+            throw transactionalWriteError(errno)
+        }
+        stagedIsSafeToRemove = false
+        let displacedDigest = try sha256(of: staged, maximumBytes: maximumBytes)
+        guard displacedDigest == expectedDigest else {
+            let installedDigest = try? sha256(of: destination, maximumBytes: maximumBytes)
+            if installedDigest == targetDigest,
+               Darwin.renameatx_np(
+                   AT_FDCWD,
+                   staged.path,
+                   AT_FDCWD,
+                   destination.path,
+                   UInt32(RENAME_SWAP)
+               ) == 0 {
+                stagedIsSafeToRemove = (try? sha256(
+                    of: staged,
+                    maximumBytes: maximumBytes
+                )) == targetDigest
+            }
+            try syncDirectory(destination.deletingLastPathComponent())
+            throw LockScreenCompatibilityError.ownershipConflict(
+                stagedIsSafeToRemove
+                    ? "A changed Lock Screen asset was restored during replacement."
+                    : "Conflicting Lock Screen asset bytes were preserved in a recovery sibling."
+            )
+        }
+        guard Darwin.unlink(staged.path) == 0 else {
+            throw transactionalWriteError(errno)
+        }
+        stagedIsSafeToRemove = false
+        try syncDirectory(destination.deletingLastPathComponent())
+        return true
+    }
+
+    private static func requireSiblingRecoveryURL(_ recoveryURL: URL, for destination: URL) throws {
+        guard recoveryURL.isFileURL,
+              recoveryURL.standardizedFileURL != destination.standardizedFileURL,
+              recoveryURL.deletingLastPathComponent().standardizedFileURL
+                == destination.deletingLastPathComponent().standardizedFileURL,
+              recoveryURL.lastPathComponent.hasPrefix(".wali-"),
+              !recoveryURL.lastPathComponent.contains("/") else {
+            throw LockScreenCompatibilityError.unsafePath(
+                "A transaction recovery path escaped its asset directory."
+            )
+        }
+    }
+
+    private static func ownershipMarker(at url: URL) throws -> Data? {
+        let length = url.path.withCString { path in
+            ownershipXattrName.withCString { name in
+                Darwin.getxattr(path, name, nil, 0, 0, XATTR_NOFOLLOW)
+            }
+        }
+        if length < 0 {
+            if errno == ENOATTR { return nil }
+            throw transactionalWriteError(errno)
+        }
+        guard length > 0, length <= 128 else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A transaction ownership marker is invalid."
+            )
+        }
+        var bytes = [UInt8](repeating: 0, count: length)
+        let readCount = url.path.withCString { path in
+            ownershipXattrName.withCString { name in
+                bytes.withUnsafeMutableBytes { buffer in
+                    Darwin.getxattr(
+                        path,
+                        name,
+                        buffer.baseAddress,
+                        buffer.count,
+                        0,
+                        XATTR_NOFOLLOW
+                    )
+                }
+            }
+        }
+        guard readCount == length else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A transaction ownership marker changed while it was read."
+            )
+        }
+        return Data(bytes)
     }
 
     static func removeRegularFileIfPresent(_ url: URL, maximumBytes: UInt64) throws {
@@ -517,8 +917,17 @@ enum LockScreenFileIO {
         try syncDirectory(url.deletingLastPathComponent())
     }
 
-    private static func writeData(_ data: Data, to destination: URL) throws {
-        try withExclusiveWritableFile(at: destination) { descriptor in
+    private static func writeData(
+        _ data: Data,
+        to destination: URL,
+        ownershipMarker: Data? = nil,
+        ownershipDidBecomeDurable: ((URL) throws -> Void)? = nil
+    ) throws {
+        try withExclusiveWritableFile(
+            at: destination,
+            ownershipMarker: ownershipMarker,
+            ownershipDidBecomeDurable: ownershipDidBecomeDurable
+        ) { descriptor in
             try data.withUnsafeBytes { buffer in
                 try writeAll(buffer, to: descriptor)
             }
@@ -528,7 +937,8 @@ enum LockScreenFileIO {
     private static func streamCopy(
         from source: URL,
         to destination: URL,
-        maximumBytes: UInt64
+        maximumBytes: UInt64,
+        ownershipMarker: Data? = nil
     ) throws {
         let sourceDescriptor = Darwin.open(source.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         guard sourceDescriptor >= 0 else {
@@ -536,7 +946,10 @@ enum LockScreenFileIO {
         }
         defer { Darwin.close(sourceDescriptor) }
 
-        try withExclusiveWritableFile(at: destination) { destinationDescriptor in
+        try withExclusiveWritableFile(
+            at: destination,
+            ownershipMarker: ownershipMarker
+        ) { destinationDescriptor in
             var totalBytes: UInt64 = 0
             var buffer = [UInt8](repeating: 0, count: 1_048_576)
             while true {
@@ -569,8 +982,17 @@ enum LockScreenFileIO {
 
     private static func withExclusiveWritableFile(
         at destination: URL,
+        ownershipMarker: Data? = nil,
+        ownershipDidBecomeDurable: ((URL) throws -> Void)? = nil,
         _ operation: (Int32) throws -> Void
     ) throws {
+        if let ownershipMarker {
+            guard !ownershipMarker.isEmpty, ownershipMarker.count <= 128 else {
+                throw LockScreenCompatibilityError.ownershipConflict(
+                    "A transaction ownership marker is invalid."
+                )
+            }
+        }
         let descriptor = Darwin.open(
             destination.path,
             O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
@@ -583,6 +1005,31 @@ enum LockScreenFileIO {
         defer {
             if needsClose { _ = Darwin.close(descriptor) }
         }
+        if let ownershipMarker {
+            do {
+                let result = ownershipXattrName.withCString { name in
+                    ownershipMarker.withUnsafeBytes { buffer in
+                        Darwin.fsetxattr(
+                            descriptor,
+                            name,
+                            buffer.baseAddress,
+                            buffer.count,
+                            0,
+                            0
+                        )
+                    }
+                }
+                guard result == 0 else { throw transactionalWriteError(errno) }
+                guard Darwin.fsync(descriptor) == 0 else {
+                    throw transactionalWriteError(errno)
+                }
+                try syncDirectory(destination.deletingLastPathComponent())
+            } catch {
+                try removeExclusivelyCreatedFile(destination, descriptor: descriptor)
+                throw error
+            }
+            try ownershipDidBecomeDurable?(destination)
+        }
         try operation(descriptor)
         guard Darwin.fsync(descriptor) == 0 else {
             throw transactionalWriteError(errno)
@@ -592,6 +1039,31 @@ enum LockScreenFileIO {
         guard closeResult == 0 else {
             throw transactionalWriteError(errno)
         }
+    }
+
+    private static func removeExclusivelyCreatedFile(
+        _ url: URL,
+        descriptor: Int32
+    ) throws {
+        var descriptorStatus = stat()
+        guard Darwin.fstat(descriptor, &descriptorStatus) == 0 else {
+            throw transactionalWriteError(errno)
+        }
+        var pathStatus = stat()
+        guard Darwin.lstat(url.path, &pathStatus) == 0 else {
+            if errno == ENOENT { return }
+            throw transactionalWriteError(errno)
+        }
+        guard descriptorStatus.st_dev == pathStatus.st_dev,
+              descriptorStatus.st_ino == pathStatus.st_ino else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A transaction staging path changed during setup."
+            )
+        }
+        guard Darwin.unlink(url.path) == 0 else {
+            throw transactionalWriteError(errno)
+        }
+        try syncDirectory(url.deletingLastPathComponent())
     }
 
     private static func writeAll(_ buffer: UnsafeRawBufferPointer, to descriptor: Int32) throws {

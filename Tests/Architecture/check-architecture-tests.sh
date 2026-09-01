@@ -97,7 +97,7 @@ new_fixture() {
     printf '{"fixture":"invalid"}\n' > \
         "${root}/Fixtures/Compatibility/model-records-invalid-v1.json"
     cat > "${root}/Fixtures/LockScreen/modern-aerial-v1.json" <<'EOF'
-{"epoch":1,"revision":0,"verified_system_build":"25F80","manifest":{"version":1,"categories":[{"id":"57414C49-0000-4000-8000-000000000001","representativeAssetID":"11111111-2222-4333-8444-555555555555","previewImage":"file:///REDACTED/preview.png","subcategories":[{"id":"57414C49-0000-4000-8000-000000000002","representativeAssetID":"11111111-2222-4333-8444-555555555555","previewImage":"file:///REDACTED/preview.png"}]}],"assets":[{"id":"11111111-2222-4333-8444-555555555555","shotID":"CUSTOM_WALI_11111111_2222_4333_8444_555555555555","categories":["57414C49-0000-4000-8000-000000000001"],"subcategories":["57414C49-0000-4000-8000-000000000002"],"localizedNameKey":"Synthetic","accessibilityLabel":"Synthetic","showInTopLevel":true,"includeInShuffle":true,"preferredOrder":0,"pointsOfInterest":{"0":"CUSTOM_WALI_11111111_2222_4333_8444_555555555555_0"},"url-4K-SDR-240FPS":"file:///REDACTED/video.mov","previewImage":"file:///REDACTED/preview.png"}]},"wallpaper_index":{"provider":"com.apple.wallpaper.choice.aerials","configuration":{"assetID":"11111111-2222-4333-8444-555555555555"},"configuration_encoding":"binary-plist-data","supported_empty_store_shape":{"Displays":{},"Spaces":{},"preserved_roots":["AllSpacesAndDisplays","SystemDefault"]},"synthesized_top_level_display_node":{"Linked":{"Content":{"Choices":[{"Configuration":{"assetID":"11111111-2222-4333-8444-555555555555"},"Files":[],"Provider":"com.apple.wallpaper.choice.aerials"}]}}},"mutable_node_patterns":["Displays/<display-uuid>/Linked/Content/Choices","Spaces/<space-uuid>/Displays/<display-uuid>/Linked/Content/Choices"],"excluded_node_patterns":["AllSpacesAndDisplays","SystemDefault","Spaces/<space-uuid>/Default"]}}
+{"epoch":1,"revision":1,"verified_system_build":"25F80","manifest":{"version":1,"categories":[{"id":"57414C49-0000-4000-8000-000000000001","representativeAssetID":"11111111-2222-4333-8444-555555555555","previewImage":"file:///REDACTED/preview.png","subcategories":[{"id":"57414C49-0000-4000-8000-000000000002","representativeAssetID":"11111111-2222-4333-8444-555555555555","previewImage":"file:///REDACTED/preview.png"}]}],"assets":[{"id":"11111111-2222-4333-8444-555555555555","shotID":"CUSTOM_WALI_11111111_2222_4333_8444_555555555555","categories":["57414C49-0000-4000-8000-000000000001"],"subcategories":["57414C49-0000-4000-8000-000000000002"],"localizedNameKey":"Synthetic","accessibilityLabel":"Synthetic","showInTopLevel":true,"includeInShuffle":true,"preferredOrder":0,"pointsOfInterest":{"0":"CUSTOM_WALI_11111111_2222_4333_8444_555555555555_0"},"url-4K-SDR-240FPS":"file:///REDACTED/video.mov","previewImage":"file:///REDACTED/preview.png"}]},"wallpaper_index":{"provider":"com.apple.wallpaper.choice.aerials","configuration":{"assetID":"11111111-2222-4333-8444-555555555555"},"configuration_encoding":"binary-plist-data","selection_policy":"main_display_single_asset","managed_root_values":["AllSpacesAndDisplays","SystemDefault","Displays","Spaces"],"global_linked_node":{"Type":"linked","Linked":{"Content":{"Choices":[{"Configuration":{"assetID":"11111111-2222-4333-8444-555555555555"},"Files":[],"Provider":"com.apple.wallpaper.choice.aerials"}],"EncodedOptionValues":"REDACTED_BINARY_PLIST_DATA","Shuffle":"$null"},"LastSet":"REDACTED_DATE","LastUse":"REDACTED_DATE"}},"active_override_maps":{"Displays":{},"Spaces":{}},"mutable_node_patterns":["AllSpacesAndDisplays","SystemDefault","Displays","Spaces"],"preserved_global_fields":["Linked/Content/EncodedOptionValues","Linked/Content/Shuffle"],"daemon_timestamp_drift_fields":["Linked/LastSet","Linked/LastUse"],"rollback_policy":"restore_exact_four_root_preimage"}}
 EOF
 
     cat > "${root}/Config/Base.xcconfig" <<'EOF'
@@ -341,6 +341,20 @@ EOF
 - owner_role: compatibility_maintainer
 - accepted_by: project_owner
 - approval_reference: user-directed autonomous implementation mandate 2026-08-31
+
+## Context
+Fixture.
+EOF
+
+    cat > "${root}/docs/adr/0009-global-linked-lock-screen-activation.md" <<'EOF'
+# 0009: Fixture global linked lock screen adapter
+
+- status: accepted
+- date: 2026-08-31
+- owner_role: compatibility_maintainer
+- accepted_by: project_owner
+- approval_reference: project-owner global linked activation directive 2026-08-31
+- related: 0008
 
 ## Context
 Fixture.
@@ -654,9 +668,9 @@ by_id["model_records"]["version"] = {
   "additive_compatibility" => "declared_ranges_only"
 }
 by_id["lock_screen_manifest"]["version"] = {
-  "current" => {"epoch" => 1, "revision" => 0},
+  "current" => {"epoch" => 1, "revision" => 1},
   "readable_epochs" => [
-    {"epoch" => 1, "minimum_revision" => 0, "maximum_revision" => 0}
+    {"epoch" => 1, "minimum_revision" => 1, "maximum_revision" => 1}
   ],
   "additive_compatibility" => "declared_ranges_only"
 }
@@ -792,7 +806,7 @@ by_id["catalog_manifest"]["details"] = {
 }
 by_id["lock_screen_manifest"]["details"] = {
   "support_scope" => "session_lock_screen_only",
-  "implementation_gate" => "accepted_adr_0008",
+  "implementation_gate" => "accepted_adr_0009",
   "fixture_policy" => "redacted_version_gated_store",
   "verified_system_builds" => ["25F80"],
   "manifest_version" => 1,
@@ -802,9 +816,12 @@ by_id["lock_screen_manifest"]["details"] = {
   "shot_prefix" => "CUSTOM_WALI_",
   "maximum_owned_assets" => 8,
   "unknown_newer_policy" => "reject_before_write",
-  "global_default_policy" => "never_mutate",
-  "missing_display_policy" => "synthesize_top_level_override_only",
-  "synthesized_display_rollback_policy" => "remove_exact_owned_node_only"
+  "global_default_policy" => "transactional_current_user_linked",
+  "selection_policy" => "main_display_single_asset",
+  "active_override_policy" => "clear_displays_and_spaces_restore_exact",
+  "rollback_policy" => "exact_four_root_preimage_with_conflict_detection",
+  "agent_quiesce_policy" => "before_managed_manifest_or_index_write",
+  "daemon_timestamp_policy" => "allow_last_set_and_last_use_drift_only"
 }
 by_id["diagnostic_export"]["details"] = {
   "current_format" => nil,
@@ -1397,17 +1414,17 @@ lock_screen_global_fixture="$(new_fixture lock-screen-global-default)"
 mutate_yaml "${lock_screen_global_fixture}/docs/compatibility/surfaces.yml" \
     'data["surfaces"].find { |surface| surface["id"] == "lock_screen_manifest" }["details"]["global_default_policy"] = "mutate"'
 expect_failure \
-    "lock screen global default denial" \
+    "lock screen global linked policy" \
     "${lock_screen_global_fixture}" \
-    "lock_screen_manifest must never mutate global defaults"
+    "lock_screen_manifest global policy is invalid"
 
-lock_screen_missing_display_fixture="$(new_fixture lock-screen-missing-display-policy)"
-mutate_yaml "${lock_screen_missing_display_fixture}/docs/compatibility/surfaces.yml" \
-    'data["surfaces"].find { |surface| surface["id"] == "lock_screen_manifest" }["details"]["missing_display_policy"] = "mutate-global"'
+lock_screen_selection_fixture="$(new_fixture lock-screen-selection-policy)"
+mutate_yaml "${lock_screen_selection_fixture}/docs/compatibility/surfaces.yml" \
+    'data["surfaces"].find { |surface| surface["id"] == "lock_screen_manifest" }["details"]["selection_policy"] = "per-display"'
 expect_failure \
-    "lock screen missing display scope" \
-    "${lock_screen_missing_display_fixture}" \
-    "lock_screen_manifest missing-display policy is invalid"
+    "lock screen main display selection" \
+    "${lock_screen_selection_fixture}" \
+    "lock_screen_manifest selection policy is invalid"
 
 lock_screen_redaction_fixture="$(new_fixture lock-screen-redaction)"
 "${RUBY_BIN}" -rjson -e '

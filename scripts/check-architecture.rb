@@ -1826,7 +1826,7 @@ class ArchitectureChecker
     end
     expected_values = {
       ["epoch"] => 1,
-      ["revision"] => 0,
+      ["revision"] => 1,
       ["verified_system_build"] => "25F80",
       ["manifest", "version"] => 1,
       ["wallpaper_index", "provider"] => "com.apple.wallpaper.choice.aerials"
@@ -1863,34 +1863,40 @@ class ArchitectureChecker
            asset["previewImage"].to_s.start_with?("file:///REDACTED/")
       error("lock_screen_manifest fixture asset structure is invalid")
     end
-    expected_mutable = [
-      "Displays/<display-uuid>/Linked/Content/Choices",
-      "Spaces/<space-uuid>/Displays/<display-uuid>/Linked/Content/Choices"
-    ]
-    expected_excluded = [
+    expected_managed = [
       "AllSpacesAndDisplays",
       "SystemDefault",
-      "Spaces/<space-uuid>/Default"
+      "Displays",
+      "Spaces"
     ]
     expected_choice = {
       "Configuration" => {"assetID" => asset_id},
       "Files" => [],
       "Provider" => "com.apple.wallpaper.choice.aerials"
     }
-    empty_store = fixture.dig("wallpaper_index", "supported_empty_store_shape")
-    synthesized_choices = fixture.dig(
-      "wallpaper_index", "synthesized_top_level_display_node", "Linked", "Content", "Choices"
-    )
-    unless fixture.dig("wallpaper_index", "mutable_node_patterns") == expected_mutable &&
-           fixture.dig("wallpaper_index", "excluded_node_patterns") == expected_excluded &&
+    global_node = fixture.dig("wallpaper_index", "global_linked_node")
+    global_content = global_node&.dig("Linked", "Content")
+    unless fixture.dig("wallpaper_index", "selection_policy") == "main_display_single_asset" &&
+           fixture.dig("wallpaper_index", "managed_root_values") == expected_managed &&
+           fixture.dig("wallpaper_index", "mutable_node_patterns") == expected_managed &&
            fixture.dig("wallpaper_index", "configuration", "assetID") == asset_id &&
            fixture.dig("wallpaper_index", "configuration_encoding") == "binary-plist-data" &&
-           empty_store == {
-             "Displays" => {},
-             "Spaces" => {},
-             "preserved_roots" => ["AllSpacesAndDisplays", "SystemDefault"]
+           global_node&.fetch("Type", nil) == "linked" &&
+           global_content&.fetch("Choices", nil) == [expected_choice] &&
+           global_content&.fetch("EncodedOptionValues", nil) == "REDACTED_BINARY_PLIST_DATA" &&
+           global_content&.fetch("Shuffle", nil) == "$null" &&
+           global_node&.dig("Linked", "LastSet") == "REDACTED_DATE" &&
+           global_node&.dig("Linked", "LastUse") == "REDACTED_DATE" &&
+           fixture.dig("wallpaper_index", "active_override_maps") == {
+             "Displays" => {}, "Spaces" => {}
            } &&
-           synthesized_choices == [expected_choice]
+           fixture.dig("wallpaper_index", "preserved_global_fields") == [
+             "Linked/Content/EncodedOptionValues", "Linked/Content/Shuffle"
+           ] &&
+           fixture.dig("wallpaper_index", "daemon_timestamp_drift_fields") == [
+             "Linked/LastSet", "Linked/LastUse"
+           ] &&
+           fixture.dig("wallpaper_index", "rollback_policy") == "restore_exact_four_root_preimage"
       error("lock_screen_manifest fixture node scope is invalid")
     end
     serialized = File.read(path)
@@ -2031,13 +2037,14 @@ class ArchitectureChecker
           support_scope implementation_gate fixture_policy verified_system_builds
           manifest_version provider category_id subcategory_id shot_prefix
           maximum_owned_assets unknown_newer_policy global_default_policy
-          missing_display_policy synthesized_display_rollback_policy
+          selection_policy active_override_policy rollback_policy
+          agent_quiesce_policy daemon_timestamp_policy
         ],
         "#{id} details"
       )
       error("lock_screen_manifest must be implemented") unless implementation == "implemented"
       error("lock_screen_manifest support scope is invalid") unless details["support_scope"] == "session_lock_screen_only"
-      error("lock_screen_manifest implementation_gate is invalid") unless details["implementation_gate"] == "accepted_adr_0008"
+      error("lock_screen_manifest implementation_gate is invalid") unless details["implementation_gate"] == "accepted_adr_0009"
       error("lock_screen_manifest fixture_policy is invalid") unless details["fixture_policy"] == "redacted_version_gated_store"
       error("lock_screen_manifest verified builds are invalid") unless details["verified_system_builds"] == ["25F80"]
       error("lock_screen_manifest manifest version is invalid") unless details["manifest_version"] == 1
@@ -2047,9 +2054,12 @@ class ArchitectureChecker
       error("lock_screen_manifest shot prefix is invalid") unless details["shot_prefix"] == "CUSTOM_WALI_"
       error("lock_screen_manifest asset bound is invalid") unless details["maximum_owned_assets"] == 8
       error("lock_screen_manifest must reject unknown schemas before write") unless details["unknown_newer_policy"] == "reject_before_write"
-      error("lock_screen_manifest must never mutate global defaults") unless details["global_default_policy"] == "never_mutate"
-      error("lock_screen_manifest missing-display policy is invalid") unless details["missing_display_policy"] == "synthesize_top_level_override_only"
-      error("lock_screen_manifest synthesized-display rollback is invalid") unless details["synthesized_display_rollback_policy"] == "remove_exact_owned_node_only"
+      error("lock_screen_manifest global policy is invalid") unless details["global_default_policy"] == "transactional_current_user_linked"
+      error("lock_screen_manifest selection policy is invalid") unless details["selection_policy"] == "main_display_single_asset"
+      error("lock_screen_manifest active override policy is invalid") unless details["active_override_policy"] == "clear_displays_and_spaces_restore_exact"
+      error("lock_screen_manifest rollback policy is invalid") unless details["rollback_policy"] == "exact_four_root_preimage_with_conflict_detection"
+      error("lock_screen_manifest quiesce policy is invalid") unless details["agent_quiesce_policy"] == "before_managed_manifest_or_index_write"
+      error("lock_screen_manifest daemon timestamp policy is invalid") unless details["daemon_timestamp_policy"] == "allow_last_set_and_last_use_drift_only"
     when "diagnostic_export"
       require_exact_fields(
         details,

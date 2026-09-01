@@ -1,6 +1,6 @@
 {
   "epoch": 1,
-  "revision": 0,
+  "revision": 1,
   "verified_system_build": "25F80",
   "manifest": {
     "version": 1,
@@ -47,12 +47,15 @@
     "provider": "com.apple.wallpaper.choice.aerials",
     "configuration": {"assetID": "11111111-2222-4333-8444-555555555555"},
     "configuration_encoding": "binary-plist-data",
-    "supported_empty_store_shape": {
-      "Displays": {},
-      "Spaces": {},
-      "preserved_roots": ["AllSpacesAndDisplays", "SystemDefault"]
-    },
-    "synthesized_top_level_display_node": {
+    "selection_policy": "main_display_single_asset",
+    "managed_root_values": [
+      "AllSpacesAndDisplays",
+      "SystemDefault",
+      "Displays",
+      "Spaces"
+    ],
+    "global_linked_node": {
+      "Type": "linked",
       "Linked": {
         "Content": {
           "Choices": [
@@ -61,18 +64,29 @@
               "Files": [],
               "Provider": "com.apple.wallpaper.choice.aerials"
             }
-          ]
-        }
+          ],
+          "EncodedOptionValues": "REDACTED_BINARY_PLIST_DATA",
+          "Shuffle": "$null"
+        },
+        "LastSet": "REDACTED_DATE",
+        "LastUse": "REDACTED_DATE"
       }
     },
+    "active_override_maps": {
+      "Displays": {},
+      "Spaces": {}
+    },
     "mutable_node_patterns": [
-      "Displays/<display-uuid>/Linked/Content/Choices",
-      "Spaces/<space-uuid>/Displays/<display-uuid>/Linked/Content/Choices"
-    ],
-    "excluded_node_patterns": [
       "AllSpacesAndDisplays",
       "SystemDefault",
-      "Spaces/<space-uuid>/Default"
-    ]
+      "Displays",
+      "Spaces"
+    ],
+    "preserved_global_fields": [
+      "Linked/Content/EncodedOptionValues",
+      "Linked/Content/Shuffle"
+    ],
+    "daemon_timestamp_drift_fields": ["Linked/LastSet", "Linked/LastUse"],
+    "rollback_policy": "restore_exact_four_root_preimage"
   }
 }
