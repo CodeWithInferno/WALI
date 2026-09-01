@@ -364,32 +364,13 @@ enum LockScreenFileIO {
             ".wali-permission-probe-\(UUID().uuidString)",
             isDirectory: false
         )
-        let descriptor = Darwin.open(
-            probe.path,
-            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
-            S_IRUSR | S_IWUSR
-        )
-        guard descriptor >= 0 else {
-            throw transactionalWriteError(errno)
-        }
         var probeExists = true
         defer {
-            _ = Darwin.close(descriptor)
             if probeExists {
                 _ = Darwin.unlink(probe.path)
             }
         }
-
-        var byte: UInt8 = 0
-        let written = withUnsafeBytes(of: &byte) { buffer in
-            Darwin.write(descriptor, buffer.baseAddress, buffer.count)
-        }
-        guard written == 1 else {
-            throw transactionalWriteError(errno)
-        }
-        guard Darwin.fsync(descriptor) == 0 else {
-            throw transactionalWriteError(errno)
-        }
+        try writeData(Data([0]), to: probe)
         guard Darwin.unlink(probe.path) == 0 else {
             throw transactionalWriteError(errno)
         }
@@ -411,11 +392,10 @@ enum LockScreenFileIO {
             isDirectory: false
         )
         defer { try? FileManager.default.removeItem(at: staged) }
-        try data.write(to: staged, options: [.withoutOverwriting])
-        try sync(staged)
+        try writeData(data, to: staged)
         try validate(staged)
         guard Darwin.rename(staged.path, destination.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            throw transactionalWriteError(errno)
         }
         try syncDirectory(destination.deletingLastPathComponent())
     }
@@ -442,8 +422,7 @@ enum LockScreenFileIO {
                 try? FileManager.default.removeItem(at: staged)
             }
         }
-        try replacement.write(to: staged, options: [.withoutOverwriting])
-        try sync(staged)
+        try writeData(replacement, to: staged)
         try validate(staged)
 
         let coordinator = NSFileCoordinator(filePresenter: nil)
@@ -523,11 +502,10 @@ enum LockScreenFileIO {
             isDirectory: false
         )
         defer { try? FileManager.default.removeItem(at: staged) }
-        try FileManager.default.copyItem(at: source, to: staged)
+        try streamCopy(from: source, to: staged, maximumBytes: maximumBytes)
         try requireRegularFile(staged, maximumBytes: maximumBytes)
-        try sync(staged)
         guard Darwin.rename(staged.path, destination.path) == 0 else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            throw transactionalWriteError(errno)
         }
         try syncDirectory(destination.deletingLastPathComponent())
     }
@@ -539,10 +517,99 @@ enum LockScreenFileIO {
         try syncDirectory(url.deletingLastPathComponent())
     }
 
-    private static func sync(_ url: URL) throws {
-        let handle = try FileHandle(forWritingTo: url)
-        defer { try? handle.close() }
-        try handle.synchronize()
+    private static func writeData(_ data: Data, to destination: URL) throws {
+        try withExclusiveWritableFile(at: destination) { descriptor in
+            try data.withUnsafeBytes { buffer in
+                try writeAll(buffer, to: descriptor)
+            }
+        }
+    }
+
+    private static func streamCopy(
+        from source: URL,
+        to destination: URL,
+        maximumBytes: UInt64
+    ) throws {
+        let sourceDescriptor = Darwin.open(source.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard sourceDescriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { Darwin.close(sourceDescriptor) }
+
+        try withExclusiveWritableFile(at: destination) { destinationDescriptor in
+            var totalBytes: UInt64 = 0
+            var buffer = [UInt8](repeating: 0, count: 1_048_576)
+            while true {
+                let bytesRead: Int = buffer.withUnsafeMutableBytes { bytes in
+                    var result: Int
+                    repeat {
+                        result = Darwin.read(sourceDescriptor, bytes.baseAddress, bytes.count)
+                    } while result < 0 && errno == EINTR
+                    return result
+                }
+                guard bytesRead >= 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                if bytesRead == 0 { break }
+                totalBytes += UInt64(bytesRead)
+                guard totalBytes <= maximumBytes else {
+                    throw LockScreenCompatibilityError.unsafePath(
+                        "A source file changed or exceeds its safety limit."
+                    )
+                }
+                try buffer.withUnsafeBytes { bytes in
+                    try writeAll(
+                        UnsafeRawBufferPointer(start: bytes.baseAddress, count: bytesRead),
+                        to: destinationDescriptor
+                    )
+                }
+            }
+        }
+    }
+
+    private static func withExclusiveWritableFile(
+        at destination: URL,
+        _ operation: (Int32) throws -> Void
+    ) throws {
+        let descriptor = Darwin.open(
+            destination.path,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            S_IRUSR | S_IWUSR
+        )
+        guard descriptor >= 0 else {
+            throw transactionalWriteError(errno)
+        }
+        var needsClose = true
+        defer {
+            if needsClose { _ = Darwin.close(descriptor) }
+        }
+        try operation(descriptor)
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw transactionalWriteError(errno)
+        }
+        let closeResult = Darwin.close(descriptor)
+        needsClose = false
+        guard closeResult == 0 else {
+            throw transactionalWriteError(errno)
+        }
+    }
+
+    private static func writeAll(_ buffer: UnsafeRawBufferPointer, to descriptor: Int32) throws {
+        var offset = 0
+        while offset < buffer.count {
+            var written: Int
+            repeat {
+                written = Darwin.write(
+                    descriptor,
+                    buffer.baseAddress?.advanced(by: offset),
+                    buffer.count - offset
+                )
+            } while written < 0 && errno == EINTR
+            guard written > 0 else {
+                throw transactionalWriteError(errno)
+            }
+            offset += written
+        }
     }
 
     private static func syncDirectory(_ url: URL) throws {
