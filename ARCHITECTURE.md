@@ -154,6 +154,10 @@ idempotent.
   publication.
 - `SystemEventSource`: normalized display, power, sleep, lock, and thermal
   events.
+- `LockScreenContinuityCoordinator`: an agent-owned, opt-in compatibility
+  adapter for the authenticated current user's Aerial and wallpaper stores.
+  It uses injected roots, build/schema gates, WALI ownership IDs, rollback
+  journals, and atomic replacement; it is not part of the desktop renderer.
 - `DiagnosticsLease`: demand-driven, bounded diagnostics observation.
 
 These are deep domain seams. Do not create generic repositories for every
@@ -194,9 +198,20 @@ Extend through capabilities and adapters:
   boundary.
 - Storage implementations remain behind `RuntimeStore`.
 
-Desktop public APIs come first. Session lock-screen adapters, arbitrary
-plugins, sync, a remote catalog, and shared `/Users/Shared` storage are
-deferred. No deferred feature gets an empty runtime or privilege today.
+Desktop public APIs remain primary. ADRs 0009 and 0010 permit one private adapter for
+authenticated-session Lock Screen continuity on exact verified macOS builds.
+The agent registers the main display's WALI-owned copy with Apple's current-user
+Aerial provider. While active, it transactionally selects that asset through
+both verified global linked values and clears the current user's display and
+Space override maps. The agent quiesces WallpaperAgent immediately before a
+required manifest or Index write, journals the exact four-value preimage, and
+restores it only while all managed structure remains WALI-owned. On each distinct
+session-lock transition, the agent revalidates that active ownership and refreshes
+Apple's wallpaper processes once so a short custom asset restarts at time zero.
+Direct rendering
+in protected Lock Screen UI, FileVault preboot, unauthenticated loginwindow,
+other users, elevated helpers, arbitrary plugins, sync, a remote catalog, and
+shared `/Users/Shared` storage remain unsupported or deferred.
 
 ## Gates
 

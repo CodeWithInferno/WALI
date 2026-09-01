@@ -65,7 +65,8 @@ new_fixture() {
         "${root}/docs/architecture" \
         "${root}/docs/compatibility" \
         "${root}/docs/adr" \
-        "${root}/Fixtures/Compatibility"
+        "${root}/Fixtures/Compatibility" \
+        "${root}/Fixtures/LockScreen"
 
     printf 'package enum WALIModelModule { package static let name = "WALIModel" }\n' > \
         "${root}/Packages/WALICore/Sources/WALIModel/Model.swift"
@@ -95,6 +96,9 @@ new_fixture() {
         "${root}/Fixtures/Compatibility/model-records-v1.json"
     printf '{"fixture":"invalid"}\n' > \
         "${root}/Fixtures/Compatibility/model-records-invalid-v1.json"
+    cat > "${root}/Fixtures/LockScreen/modern-aerial-v1.json" <<'EOF'
+{"epoch":1,"revision":1,"verified_system_build":"25F80","manifest":{"version":1,"categories":[{"id":"57414C49-0000-4000-8000-000000000001","representativeAssetID":"11111111-2222-4333-8444-555555555555","previewImage":"file:///REDACTED/preview.png","subcategories":[{"id":"57414C49-0000-4000-8000-000000000002","representativeAssetID":"11111111-2222-4333-8444-555555555555","previewImage":"file:///REDACTED/preview.png"}]}],"assets":[{"id":"11111111-2222-4333-8444-555555555555","shotID":"CUSTOM_WALI_11111111_2222_4333_8444_555555555555","categories":["57414C49-0000-4000-8000-000000000001"],"subcategories":["57414C49-0000-4000-8000-000000000002"],"localizedNameKey":"Synthetic","accessibilityLabel":"Synthetic","showInTopLevel":true,"includeInShuffle":true,"preferredOrder":0,"pointsOfInterest":{"0":"CUSTOM_WALI_11111111_2222_4333_8444_555555555555_0"},"url-4K-SDR-240FPS":"file:///REDACTED/video.mov","previewImage":"file:///REDACTED/preview.png"}]},"wallpaper_index":{"provider":"com.apple.wallpaper.choice.aerials","configuration":{"assetID":"11111111-2222-4333-8444-555555555555"},"configuration_encoding":"binary-plist-data","selection_policy":"main_display_single_asset","managed_root_values":["AllSpacesAndDisplays","SystemDefault","Displays","Spaces"],"global_linked_node":{"Type":"linked","Linked":{"Content":{"Choices":[{"Configuration":{"assetID":"11111111-2222-4333-8444-555555555555"},"Files":[],"Provider":"com.apple.wallpaper.choice.aerials"}],"EncodedOptionValues":"REDACTED_BINARY_PLIST_DATA","Shuffle":"$null"},"LastSet":"REDACTED_DATE","LastUse":"REDACTED_DATE"}},"active_override_maps":{"Displays":{},"Spaces":{}},"mutable_node_patterns":["AllSpacesAndDisplays","SystemDefault","Displays","Spaces"],"preserved_global_fields":["Linked/Content/EncodedOptionValues","Linked/Content/Shuffle"],"daemon_timestamp_drift_fields":["Linked/LastSet","Linked/LastUse"],"rollback_policy":"restore_exact_four_root_preimage"}}
+EOF
 
     cat > "${root}/Config/Base.xcconfig" <<'EOF'
 MARKETING_VERSION = 0.1.0
@@ -329,6 +333,50 @@ EOF
 Fixture.
 EOF
 
+    cat > "${root}/docs/adr/0008-session-lock-aerial-adapter.md" <<'EOF'
+# 0008: Fixture lock screen adapter
+
+- status: accepted
+- date: 2026-08-31
+- owner_role: compatibility_maintainer
+- accepted_by: project_owner
+- approval_reference: user-directed autonomous implementation mandate 2026-08-31
+
+## Context
+Fixture.
+EOF
+
+    cat > "${root}/docs/adr/0009-global-linked-lock-screen-activation.md" <<'EOF'
+# 0009: Fixture global linked lock screen adapter
+
+- status: partially_superseded
+- date: 2026-08-31
+- owner_role: compatibility_maintainer
+- accepted_by: project_owner
+- approval_reference: project-owner global linked activation directive 2026-08-31
+- related: 0008
+- superseded_by: 0010
+- superseded_scope: refresh_only_after_required_mutation
+
+## Context
+Fixture.
+EOF
+
+    cat > "${root}/docs/adr/0010-restart-lock-screen-playback-on-session-lock.md" <<'EOF'
+# 0010: Fixture session lock playback restart
+
+- status: accepted
+- date: 2026-09-01
+- owner_role: compatibility_maintainer
+- accepted_by: project_owner
+- approval_reference: project-owner autonomous Lock Screen completion directive 2026-09-01
+- supersedes: 0009
+- supersedes_scope: refresh_only_after_required_mutation
+
+## Context
+Fixture.
+EOF
+
     FIXTURE_ROOT="${root}" "${RUBY_BIN}" -rpsych <<'RUBY'
 root = ENV.fetch("FIXTURE_ROOT")
 
@@ -534,6 +582,7 @@ access["model_records"] = {"readers" => ["WALIModel"], "writers" => ["WALIModel"
 access["app_agent_wire"] = {"readers" => ["WALI", "WALIAgent"], "writers" => ["WALI", "WALIAgent"]}
 access["agent_worker_wire"] = {"readers" => ["WALIAgent", "WALITranscoder"], "writers" => ["WALIAgent", "WALITranscoder"]}
 access["preferences"] = {"readers" => ["WALIAgent"], "writers" => ["WALIAgent"]}
+access["lock_screen_manifest"] = {"readers" => ["WALIAgent"], "writers" => ["WALIAgent"]}
 access["url_schemes"] = {"readers" => ["WALI"], "writers" => []}
 access["diagnostic_export"] = {"readers" => [], "writers" => ["WALIAgent"]}
 
@@ -557,11 +606,11 @@ kinds = {
 
 surfaces = surface_ids.map do |id|
   implementation =
-    if id == "model_records"
+    if %w[model_records lock_screen_manifest].include?(id)
       "implemented"
     elsif %w[bundle_identifiers application_group_containers agent_worker_service_names].include?(id)
       "configured"
-    elsif %w[catalog_manifest lock_screen_manifest].include?(id)
+    elsif id == "catalog_manifest"
       "deferred"
     else
       "unimplemented"
@@ -585,10 +634,16 @@ surfaces = surface_ids.map do |id|
     "module_access" => access[id],
     "fixture_gate" => {
       "status" => implementation == "implemented" ? "passing" : (implementation == "deferred" ? "deferred" : (implementation == "configured" ? "not_applicable" : "planned")),
-      "paths" => id == "model_records" ? [
-        "Fixtures/Compatibility/model-records-v1.json",
-        "Fixtures/Compatibility/model-records-invalid-v1.json"
-      ] : []
+      "paths" => if id == "model_records"
+        [
+          "Fixtures/Compatibility/model-records-v1.json",
+          "Fixtures/Compatibility/model-records-invalid-v1.json"
+        ]
+      elsif id == "lock_screen_manifest"
+        ["Fixtures/LockScreen/modern-aerial-v1.json"]
+      else
+        []
+      end
     },
     "details" => {}
   }
@@ -628,6 +683,19 @@ by_id["model_records"]["version"] = {
     {"epoch" => 1, "minimum_revision" => 0, "maximum_revision" => 0}
   ],
   "additive_compatibility" => "declared_ranges_only"
+}
+by_id["lock_screen_manifest"]["version"] = {
+  "current" => {"epoch" => 1, "revision" => 1},
+  "readable_epochs" => [
+    {"epoch" => 1, "minimum_revision" => 1, "maximum_revision" => 1}
+  ],
+  "additive_compatibility" => "declared_ranges_only"
+}
+by_id["lock_screen_manifest"]["product_compatibility"] = {
+  "minimum_reader" => "0.1.0",
+  "minimum_writer" => "0.1.0",
+  "rollback_readers" => [],
+  "rollback_fixture_paths" => []
 }
 by_id["model_records"]["product_compatibility"] = {
   "minimum_reader" => "0.1.0",
@@ -755,8 +823,23 @@ by_id["catalog_manifest"]["details"] = {
 }
 by_id["lock_screen_manifest"]["details"] = {
   "support_scope" => "session_lock_screen_only",
-  "implementation_gate" => "separate_accepted_adr",
-  "fixture_policy" => "copied_version_gated_store"
+  "implementation_gate" => "accepted_adr_0010",
+  "fixture_policy" => "redacted_version_gated_store",
+  "verified_system_builds" => ["25F80", "25G83"],
+  "manifest_version" => 1,
+  "provider" => "com.apple.wallpaper.choice.aerials",
+  "category_id" => "57414C49-0000-4000-8000-000000000001",
+  "subcategory_id" => "57414C49-0000-4000-8000-000000000002",
+  "shot_prefix" => "CUSTOM_WALI_",
+  "maximum_owned_assets" => 8,
+  "unknown_newer_policy" => "reject_before_write",
+  "global_default_policy" => "transactional_current_user_linked",
+  "selection_policy" => "main_display_single_asset",
+  "active_override_policy" => "clear_displays_and_spaces_restore_exact",
+  "rollback_policy" => "exact_four_root_preimage_with_conflict_detection",
+  "agent_quiesce_policy" => "before_managed_manifest_or_index_write",
+  "daemon_timestamp_policy" => "allow_last_set_and_last_use_drift_only",
+  "session_lock_refresh_policy" => "restart_active_selection_once_per_distinct_lock"
 }
 by_id["diagnostic_export"]["details"] = {
   "current_format" => nil,
@@ -1316,6 +1399,7 @@ declare -a required_detail_cases=(
     "url_schemes:mutation_policy"
     "catalog_manifest:signature_required"
     "lock_screen_manifest:implementation_gate"
+    "lock_screen_manifest:session_lock_refresh_policy"
     "diagnostic_export:required_redaction"
 )
 for index in "${!required_detail_cases[@]}"; do
@@ -1328,6 +1412,58 @@ for index in "${!required_detail_cases[@]}"; do
         "${detail_fixture}" \
         "${surface_id} details missing required field ${detail_key}"
 done
+
+lock_screen_build_fixture="$(new_fixture lock-screen-build)"
+mutate_yaml "${lock_screen_build_fixture}/docs/compatibility/surfaces.yml" \
+    'data["surfaces"].find { |surface| surface["id"] == "lock_screen_manifest" }["details"]["verified_system_builds"] = ["UNKNOWN"]'
+expect_failure \
+    "lock screen exact build gate" \
+    "${lock_screen_build_fixture}" \
+    "lock_screen_manifest verified builds are invalid"
+
+lock_screen_provider_fixture="$(new_fixture lock-screen-provider)"
+mutate_yaml "${lock_screen_provider_fixture}/docs/compatibility/surfaces.yml" \
+    'data["surfaces"].find { |surface| surface["id"] == "lock_screen_manifest" }["details"]["provider"] = "example.invalid"'
+expect_failure \
+    "lock screen exact provider" \
+    "${lock_screen_provider_fixture}" \
+    "lock_screen_manifest provider is invalid"
+
+lock_screen_global_fixture="$(new_fixture lock-screen-global-default)"
+mutate_yaml "${lock_screen_global_fixture}/docs/compatibility/surfaces.yml" \
+    'data["surfaces"].find { |surface| surface["id"] == "lock_screen_manifest" }["details"]["global_default_policy"] = "mutate"'
+expect_failure \
+    "lock screen global linked policy" \
+    "${lock_screen_global_fixture}" \
+    "lock_screen_manifest global policy is invalid"
+
+lock_screen_selection_fixture="$(new_fixture lock-screen-selection-policy)"
+mutate_yaml "${lock_screen_selection_fixture}/docs/compatibility/surfaces.yml" \
+    'data["surfaces"].find { |surface| surface["id"] == "lock_screen_manifest" }["details"]["selection_policy"] = "per-display"'
+expect_failure \
+    "lock screen main display selection" \
+    "${lock_screen_selection_fixture}" \
+    "lock_screen_manifest selection policy is invalid"
+
+lock_screen_refresh_fixture="$(new_fixture lock-screen-refresh-policy)"
+mutate_yaml "${lock_screen_refresh_fixture}/docs/compatibility/surfaces.yml" \
+    'data["surfaces"].find { |surface| surface["id"] == "lock_screen_manifest" }["details"]["session_lock_refresh_policy"] = "periodic"'
+expect_failure \
+    "lock screen session lock refresh policy" \
+    "${lock_screen_refresh_fixture}" \
+    "lock_screen_manifest session lock refresh policy is invalid"
+
+lock_screen_redaction_fixture="$(new_fixture lock-screen-redaction)"
+"${RUBY_BIN}" -rjson -e '
+  path = ARGV.fetch(0)
+  data = JSON.parse(File.read(path))
+  data["unsafe_path"] = "/Users/example"
+  File.write(path, JSON.generate(data))
+' "${lock_screen_redaction_fixture}/Fixtures/LockScreen/modern-aerial-v1.json"
+expect_failure \
+    "lock screen fixture redaction" \
+    "${lock_screen_redaction_fixture}" \
+    "lock_screen_manifest fixture must remain redacted"
 
 model_records_canonical_bytes_fixture="$(new_fixture model-records-canonical-bytes)"
 mutate_yaml "${model_records_canonical_bytes_fixture}/docs/compatibility/surfaces.yml" \

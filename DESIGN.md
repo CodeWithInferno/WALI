@@ -100,11 +100,10 @@ Media grids use 16 pt gutters and adapt column count to available width. Do not 
 
 Sections:
 
-1. Discover
-2. Library
-3. Playlists
-4. Downloads
-5. Create
+1. Library
+2. Downloads
+
+Importing is available from the toolbar, the empty Library and Downloads states, and drag and drop. A separate Create destination would duplicate that flow and is intentionally omitted.
 
 Settings stays in the standard application menu and `⌘,`; it is not a fake sidebar page. Sidebar icon color follows the system accent. Selection, row height, disclosure, and hide/show behavior remain native.
 
@@ -113,6 +112,11 @@ Settings stays in the standard application menu and `⌘,`; it is not a fake sid
 - Leading: native sidebar toggle and navigation history when applicable.
 - Center/primary area: search scoped to the current library surface.
 - Trailing: display assignment, active-wallpaper state, and a WALI status button.
+- Display assignment opens a popover that mirrors the connected display geometry
+  reported by macOS. Its centered, proportional monitor tiles are selection
+  controls, not draggable arrangement controls. Tiles show the current wallpaper,
+  display role, and scaling mode; the detail surface's Apply button remains the
+  only commit point for wallpaper changes.
 - The WALI status button opens the same compact status content used by the menu-bar extra: renderer CPU, memory, playback state, and quick controls.
 
 Toolbar items use native grouping. No custom toolbar background is drawn.
@@ -124,8 +128,9 @@ Toolbar items use native grouping. No custom toolbar background is drawn.
 - Hovering for 350 ms starts one silent low-resolution preview. Leaving stops and releases it.
 - Only one grid preview may decode at a time.
 - Single click selects. Double click applies. Space opens a Quick Look-style preview.
-- A detail surface shows full preview, title, creator/license, dimensions, duration, file size, display target, and Apply.
-- Imported videos clearly show conversion and lock-screen compatibility state.
+- A detail surface shows full preview, title, creator/license, dimensions, duration, file size, per-display targets, scaling, and Apply.
+- Scaling is saved with each display assignment: Fill Screen, Fit to Screen, Stretch to Fill, or Center at native size.
+- Imported videos clearly show conversion state.
 
 ### Empty, loading, and error states
 
@@ -151,6 +156,26 @@ Clicking the menu-bar icon opens a compact, popover-like window containing:
 `Stop Wallpaper` stops rendering but leaves WALI available. `Quit WALI` exits the agent and main app. Destructive or disruptive actions use explicit labels rather than ambiguous icon-only controls.
 
 Performance sampling is demand-driven: 1 Hz while the popover or diagnostics view is visible, then suspended. The monitor must not create meaningful background energy use.
+
+## Lock Screen continuity
+
+WALI renders the signed-in user's desktop and follows that desktop across Spaces, display reconnects, wake, and unlock. macOS does not expose a public API for an app to draw arbitrary content inside the protected Lock Screen or FileVault login surface.
+
+Settings uses a native `Form` section with one opt-in toggle beside direct,
+inline status text. The feature is labeled experimental private compatibility:
+it mirrors active assignments through Apple's current-user Aerial provider on
+verified macOS builds. The copy states that the authenticated Lock Screen has
+an independent playback timeline and that FileVault startup is unavailable.
+Turning the toggle off rolls back only WALI-owned records.
+The Lock Screen mirrors the main display's assignment as one global Aerial
+selection. While enabled, WALI temporarily clears per-display and per-Space
+overrides so macOS uses that linked selection everywhere; disabling restores
+the exact prior values when they remain safe to restore. A conflicting external
+change is preserved and reported rather than overwritten.
+
+This is never presented as direct Lock Screen drawing or a frame-continuous
+handoff. It does not add custom chrome, elevated setup, a server, or a separate
+Create surface.
 
 ## Motion and interaction
 

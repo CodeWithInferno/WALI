@@ -2,6 +2,9 @@ schema_version: 3
 schema_document: docs/compatibility/surfaces-schema.md
 
 surfaces:
+  # Runtime metadata is currently a versioned agent-owned JSON snapshot. A
+  # SQLite schema has not been introduced, so this surface intentionally stays
+  # unimplemented rather than treating a different storage format as SQLite.
   - id: sqlite_schema
     kind: sqlite_schema
     owner_role: storage_maintainer
@@ -59,9 +62,9 @@ surfaces:
     owner_role: domain_maintainer
     implementation: implemented
     version:
-      current: { epoch: 1, revision: 0 }
+      current: { epoch: 1, revision: 1 }
       readable_epochs:
-        - { epoch: 1, minimum_revision: 0, maximum_revision: 0 }
+        - { epoch: 1, minimum_revision: 1, maximum_revision: 1 }
       additive_compatibility: declared_ranges_only
     product_compatibility:
       minimum_reader: 0.1.0
@@ -94,6 +97,9 @@ surfaces:
       invalid_fixture_paths:
         - Packages/WALICore/Tests/WALIModelTests/Fixtures/model-records-invalid-v1.json
 
+  # The local request/reply implementation is checked in. This compatibility
+  # promise remains unimplemented until golden and malformed-version fixtures
+  # exist and pass, as required by the surface schema.
   - id: app_agent_wire
     kind: wire_channel
     owner_role: ipc_maintainer
@@ -134,6 +140,8 @@ surfaces:
           - expected_revision
           - payload_length
 
+  # The bounded transcoder request/reply implementation is checked in. Its
+  # versioned compatibility promise remains gated on fixture evidence.
   - id: agent_worker_wire
     kind: wire_channel
     owner_role: ipc_maintainer
@@ -243,7 +251,7 @@ surfaces:
   - id: app_agent_service_names
     kind: service_identity
     owner_role: ipc_maintainer
-    implementation: unimplemented
+    implementation: configured
     version:
       current: null
       readable_epochs: []
@@ -257,19 +265,19 @@ surfaces:
       readers: [WALI, WALIAgent]
       writers: []
     fixture_gate:
-      status: planned
+      status: not_applicable
       paths: []
     details:
       decision_gate: adr_0006_signed_lifecycle_spike
       configurations:
         Debug:
-          current: []
+          current: [com.wali.debug.WALIAgent.control]
           target: [com.wali.debug.WALIAgent.control]
         Development:
-          current: []
+          current: [com.wali.development.WALIAgent.control]
           target: [com.wali.development.WALIAgent.control]
         Release:
-          current: []
+          current: [com.wali.WALIAgent.control]
           target: [com.wali.WALIAgent.control]
 
   - id: agent_worker_service_names
@@ -304,6 +312,8 @@ surfaces:
           current: [com.wali.WALITranscoder]
           target: [com.wali.WALITranscoder]
 
+  # The content-addressed store and crash recovery are implemented locally.
+  # This versioned surface remains unimplemented until its fixture gate exists.
   - id: content_store
     kind: content_store
     owner_role: storage_maintainer
@@ -330,6 +340,8 @@ surfaces:
       publication_scope: same_volume_only
       publication_primitive: no_replace
 
+  # Preferences participate in the agent-owned runtime snapshot. Their
+  # standalone compatibility promise remains gated on version fixtures.
   - id: preferences
     kind: preferences
     owner_role: agent_runtime_maintainer
@@ -409,26 +421,43 @@ surfaces:
   - id: lock_screen_manifest
     kind: lock_screen_manifest
     owner_role: compatibility_maintainer
-    implementation: deferred
+    implementation: implemented
     version:
-      current: null
-      readable_epochs: []
-      additive_compatibility: null
+      current: { epoch: 1, revision: 1 }
+      readable_epochs:
+        - { epoch: 1, minimum_revision: 1, maximum_revision: 1 }
+      additive_compatibility: declared_ranges_only
     product_compatibility:
-      minimum_reader: null
-      minimum_writer: null
+      minimum_reader: 0.1.0
+      minimum_writer: 0.1.0
       rollback_readers: []
       rollback_fixture_paths: []
     module_access:
-      readers: []
-      writers: []
+      readers: [WALIAgent]
+      writers: [WALIAgent]
     fixture_gate:
-      status: deferred
-      paths: []
+      status: passing
+      paths:
+        - Fixtures/LockScreen/modern-aerial-v1.json
     details:
       support_scope: session_lock_screen_only
-      implementation_gate: separate_accepted_adr
-      fixture_policy: copied_version_gated_store
+      implementation_gate: accepted_adr_0010
+      fixture_policy: redacted_version_gated_store
+      verified_system_builds: [25F80, 25G83]
+      manifest_version: 1
+      provider: com.apple.wallpaper.choice.aerials
+      category_id: 57414C49-0000-4000-8000-000000000001
+      subcategory_id: 57414C49-0000-4000-8000-000000000002
+      shot_prefix: CUSTOM_WALI_
+      maximum_owned_assets: 8
+      unknown_newer_policy: reject_before_write
+      global_default_policy: transactional_current_user_linked
+      selection_policy: main_display_single_asset
+      active_override_policy: clear_displays_and_spaces_restore_exact
+      rollback_policy: exact_four_root_preimage_with_conflict_detection
+      agent_quiesce_policy: before_managed_manifest_or_index_write
+      daemon_timestamp_policy: allow_last_set_and_last_use_drift_only
+      session_lock_refresh_policy: restart_active_selection_once_per_distinct_lock
 
   - id: diagnostic_export
     kind: diagnostic_export

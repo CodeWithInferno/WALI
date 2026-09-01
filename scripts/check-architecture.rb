@@ -1632,6 +1632,7 @@ class ArchitectureChecker
     validate_fixture_gate(id, implementation, surface["fixture_gate"])
     validate_surface_details(id, implementation, surface["details"])
     validate_model_record_fixture_alignment(surface) if id == "model_records"
+    validate_lock_screen_fixture_alignment(surface) if id == "lock_screen_manifest"
   end
 
   def validate_surface_versions(id, implementation, version, compatibility)
@@ -1804,6 +1805,108 @@ class ArchitectureChecker
     end
   end
 
+  def validate_lock_screen_fixture_alignment(surface)
+    gate = surface["fixture_gate"]
+    return unless gate.is_a?(Hash)
+
+    paths = string_array(gate["paths"], "lock_screen_manifest fixture paths")
+    expected = ["Fixtures/LockScreen/modern-aerial-v1.json"]
+    unless paths == expected
+      error("lock_screen_manifest must use the redacted modern Aerial v1 fixture")
+      return
+    end
+    path = safe_relative_path(paths.first, "lock_screen_manifest fixture path")
+    return unless path && File.file?(path)
+
+    begin
+      fixture = JSON.parse(File.read(path))
+    rescue JSON::ParserError
+      error("lock_screen_manifest fixture must be valid JSON")
+      return
+    end
+    expected_values = {
+      ["epoch"] => 1,
+      ["revision"] => 1,
+      ["verified_system_build"] => "25F80",
+      ["manifest", "version"] => 1,
+      ["wallpaper_index", "provider"] => "com.apple.wallpaper.choice.aerials"
+    }
+    expected_values.each do |keys, expected_value|
+      actual = keys.reduce(fixture) { |value, key| value.is_a?(Hash) ? value[key] : nil }
+      error("lock_screen_manifest fixture #{keys.join('.')} is invalid") unless actual == expected_value
+    end
+    category = fixture.dig("manifest", "categories")&.first
+    subcategory = category.is_a?(Hash) ? category["subcategories"]&.first : nil
+    asset = fixture.dig("manifest", "assets")&.first
+    asset_id = "11111111-2222-4333-8444-555555555555"
+    unless category.is_a?(Hash) &&
+           category["id"] == "57414C49-0000-4000-8000-000000000001" &&
+           category["representativeAssetID"] == asset_id &&
+           category["previewImage"].to_s.start_with?("file:///REDACTED/") &&
+           subcategory.is_a?(Hash) &&
+           subcategory["id"] == "57414C49-0000-4000-8000-000000000002" &&
+           subcategory["representativeAssetID"] == asset_id &&
+           subcategory["previewImage"].to_s.start_with?("file:///REDACTED/")
+      error("lock_screen_manifest fixture ownership category structure is invalid")
+    end
+    required_asset_fields = %w[
+      id shotID categories subcategories localizedNameKey accessibilityLabel
+      showInTopLevel includeInShuffle preferredOrder pointsOfInterest
+      url-4K-SDR-240FPS previewImage
+    ]
+    unless asset.is_a?(Hash) && (required_asset_fields - asset.keys).empty? &&
+           asset["id"] == asset_id &&
+           asset["categories"] == ["57414C49-0000-4000-8000-000000000001"] &&
+           asset["subcategories"] == ["57414C49-0000-4000-8000-000000000002"] &&
+           asset["shotID"] == "CUSTOM_WALI_11111111_2222_4333_8444_555555555555" &&
+           asset["url-4K-SDR-240FPS"].to_s.start_with?("file:///REDACTED/") &&
+           asset["previewImage"].to_s.start_with?("file:///REDACTED/")
+      error("lock_screen_manifest fixture asset structure is invalid")
+    end
+    expected_managed = [
+      "AllSpacesAndDisplays",
+      "SystemDefault",
+      "Displays",
+      "Spaces"
+    ]
+    expected_choice = {
+      "Configuration" => {"assetID" => asset_id},
+      "Files" => [],
+      "Provider" => "com.apple.wallpaper.choice.aerials"
+    }
+    global_node = fixture.dig("wallpaper_index", "global_linked_node")
+    global_content = global_node&.dig("Linked", "Content")
+    unless fixture.dig("wallpaper_index", "selection_policy") == "main_display_single_asset" &&
+           fixture.dig("wallpaper_index", "managed_root_values") == expected_managed &&
+           fixture.dig("wallpaper_index", "mutable_node_patterns") == expected_managed &&
+           fixture.dig("wallpaper_index", "configuration", "assetID") == asset_id &&
+           fixture.dig("wallpaper_index", "configuration_encoding") == "binary-plist-data" &&
+           global_node&.fetch("Type", nil) == "linked" &&
+           global_content&.fetch("Choices", nil) == [expected_choice] &&
+           global_content&.fetch("EncodedOptionValues", nil) == "REDACTED_BINARY_PLIST_DATA" &&
+           global_content&.fetch("Shuffle", nil) == "$null" &&
+           global_node&.dig("Linked", "LastSet") == "REDACTED_DATE" &&
+           global_node&.dig("Linked", "LastUse") == "REDACTED_DATE" &&
+           fixture.dig("wallpaper_index", "active_override_maps") == {
+             "Displays" => {}, "Spaces" => {}
+           } &&
+           fixture.dig("wallpaper_index", "preserved_global_fields") == [
+             "Linked/Content/EncodedOptionValues", "Linked/Content/Shuffle"
+           ] &&
+           fixture.dig("wallpaper_index", "daemon_timestamp_drift_fields") == [
+             "Linked/LastSet", "Linked/LastUse"
+           ] &&
+           fixture.dig("wallpaper_index", "rollback_policy") == "restore_exact_four_root_preimage"
+      error("lock_screen_manifest fixture node scope is invalid")
+    end
+    serialized = File.read(path)
+    file_urls = serialized.scan(%r{file://[^"\s]+})
+    if serialized.include?("/Users/") || serialized.match?(/Backdrop/i) ||
+       file_urls.any? { |url| !url.start_with?("file:///REDACTED/") }
+      error("lock_screen_manifest fixture must remain redacted and product-neutral")
+    end
+  end
+
   def validate_surface_details(id, implementation, details)
     unless details.is_a?(Hash)
       error("surface #{id} details must be a mapping")
@@ -1930,12 +2033,34 @@ class ArchitectureChecker
     when "lock_screen_manifest"
       require_exact_fields(
         details,
-        %w[support_scope implementation_gate fixture_policy],
+        %w[
+          support_scope implementation_gate fixture_policy verified_system_builds
+          manifest_version provider category_id subcategory_id shot_prefix
+          maximum_owned_assets unknown_newer_policy global_default_policy
+          selection_policy active_override_policy rollback_policy
+          agent_quiesce_policy daemon_timestamp_policy session_lock_refresh_policy
+        ],
         "#{id} details"
       )
-      error("lock_screen_manifest must remain deferred") unless implementation == "deferred"
-      error("lock_screen_manifest implementation_gate is invalid") unless details["implementation_gate"] == "separate_accepted_adr"
-      error("lock_screen_manifest fixture_policy is invalid") unless details["fixture_policy"] == "copied_version_gated_store"
+      error("lock_screen_manifest must be implemented") unless implementation == "implemented"
+      error("lock_screen_manifest support scope is invalid") unless details["support_scope"] == "session_lock_screen_only"
+      error("lock_screen_manifest implementation_gate is invalid") unless details["implementation_gate"] == "accepted_adr_0010"
+      error("lock_screen_manifest fixture_policy is invalid") unless details["fixture_policy"] == "redacted_version_gated_store"
+      error("lock_screen_manifest verified builds are invalid") unless details["verified_system_builds"] == ["25F80", "25G83"]
+      error("lock_screen_manifest manifest version is invalid") unless details["manifest_version"] == 1
+      error("lock_screen_manifest provider is invalid") unless details["provider"] == "com.apple.wallpaper.choice.aerials"
+      error("lock_screen_manifest category ID is invalid") unless details["category_id"] == "57414C49-0000-4000-8000-000000000001"
+      error("lock_screen_manifest subcategory ID is invalid") unless details["subcategory_id"] == "57414C49-0000-4000-8000-000000000002"
+      error("lock_screen_manifest shot prefix is invalid") unless details["shot_prefix"] == "CUSTOM_WALI_"
+      error("lock_screen_manifest asset bound is invalid") unless details["maximum_owned_assets"] == 8
+      error("lock_screen_manifest must reject unknown schemas before write") unless details["unknown_newer_policy"] == "reject_before_write"
+      error("lock_screen_manifest global policy is invalid") unless details["global_default_policy"] == "transactional_current_user_linked"
+      error("lock_screen_manifest selection policy is invalid") unless details["selection_policy"] == "main_display_single_asset"
+      error("lock_screen_manifest active override policy is invalid") unless details["active_override_policy"] == "clear_displays_and_spaces_restore_exact"
+      error("lock_screen_manifest rollback policy is invalid") unless details["rollback_policy"] == "exact_four_root_preimage_with_conflict_detection"
+      error("lock_screen_manifest quiesce policy is invalid") unless details["agent_quiesce_policy"] == "before_managed_manifest_or_index_write"
+      error("lock_screen_manifest daemon timestamp policy is invalid") unless details["daemon_timestamp_policy"] == "allow_last_set_and_last_use_drift_only"
+      error("lock_screen_manifest session lock refresh policy is invalid") unless details["session_lock_refresh_policy"] == "restart_active_selection_once_per_distinct_lock"
     when "diagnostic_export"
       require_exact_fields(
         details,
