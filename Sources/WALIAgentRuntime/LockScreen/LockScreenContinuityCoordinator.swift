@@ -5,7 +5,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 public enum LockScreenCompatibilityEpoch {
-    public static let supportedSystemBuilds: Set<String> = ["25F80"]
+    public static let supportedSystemBuilds: Set<String> = ["25F80", "25G83"]
     public static let manifestEpoch = 1
     public static let manifestRevision = 1
 
@@ -195,7 +195,8 @@ public actor LockScreenContinuityCoordinator {
     @discardableResult
     public func reconcile(
         enabled: Bool,
-        assignments: [LockScreenWallpaperAssignment]
+        assignments: [LockScreenWallpaperAssignment],
+        restartPlayback: Bool = false
     ) async throws -> LockScreenContinuityResult {
         await acquireReconciliationAccess()
         var holdsReconciliationAccess = true
@@ -231,6 +232,7 @@ public actor LockScreenContinuityCoordinator {
 
         if !plan.requiresTransactionMutation {
             let shouldRefresh = plan.refreshPending
+                || (restartPlayback && enabled && !plan.eligible.isEmpty)
             let currentJournal = try loadAssetJournal()
             releaseReconciliationAccess()
             holdsReconciliationAccess = false
@@ -356,6 +358,7 @@ public actor LockScreenContinuityCoordinator {
             || manifestResult.changed
             || storeResult.changed
             || plan.refreshPending
+            || (restartPlayback && enabled && !eligible.isEmpty)
         let pendingJournal = LockScreenAssetJournal(
             transactionID: transactionID,
             phase: .committed,

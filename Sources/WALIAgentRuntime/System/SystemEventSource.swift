@@ -17,6 +17,7 @@ public final class SystemEventSource {
 
     public var onChange: ChangeHandler?
     public var onPresentationRefresh: (@MainActor () -> Void)?
+    public var onSessionLock: (@MainActor () -> Void)?
     public private(set) var pauseReasons: Set<WallpaperAutomaticPauseReason> = []
 
     private var workspaceTokens: [any NSObjectProtocol] = []
@@ -151,7 +152,7 @@ public final class SystemEventSource {
         }
     }
 
-    private func set(
+    func set(
         _ reason: WallpaperAutomaticPauseReason,
         active: Bool,
         publish: Bool = true
@@ -162,7 +163,11 @@ public final class SystemEventSource {
         } else {
             changed = pauseReasons.remove(reason) != nil
         }
-        guard publish, changed else { return }
+        guard changed else { return }
+        if reason == .sessionLocked, active {
+            onSessionLock?()
+        }
+        guard publish else { return }
         onChange?(pauseReasons)
     }
 }

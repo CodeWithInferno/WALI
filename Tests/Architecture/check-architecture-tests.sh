@@ -349,12 +349,29 @@ EOF
     cat > "${root}/docs/adr/0009-global-linked-lock-screen-activation.md" <<'EOF'
 # 0009: Fixture global linked lock screen adapter
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-08-31
 - owner_role: compatibility_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner global linked activation directive 2026-08-31
 - related: 0008
+- superseded_by: 0010
+- superseded_scope: refresh_only_after_required_mutation
+
+## Context
+Fixture.
+EOF
+
+    cat > "${root}/docs/adr/0010-restart-lock-screen-playback-on-session-lock.md" <<'EOF'
+# 0010: Fixture session lock playback restart
+
+- status: accepted
+- date: 2026-09-01
+- owner_role: compatibility_maintainer
+- accepted_by: project_owner
+- approval_reference: project-owner autonomous Lock Screen completion directive 2026-09-01
+- supersedes: 0009
+- supersedes_scope: refresh_only_after_required_mutation
 
 ## Context
 Fixture.
@@ -806,9 +823,9 @@ by_id["catalog_manifest"]["details"] = {
 }
 by_id["lock_screen_manifest"]["details"] = {
   "support_scope" => "session_lock_screen_only",
-  "implementation_gate" => "accepted_adr_0009",
+  "implementation_gate" => "accepted_adr_0010",
   "fixture_policy" => "redacted_version_gated_store",
-  "verified_system_builds" => ["25F80"],
+  "verified_system_builds" => ["25F80", "25G83"],
   "manifest_version" => 1,
   "provider" => "com.apple.wallpaper.choice.aerials",
   "category_id" => "57414C49-0000-4000-8000-000000000001",
@@ -821,7 +838,8 @@ by_id["lock_screen_manifest"]["details"] = {
   "active_override_policy" => "clear_displays_and_spaces_restore_exact",
   "rollback_policy" => "exact_four_root_preimage_with_conflict_detection",
   "agent_quiesce_policy" => "before_managed_manifest_or_index_write",
-  "daemon_timestamp_policy" => "allow_last_set_and_last_use_drift_only"
+  "daemon_timestamp_policy" => "allow_last_set_and_last_use_drift_only",
+  "session_lock_refresh_policy" => "restart_active_selection_once_per_distinct_lock"
 }
 by_id["diagnostic_export"]["details"] = {
   "current_format" => nil,
@@ -1381,6 +1399,7 @@ declare -a required_detail_cases=(
     "url_schemes:mutation_policy"
     "catalog_manifest:signature_required"
     "lock_screen_manifest:implementation_gate"
+    "lock_screen_manifest:session_lock_refresh_policy"
     "diagnostic_export:required_redaction"
 )
 for index in "${!required_detail_cases[@]}"; do
@@ -1425,6 +1444,14 @@ expect_failure \
     "lock screen main display selection" \
     "${lock_screen_selection_fixture}" \
     "lock_screen_manifest selection policy is invalid"
+
+lock_screen_refresh_fixture="$(new_fixture lock-screen-refresh-policy)"
+mutate_yaml "${lock_screen_refresh_fixture}/docs/compatibility/surfaces.yml" \
+    'data["surfaces"].find { |surface| surface["id"] == "lock_screen_manifest" }["details"]["session_lock_refresh_policy"] = "periodic"'
+expect_failure \
+    "lock screen session lock refresh policy" \
+    "${lock_screen_refresh_fixture}" \
+    "lock_screen_manifest session lock refresh policy is invalid"
 
 lock_screen_redaction_fixture="$(new_fixture lock-screen-redaction)"
 "${RUBY_BIN}" -rjson -e '

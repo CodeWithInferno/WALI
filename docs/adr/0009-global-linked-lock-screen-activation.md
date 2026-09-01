@@ -1,11 +1,17 @@
 # 0009: Supersede per-display Lock Screen activation with global linked activation
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-08-31
 - owner_role: compatibility_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner global linked activation directive 2026-08-31
 - related: [0008](0008-session-lock-aerial-adapter.md)
+- superseded_by: 0010
+- superseded_scope: refresh_only_after_required_mutation
+
+ADR 0010 supersedes only the rule that Apple wallpaper processes refresh solely
+after a managed mutation. The store scope, transaction, ownership, rollback,
+and quiesce-before-write rules in this record remain accepted.
 
 ## Context
 
@@ -50,7 +56,7 @@ the compare-and-swap detects that race and fails without accepting ownership.
 - Scope remains the authenticated current user's session Lock Screen after
   login. FileVault preboot, loginwindow, other users, direct protected-UI
   drawing, root, SIP bypass, and UI injection remain excluded.
-- Build 25F80, manifest version 1, provider and WALI identifiers remain exact
+- Builds 25F80 and 25G83, manifest version 1, provider and WALI identifiers remain exact
   allowlisted compatibility inputs. Unknown variants fail before writes.
 - Only the main display assignment becomes the global Lock Screen selection.
   Desktop assignments and playback timelines remain independent.

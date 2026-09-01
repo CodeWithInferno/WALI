@@ -2038,15 +2038,15 @@ class ArchitectureChecker
           manifest_version provider category_id subcategory_id shot_prefix
           maximum_owned_assets unknown_newer_policy global_default_policy
           selection_policy active_override_policy rollback_policy
-          agent_quiesce_policy daemon_timestamp_policy
+          agent_quiesce_policy daemon_timestamp_policy session_lock_refresh_policy
         ],
         "#{id} details"
       )
       error("lock_screen_manifest must be implemented") unless implementation == "implemented"
       error("lock_screen_manifest support scope is invalid") unless details["support_scope"] == "session_lock_screen_only"
-      error("lock_screen_manifest implementation_gate is invalid") unless details["implementation_gate"] == "accepted_adr_0009"
+      error("lock_screen_manifest implementation_gate is invalid") unless details["implementation_gate"] == "accepted_adr_0010"
       error("lock_screen_manifest fixture_policy is invalid") unless details["fixture_policy"] == "redacted_version_gated_store"
-      error("lock_screen_manifest verified builds are invalid") unless details["verified_system_builds"] == ["25F80"]
+      error("lock_screen_manifest verified builds are invalid") unless details["verified_system_builds"] == ["25F80", "25G83"]
       error("lock_screen_manifest manifest version is invalid") unless details["manifest_version"] == 1
       error("lock_screen_manifest provider is invalid") unless details["provider"] == "com.apple.wallpaper.choice.aerials"
       error("lock_screen_manifest category ID is invalid") unless details["category_id"] == "57414C49-0000-4000-8000-000000000001"
@@ -2060,6 +2060,7 @@ class ArchitectureChecker
       error("lock_screen_manifest rollback policy is invalid") unless details["rollback_policy"] == "exact_four_root_preimage_with_conflict_detection"
       error("lock_screen_manifest quiesce policy is invalid") unless details["agent_quiesce_policy"] == "before_managed_manifest_or_index_write"
       error("lock_screen_manifest daemon timestamp policy is invalid") unless details["daemon_timestamp_policy"] == "allow_last_set_and_last_use_drift_only"
+      error("lock_screen_manifest session lock refresh policy is invalid") unless details["session_lock_refresh_policy"] == "restart_active_selection_once_per_distinct_lock"
     when "diagnostic_export"
       require_exact_fields(
         details,

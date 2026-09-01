@@ -441,9 +441,9 @@ surfaces:
         - Fixtures/LockScreen/modern-aerial-v1.json
     details:
       support_scope: session_lock_screen_only
-      implementation_gate: accepted_adr_0009
+      implementation_gate: accepted_adr_0010
       fixture_policy: redacted_version_gated_store
-      verified_system_builds: [25F80]
+      verified_system_builds: [25F80, 25G83]
       manifest_version: 1
       provider: com.apple.wallpaper.choice.aerials
       category_id: 57414C49-0000-4000-8000-000000000001
@@ -457,6 +457,7 @@ surfaces:
       rollback_policy: exact_four_root_preimage_with_conflict_detection
       agent_quiesce_policy: before_managed_manifest_or_index_write
       daemon_timestamp_policy: allow_last_set_and_last_use_drift_only
+      session_lock_refresh_policy: restart_active_selection_once_per_distinct_lock
 
   - id: diagnostic_export
     kind: diagnostic_export

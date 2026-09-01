@@ -37,6 +37,7 @@ public final class WALIAgentController: WALIUIActionHandling {
     private var importContexts: [UUID: LocalImportContext] = [:]
     private var importProgressUpdates: [UUID: ImportProgressUpdate] = [:]
     private var lockScreenTask: Task<Void, Never>?
+    private var lockScreenPlaybackRestartTask: Task<Void, Never>?
 
     public init() {
         let libraryPaths = try? LibraryPaths.applicationSupport()
@@ -65,6 +66,9 @@ public final class WALIAgentController: WALIUIActionHandling {
         renderer.onPresentationRefresh = { [weak self] in
             self?.scheduleLockScreenReconciliation()
         }
+        renderer.onSessionLock = { [weak self] in
+            self?.scheduleLockScreenPlaybackRestart()
+        }
         lockScreenStoreMonitor?.onChange = { [weak self] in
             self?.scheduleLockScreenReconciliation()
         }
@@ -80,6 +84,8 @@ public final class WALIAgentController: WALIUIActionHandling {
         startupTask = nil
         lockScreenTask?.cancel()
         lockScreenTask = nil
+        lockScreenPlaybackRestartTask?.cancel()
+        lockScreenPlaybackRestartTask = nil
         lockScreenStoreMonitor?.stop()
         for task in purgeTasks.values { task.cancel() }
         purgeTasks.removeAll()
@@ -773,7 +779,25 @@ public final class WALIAgentController: WALIUIActionHandling {
         }
     }
 
-    private func reconcileLockScreen(_ snapshot: EngineSnapshot) async throws {
+    private func scheduleLockScreenPlaybackRestart() {
+        lockScreenPlaybackRestartTask?.cancel()
+        lockScreenPlaybackRestartTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled, let self, let router = self.router else { return }
+            let snapshot = await router.snapshot()
+            do {
+                try await self.reconcileLockScreen(snapshot, restartPlayback: true)
+                await router.replaceRuntimeNotice(nil)
+            } catch {
+                await router.replaceRuntimeNotice(Self.lockScreenNotice(for: error))
+            }
+            await self.publishSnapshot()
+        }
+    }
+
+    private func reconcileLockScreen(
+        _ snapshot: EngineSnapshot,
+        restartPlayback: Bool = false
+    ) async throws {
         guard let lockScreenContinuity else { return }
         let assignments: [LockScreenWallpaperAssignment] = if snapshot.preferences.lockScreenContinuityEnabled {
             try await lockScreenAssignments(from: snapshot)
@@ -782,7 +806,8 @@ public final class WALIAgentController: WALIUIActionHandling {
         }
         _ = try await lockScreenContinuity.reconcile(
             enabled: snapshot.preferences.lockScreenContinuityEnabled,
-            assignments: assignments
+            assignments: assignments,
+            restartPlayback: restartPlayback
         )
     }
 

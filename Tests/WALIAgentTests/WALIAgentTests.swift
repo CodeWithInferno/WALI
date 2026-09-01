@@ -19,6 +19,24 @@ final class WALIAgentTests: XCTestCase {
         XCTAssertEqual(String(describing: WALIAgentRootView.self), "WALIAgentRootView")
     }
 
+    @MainActor
+    func testRendererForwardsEachDistinctSessionLockOnce() {
+        let systemEvents = SystemEventSource()
+        let renderer = WallpaperRenderer(systemEvents: systemEvents)
+        var lockCallbacks = 0
+        renderer.onSessionLock = { lockCallbacks += 1 }
+        renderer.start()
+        defer { renderer.shutdown() }
+
+        systemEvents.set(.sessionLocked, active: true)
+        systemEvents.set(.sessionLocked, active: true)
+        XCTAssertEqual(lockCallbacks, 1)
+
+        systemEvents.set(.sessionLocked, active: false)
+        systemEvents.set(.sessionLocked, active: true)
+        XCTAssertEqual(lockCallbacks, 2)
+    }
+
     func testGlobalActivationUsesOneAssetAndPreservesUnmanagedRootValues() throws {
         let fixture = try makeGlobalStoreFixture()
         let before = try plistRoot(at: fixture.index)
@@ -468,6 +486,30 @@ final class WALIAgentTests: XCTestCase {
         ).isEmpty)
     }
 
+    func testMacOS25G83PassesVerifiedLockScreenPreflight() async throws {
+        let fixture = try makeCoordinatorFixture(indexHasDisplay: false)
+        let coordinator = LockScreenContinuityCoordinator(
+            paths: fixture.paths,
+            ownedLibraryRoot: fixture.ownedRoot,
+            systemBuild: "25G83"
+        )
+
+        try await coordinator.validate(
+            enabled: true,
+            assignments: [.init(
+                displayID: "uuid:\(displayID.uuidString)",
+                isMain: true,
+                itemID: assetA,
+                name: "Synthetic",
+                masterBitDepth: 10,
+                masterArtifactSHA256: fixture.masterSHA256,
+                posterArtifactSHA256: fixture.posterSHA256,
+                masterURL: fixture.master,
+                posterURL: fixture.poster
+            )]
+        )
+    }
+
     func testCorruptPosterFailsBeforeAnyJournalOrAssetCopy() async throws {
         let fixture = try makeCoordinatorFixture(indexHasDisplay: true)
         try Data("not an image".utf8).write(to: fixture.poster)
@@ -794,6 +836,48 @@ final class WALIAgentTests: XCTestCase {
         XCTAssertEqual(refreshes.value, 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.journalURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.paths.assetJournalURL.path))
+    }
+
+    func testSessionLockRestartRefreshesActivePlaybackWithoutRewritingStores() async throws {
+        let fixture = try makeCoordinatorFixture(indexHasDisplay: false)
+        let refreshes = LockedCounter()
+        let quiesces = LockedCounter()
+        let coordinator = LockScreenContinuityCoordinator(
+            paths: fixture.paths,
+            ownedLibraryRoot: fixture.ownedRoot,
+            systemBuild: "25F80",
+            refreshHandler: { refreshes.increment() },
+            quiesceHandler: { quiesces.increment() }
+        )
+        let main = LockScreenWallpaperAssignment(
+            displayID: "uuid:\(displayID.uuidString)",
+            isMain: true,
+            itemID: assetA,
+            name: "Main",
+            masterBitDepth: 10,
+            masterArtifactSHA256: fixture.masterSHA256,
+            posterArtifactSHA256: fixture.posterSHA256,
+            masterURL: fixture.master,
+            posterURL: fixture.poster
+        )
+
+        _ = try await coordinator.reconcile(enabled: true, assignments: [main])
+        let manifestAfterActivation = try Data(contentsOf: fixture.paths.manifestURL)
+        let indexAfterActivation = try Data(contentsOf: fixture.paths.indexURL)
+        XCTAssertEqual(refreshes.value, 1)
+        XCTAssertEqual(quiesces.value, 1)
+
+        let result = try await coordinator.reconcile(
+            enabled: true,
+            assignments: [main],
+            restartPlayback: true
+        )
+
+        XCTAssertTrue(result.changed)
+        XCTAssertEqual(refreshes.value, 2)
+        XCTAssertEqual(quiesces.value, 1)
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.manifestURL), manifestAfterActivation)
+        XCTAssertEqual(try Data(contentsOf: fixture.paths.indexURL), indexAfterActivation)
     }
 
     func testCoordinatorUsesMainDisplayAndQuiescesOnlyBeforeRequiredMutation() async throws {
