@@ -95,14 +95,18 @@ public struct WallpaperStoreEditor: Sendable {
         let topLevelDisplayIDs = Set(existingNodePaths.compactMap { entry in
             entry.path.hasPrefix("Displays/") ? entry.displayUUID : nil
         })
-        guard Set(requested.keys).isSubset(of: topLevelDisplayIDs) else {
-            throw LockScreenCompatibilityError.unsupportedSchema(
-                "A connected display is missing from the current-user wallpaper store."
-            )
-        }
-        let desiredPaths = Dictionary(uniqueKeysWithValues: existingNodePaths.compactMap { entry in
-            requested[entry.displayUUID].map { (entry.path, $0) }
+        let missingTopLevelPaths = Set(Set(requested.keys).subtracting(topLevelDisplayIDs).map {
+            "Displays/\($0)/Linked/Content/Choices"
         })
+        let desiredEntries = existingNodePaths.compactMap { entry in
+            requested[entry.displayUUID].map { (entry.path, $0) }
+        } + missingTopLevelPaths.compactMap { path in
+            Self.displayUUID(inChoicePath: path).flatMap { requested[$0].map { (path, $0) } }
+        }
+        guard desiredEntries.count <= Self.maximumNodes else {
+            throw LockScreenCompatibilityError.malformedStore("Too many wallpaper choice nodes.")
+        }
+        let desiredPaths = Dictionary(uniqueKeysWithValues: desiredEntries)
         let recordsByPath = Dictionary(uniqueKeysWithValues: journal.records.map { ($0.path, $0) })
         let loadedDigest = Self.digest(loaded.data)
         let recoveredCommittedChange: Bool
@@ -122,6 +126,27 @@ public struct WallpaperStoreEditor: Sendable {
         for record in journal.records where desiredPaths[record.path] == nil {
             guard existingPathSet.contains(record.path) else { continue }
             let current = Self.currentChoices(in: root, path: record.path)
+            if record.createdDisplayNode {
+                if let currentID = Self.aerialAssetID(in: current),
+                   Set(record.managedAssetIDs).contains(currentID) {
+                    guard try Self.isExactSynthesizedDisplayNode(
+                        in: root,
+                        choicePath: record.path,
+                        assetID: currentID
+                    ) else {
+                        throw LockScreenCompatibilityError.ownershipConflict(
+                            "A WALI-created display override changed outside WALI; it was preserved."
+                        )
+                    }
+                    root = try Self.removingSynthesizedDisplayNode(
+                        atChoicePath: record.path,
+                        in: root
+                    )
+                }
+                // A removed node or one with an external choice is no longer
+                // WALI-owned. Preserve it and retire the stale record.
+                continue
+            }
             if Self.pointsToAnyAsset(current, assetIDs: Set(record.managedAssetIDs)) {
                 root = try Self.restoring(record, in: root)
             }
@@ -133,6 +158,7 @@ public struct WallpaperStoreEditor: Sendable {
         for (path, assetID) in desiredPaths.sorted(by: { $0.key < $1.key }) {
             let current = Self.currentChoices(in: root, path: path)
             let originalChoices: Data?
+            let createdDisplayNode: Bool
             if let existing = recordsByPath[path] {
                 let isManaged = Self.pointsToAnyAsset(
                     current,
@@ -149,9 +175,31 @@ public struct WallpaperStoreEditor: Sendable {
                         "A display choice changed outside WALI; it was preserved."
                     )
                 }
+                if existing.createdDisplayNode,
+                   isManaged,
+                   let currentID = Self.aerialAssetID(in: current) {
+                    guard try Self.isExactSynthesizedDisplayNode(
+                        in: root,
+                        choicePath: path,
+                        assetID: currentID
+                    ) else {
+                        throw LockScreenCompatibilityError.ownershipConflict(
+                            "A WALI-created display override changed outside WALI; it was preserved."
+                        )
+                    }
+                }
                 originalChoices = existing.originalChoices
+                createdDisplayNode = existing.createdDisplayNode
             } else {
-                if let currentID = Self.aerialAssetID(in: current),
+                if missingTopLevelPaths.contains(path) {
+                    guard current == nil else {
+                        throw LockScreenCompatibilityError.ownershipConflict(
+                            "A missing display override appeared during reconciliation; it was preserved."
+                        )
+                    }
+                    originalChoices = nil
+                    createdDisplayNode = true
+                } else if let currentID = Self.aerialAssetID(in: current),
                    knownOwnedAssetIDs.contains(currentID) {
                     guard currentID == assetID else {
                         throw LockScreenCompatibilityError.ownershipConflict(
@@ -163,19 +211,30 @@ public struct WallpaperStoreEditor: Sendable {
                         managedAssetID: currentID,
                         from: journal.records
                     )
+                    createdDisplayNode = false
                 } else {
                     originalChoices = try current.map(Self.encodePlistValue)
+                    createdDisplayNode = false
                 }
             }
             committedRecords.append(.init(
                 path: path,
                 originalChoices: originalChoices,
                 managedAssetIDs: [assetID],
-                targetAssetID: assetID
+                targetAssetID: assetID,
+                createdDisplayNode: createdDisplayNode
             ))
             let replacement = try Self.wallpaperChoices(assetID: assetID)
             if !Self.propertyListsEqual(current, replacement) {
-                root = try Self.settingChoices(replacement, at: path, in: root)
+                if createdDisplayNode, !existingPathSet.contains(path) {
+                    root = try Self.addingSynthesizedDisplayNode(
+                        choices: replacement,
+                        atChoicePath: path,
+                        in: root
+                    )
+                } else {
+                    root = try Self.settingChoices(replacement, at: path, in: root)
+                }
             }
         }
 
@@ -211,9 +270,9 @@ public struct WallpaperStoreEditor: Sendable {
         )
         var transitionRecords: [WallpaperChoiceJournalRecord] = []
         for path in Set(journal.records.map(\.path)).union(committedRecords.map(\.path)).sorted() {
-            guard existingPathSet.contains(path) else { continue }
             let prior = recordsByPath[path]
             let post = committedByPath[path]
+            guard existingPathSet.contains(path) || post?.createdDisplayNode == true else { continue }
             let original = prior?.originalChoices ?? post?.originalChoices
             let managed = Set(prior?.managedAssetIDs ?? [])
                 .union(post?.managedAssetIDs ?? [])
@@ -227,7 +286,8 @@ public struct WallpaperStoreEditor: Sendable {
                 path: path,
                 originalChoices: original,
                 managedAssetIDs: managed.sorted { $0.uuidString < $1.uuidString },
-                targetAssetID: post?.targetAssetID
+                targetAssetID: post?.targetAssetID,
+                createdDisplayNode: prior?.createdDisplayNode ?? post?.createdDisplayNode ?? false
             ))
         }
         let preparedJournal = WallpaperChoiceJournal(
@@ -367,6 +427,14 @@ public struct WallpaperStoreEditor: Sendable {
             }
             if let original = record.originalChoices {
                 _ = try decodeChoices(original)
+            }
+            if record.createdDisplayNode {
+                guard record.originalChoices == nil,
+                      Self.topLevelDisplayUUID(inChoicePath: record.path) != nil else {
+                    throw LockScreenCompatibilityError.ownershipConflict(
+                        "A synthesized display record has invalid rollback ownership."
+                    )
+                }
             }
         }
     }
@@ -538,6 +606,78 @@ public struct WallpaperStoreEditor: Sendable {
         return nil
     }
 
+    private static func topLevelDisplayUUID(inChoicePath path: String) -> String? {
+        let components = path.split(separator: "/").map(String.init)
+        guard components.count == 5,
+              components[0] == "Displays",
+              Array(components[2...]) == ["Linked", "Content", "Choices"],
+              canonicalUUID(components[1]) else {
+            return nil
+        }
+        return components[1]
+    }
+
+    private static func addingSynthesizedDisplayNode(
+        choices: [Any],
+        atChoicePath path: String,
+        in root: [String: Any]
+    ) throws -> [String: Any] {
+        guard let displayID = topLevelDisplayUUID(inChoicePath: path),
+              var displays = root["Displays"] as? [String: Any],
+              displays[displayID] == nil else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A top-level display override could not be created safely."
+            )
+        }
+        displays[displayID] = [
+            "Linked": [
+                "Content": [
+                    "Choices": choices,
+                ],
+            ],
+        ]
+        var copy = root
+        copy["Displays"] = displays
+        return copy
+    }
+
+    private static func isExactSynthesizedDisplayNode(
+        in root: [String: Any],
+        choicePath path: String,
+        assetID: UUID
+    ) throws -> Bool {
+        let choices = try wallpaperChoices(assetID: assetID)
+        guard let displayID = topLevelDisplayUUID(inChoicePath: path),
+              let displays = root["Displays"] as? [String: Any],
+              let node = displays[displayID] as? [String: Any] else {
+            return false
+        }
+        let expected: [String: Any] = [
+            "Linked": [
+                "Content": [
+                    "Choices": choices,
+                ],
+            ],
+        ]
+        return NSDictionary(dictionary: node).isEqual(to: expected)
+    }
+
+    private static func removingSynthesizedDisplayNode(
+        atChoicePath path: String,
+        in root: [String: Any]
+    ) throws -> [String: Any] {
+        guard let displayID = topLevelDisplayUUID(inChoicePath: path),
+              var displays = root["Displays"] as? [String: Any],
+              displays.removeValue(forKey: displayID) != nil else {
+            throw LockScreenCompatibilityError.ownershipConflict(
+                "A WALI-created display override could not be removed safely."
+            )
+        }
+        var copy = root
+        copy["Displays"] = displays
+        return copy
+    }
+
     private static func restoring(
         _ record: WallpaperChoiceJournalRecord,
         in root: [String: Any]
@@ -674,4 +814,39 @@ private struct WallpaperChoiceJournalRecord: Codable, Sendable {
     let originalChoices: Data?
     let managedAssetIDs: [UUID]
     let targetAssetID: UUID?
+    let createdDisplayNode: Bool
+
+    init(
+        path: String,
+        originalChoices: Data?,
+        managedAssetIDs: [UUID],
+        targetAssetID: UUID?,
+        createdDisplayNode: Bool = false
+    ) {
+        self.path = path
+        self.originalChoices = originalChoices
+        self.managedAssetIDs = managedAssetIDs
+        self.targetAssetID = targetAssetID
+        self.createdDisplayNode = createdDisplayNode
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case originalChoices
+        case managedAssetIDs
+        case targetAssetID
+        case createdDisplayNode
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        path = try container.decode(String.self, forKey: .path)
+        originalChoices = try container.decodeIfPresent(Data.self, forKey: .originalChoices)
+        managedAssetIDs = try container.decode([UUID].self, forKey: .managedAssetIDs)
+        targetAssetID = try container.decodeIfPresent(UUID.self, forKey: .targetAssetID)
+        createdDisplayNode = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .createdDisplayNode
+        ) ?? false
+    }
 }

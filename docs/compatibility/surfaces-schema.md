@@ -93,7 +93,10 @@ deferred. Diagnostics require a lease, redaction classes, and excluded payload
 classes. The implemented Lock Screen surface is limited by accepted ADR 0008,
 an exact system-build and manifest-version allowlist, fixed WALI ownership
 identifiers and bounds, a reject-before-write policy, and a redacted
-version-gated fixture.
+version-gated fixture. That fixture permits a missing connected display to gain
+only a top-level display override. The rollback journal records whole-node
+absence, removes only an unchanged WALI-owned synthesized node, and excludes
+global, system-default, and Space-default nodes from mutation.
 
 ## Configuration-keyed identities
 

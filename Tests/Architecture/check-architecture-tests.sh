@@ -97,7 +97,7 @@ new_fixture() {
     printf '{"fixture":"invalid"}\n' > \
         "${root}/Fixtures/Compatibility/model-records-invalid-v1.json"
     cat > "${root}/Fixtures/LockScreen/modern-aerial-v1.json" <<'EOF'
-{"epoch":1,"revision":0,"verified_system_build":"25F80","manifest":{"version":1,"categories":[{"id":"57414C49-0000-4000-8000-000000000001","representativeAssetID":"11111111-2222-4333-8444-555555555555","previewImage":"file:///REDACTED/preview.png","subcategories":[{"id":"57414C49-0000-4000-8000-000000000002","representativeAssetID":"11111111-2222-4333-8444-555555555555","previewImage":"file:///REDACTED/preview.png"}]}],"assets":[{"id":"11111111-2222-4333-8444-555555555555","shotID":"CUSTOM_WALI_11111111_2222_4333_8444_555555555555","categories":["57414C49-0000-4000-8000-000000000001"],"subcategories":["57414C49-0000-4000-8000-000000000002"],"localizedNameKey":"Synthetic","accessibilityLabel":"Synthetic","showInTopLevel":true,"includeInShuffle":true,"preferredOrder":0,"pointsOfInterest":{"0":"CUSTOM_WALI_11111111_2222_4333_8444_555555555555_0"},"url-4K-SDR-240FPS":"file:///REDACTED/video.mov","previewImage":"file:///REDACTED/preview.png"}]},"wallpaper_index":{"provider":"com.apple.wallpaper.choice.aerials","configuration":{"assetID":"11111111-2222-4333-8444-555555555555"},"mutable_node_patterns":["Displays/<display-uuid>/Linked/Content/Choices","Spaces/<space-uuid>/Displays/<display-uuid>/Linked/Content/Choices"],"excluded_node_patterns":["AllSpacesAndDisplays","Spaces/<space-uuid>/Default"]}}
+{"epoch":1,"revision":0,"verified_system_build":"25F80","manifest":{"version":1,"categories":[{"id":"57414C49-0000-4000-8000-000000000001","representativeAssetID":"11111111-2222-4333-8444-555555555555","previewImage":"file:///REDACTED/preview.png","subcategories":[{"id":"57414C49-0000-4000-8000-000000000002","representativeAssetID":"11111111-2222-4333-8444-555555555555","previewImage":"file:///REDACTED/preview.png"}]}],"assets":[{"id":"11111111-2222-4333-8444-555555555555","shotID":"CUSTOM_WALI_11111111_2222_4333_8444_555555555555","categories":["57414C49-0000-4000-8000-000000000001"],"subcategories":["57414C49-0000-4000-8000-000000000002"],"localizedNameKey":"Synthetic","accessibilityLabel":"Synthetic","showInTopLevel":true,"includeInShuffle":true,"preferredOrder":0,"pointsOfInterest":{"0":"CUSTOM_WALI_11111111_2222_4333_8444_555555555555_0"},"url-4K-SDR-240FPS":"file:///REDACTED/video.mov","previewImage":"file:///REDACTED/preview.png"}]},"wallpaper_index":{"provider":"com.apple.wallpaper.choice.aerials","configuration":{"assetID":"11111111-2222-4333-8444-555555555555"},"configuration_encoding":"binary-plist-data","supported_empty_store_shape":{"Displays":{},"Spaces":{},"preserved_roots":["AllSpacesAndDisplays","SystemDefault"]},"synthesized_top_level_display_node":{"Linked":{"Content":{"Choices":[{"Configuration":{"assetID":"11111111-2222-4333-8444-555555555555"},"Files":[],"Provider":"com.apple.wallpaper.choice.aerials"}]}}},"mutable_node_patterns":["Displays/<display-uuid>/Linked/Content/Choices","Spaces/<space-uuid>/Displays/<display-uuid>/Linked/Content/Choices"],"excluded_node_patterns":["AllSpacesAndDisplays","SystemDefault","Spaces/<space-uuid>/Default"]}}
 EOF
 
     cat > "${root}/Config/Base.xcconfig" <<'EOF'
@@ -802,7 +802,9 @@ by_id["lock_screen_manifest"]["details"] = {
   "shot_prefix" => "CUSTOM_WALI_",
   "maximum_owned_assets" => 8,
   "unknown_newer_policy" => "reject_before_write",
-  "global_default_policy" => "never_mutate"
+  "global_default_policy" => "never_mutate",
+  "missing_display_policy" => "synthesize_top_level_override_only",
+  "synthesized_display_rollback_policy" => "remove_exact_owned_node_only"
 }
 by_id["diagnostic_export"]["details"] = {
   "current_format" => nil,
@@ -1398,6 +1400,14 @@ expect_failure \
     "lock screen global default denial" \
     "${lock_screen_global_fixture}" \
     "lock_screen_manifest must never mutate global defaults"
+
+lock_screen_missing_display_fixture="$(new_fixture lock-screen-missing-display-policy)"
+mutate_yaml "${lock_screen_missing_display_fixture}/docs/compatibility/surfaces.yml" \
+    'data["surfaces"].find { |surface| surface["id"] == "lock_screen_manifest" }["details"]["missing_display_policy"] = "mutate-global"'
+expect_failure \
+    "lock screen missing display scope" \
+    "${lock_screen_missing_display_fixture}" \
+    "lock_screen_manifest missing-display policy is invalid"
 
 lock_screen_redaction_fixture="$(new_fixture lock-screen-redaction)"
 "${RUBY_BIN}" -rjson -e '

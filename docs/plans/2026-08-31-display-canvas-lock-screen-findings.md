@@ -23,6 +23,9 @@
 
 ## Implemented safety model
 
+- Live read-only inspection on build `25F80` found a valid store epoch with `AllSpacesAndDisplays` and `SystemDefault` image choices but empty `Displays` and `Spaces` maps. A connected display therefore cannot be required to have a pre-existing override node.
+- The safe compatibility boundary is a synthesized top-level `Displays/<UUID>/Linked/Content/Choices` node only. Recording whole-node absence distinguishes it from an existing node whose `Choices` happened to be absent, so rollback can remove exactly what WALI created without touching global/system defaults or creating Space nodes.
+
 - ADR 0008 limits the adapter to exact system build `25F80`, Aerial manifest version 1, and the current-user provider `com.apple.wallpaper.choice.aerials`.
 - WALI reserves fixed category/subcategory IDs and `CUSTOM_WALI_` shot IDs, with at most eight registered assets.
 - Manifest and Index editors accept injected roots, validate bounds and ownership before writes, stage sibling files, reparse staged data, sync, and compare the exact expected bytes under file coordination before an atomic exchange. The displaced bytes are then verified; an observed noncooperating race is rolled back, while a second race is retained in a recovery sibling rather than deleted.

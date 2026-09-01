@@ -1867,10 +1867,30 @@ class ArchitectureChecker
       "Displays/<display-uuid>/Linked/Content/Choices",
       "Spaces/<space-uuid>/Displays/<display-uuid>/Linked/Content/Choices"
     ]
-    expected_excluded = ["AllSpacesAndDisplays", "Spaces/<space-uuid>/Default"]
+    expected_excluded = [
+      "AllSpacesAndDisplays",
+      "SystemDefault",
+      "Spaces/<space-uuid>/Default"
+    ]
+    expected_choice = {
+      "Configuration" => {"assetID" => asset_id},
+      "Files" => [],
+      "Provider" => "com.apple.wallpaper.choice.aerials"
+    }
+    empty_store = fixture.dig("wallpaper_index", "supported_empty_store_shape")
+    synthesized_choices = fixture.dig(
+      "wallpaper_index", "synthesized_top_level_display_node", "Linked", "Content", "Choices"
+    )
     unless fixture.dig("wallpaper_index", "mutable_node_patterns") == expected_mutable &&
            fixture.dig("wallpaper_index", "excluded_node_patterns") == expected_excluded &&
-           fixture.dig("wallpaper_index", "configuration", "assetID") == asset_id
+           fixture.dig("wallpaper_index", "configuration", "assetID") == asset_id &&
+           fixture.dig("wallpaper_index", "configuration_encoding") == "binary-plist-data" &&
+           empty_store == {
+             "Displays" => {},
+             "Spaces" => {},
+             "preserved_roots" => ["AllSpacesAndDisplays", "SystemDefault"]
+           } &&
+           synthesized_choices == [expected_choice]
       error("lock_screen_manifest fixture node scope is invalid")
     end
     serialized = File.read(path)
@@ -2011,6 +2031,7 @@ class ArchitectureChecker
           support_scope implementation_gate fixture_policy verified_system_builds
           manifest_version provider category_id subcategory_id shot_prefix
           maximum_owned_assets unknown_newer_policy global_default_policy
+          missing_display_policy synthesized_display_rollback_policy
         ],
         "#{id} details"
       )
@@ -2027,6 +2048,8 @@ class ArchitectureChecker
       error("lock_screen_manifest asset bound is invalid") unless details["maximum_owned_assets"] == 8
       error("lock_screen_manifest must reject unknown schemas before write") unless details["unknown_newer_policy"] == "reject_before_write"
       error("lock_screen_manifest must never mutate global defaults") unless details["global_default_policy"] == "never_mutate"
+      error("lock_screen_manifest missing-display policy is invalid") unless details["missing_display_policy"] == "synthesize_top_level_override_only"
+      error("lock_screen_manifest synthesized-display rollback is invalid") unless details["synthesized_display_rollback_policy"] == "remove_exact_owned_node_only"
     when "diagnostic_export"
       require_exact_fields(
         details,

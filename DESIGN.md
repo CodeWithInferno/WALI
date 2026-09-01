@@ -167,6 +167,9 @@ it mirrors active assignments through Apple's current-user Aerial provider on
 verified macOS builds. The copy states that the authenticated Lock Screen has
 an independent playback timeline and that FileVault startup is unavailable.
 Turning the toggle off rolls back only WALI-owned records.
+If Apple has not created a per-display override yet, WALI may add a reversible
+top-level override for that connected display; it never changes the global,
+system-default, or Space-default selection.
 
 This is never presented as direct Lock Screen drawing or a frame-continuous
 handoff. It does not add custom chrome, elevated setup, a server, or a separate

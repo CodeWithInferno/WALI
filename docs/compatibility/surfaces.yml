@@ -452,6 +452,8 @@ surfaces:
       maximum_owned_assets: 8
       unknown_newer_policy: reject_before_write
       global_default_policy: never_mutate
+      missing_display_policy: synthesize_top_level_override_only
+      synthesized_display_rollback_policy: remove_exact_owned_node_only
 
   - id: diagnostic_export
     kind: diagnostic_export

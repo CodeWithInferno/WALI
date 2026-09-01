@@ -46,12 +46,32 @@
   "wallpaper_index": {
     "provider": "com.apple.wallpaper.choice.aerials",
     "configuration": {"assetID": "11111111-2222-4333-8444-555555555555"},
+    "configuration_encoding": "binary-plist-data",
+    "supported_empty_store_shape": {
+      "Displays": {},
+      "Spaces": {},
+      "preserved_roots": ["AllSpacesAndDisplays", "SystemDefault"]
+    },
+    "synthesized_top_level_display_node": {
+      "Linked": {
+        "Content": {
+          "Choices": [
+            {
+              "Configuration": {"assetID": "11111111-2222-4333-8444-555555555555"},
+              "Files": [],
+              "Provider": "com.apple.wallpaper.choice.aerials"
+            }
+          ]
+        }
+      }
+    },
     "mutable_node_patterns": [
       "Displays/<display-uuid>/Linked/Content/Choices",
       "Spaces/<space-uuid>/Displays/<display-uuid>/Linked/Content/Choices"
     ],
     "excluded_node_patterns": [
       "AllSpacesAndDisplays",
+      "SystemDefault",
       "Spaces/<space-uuid>/Default"
     ]
   }

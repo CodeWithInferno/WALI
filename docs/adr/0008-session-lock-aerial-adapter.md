@@ -20,7 +20,11 @@ Add an opt-in WALIAgent adapter for the exact build 25F80, Aerial manifest
 version 1, and provider `com.apple.wallpaper.choice.aerials`. The adapter copies
 agent-verified WALI masters and generated PNG posters into the current user's
 Aerial directories, registers at most eight records, and updates only matching
-display and Space-display choices. WALI owns category
+display and Space-display choices. When the verified store has no top-level
+node for a connected display, the adapter may create only that display's
+`Linked/Content/Choices` override using the fixture-backed node shape; it does
+not create Space nodes or modify `AllSpacesAndDisplays`, `SystemDefault`, or
+Space defaults. WALI owns category
 `57414C49-0000-4000-8000-000000000001`, subcategory
 `57414C49-0000-4000-8000-000000000002`, and shot IDs prefixed
 `CUSTOM_WALI_`.
@@ -38,6 +42,9 @@ fails closed before an Apple-store write.
   direct Lock Screen drawing, SIP bypass, root, and UI injection are excluded.
 - The agent remains the only WALI process that reads or writes this surface.
 - Global, all-user, and Space-default choices are never changed.
+- A missing top-level display override is journaled as node absence. Disable
+  removes the synthesized node only while its complete shape and exact managed
+  WALI choice remain unchanged; otherwise the external node is preserved.
 - Unrelated manifest fields, categories, assets, choices, and files are
   preserved. Reserved-ID conflicts stop the transaction.
 - Disable restores a recorded choice only while it still points to the exact
@@ -73,8 +80,9 @@ server, elevated helper, Screen Recording permission, or all-user state.
 The preference decodes as disabled for every older wire and persisted record.
 Enabling starts with validation and ownership preflight. Disabling or removing
 the last desired assignment restores journaled display choices only when still
-WALI-owned, removes only WALI manifest records and UUID-named copies, and keeps
-external changes intact. A future supported Apple layout requires a new
+WALI-owned, removes an absent-before-enable top-level display node only when it
+is still exactly WALI-owned, removes only WALI manifest records and UUID-named
+copies, and keeps external changes intact. A future supported Apple layout requires a new
 compatibility revision or epoch, fixture, checker update, and ADR review.
 
 ## Verification

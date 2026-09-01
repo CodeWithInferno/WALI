@@ -6,6 +6,8 @@ import XCTest
 
 final class WALIAgentTests: XCTestCase {
     private let displayID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+    private let secondDisplayID = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!
+    private let thirdDisplayID = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
     private let spaceID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
     private let originalAsset = UUID(uuidString: "CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC")!
     private let assetA = UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!
@@ -45,8 +47,9 @@ final class WALIAgentTests: XCTestCase {
         XCTAssertEqual(journal.records.count, 1)
         XCTAssertEqual(journal.records[0].managedAssetIDs, [assetB])
         XCTAssertEqual(journal.records[0].targetAssetID, assetB)
+        let recordedOriginal = try XCTUnwrap(journal.records[0].originalChoices)
         XCTAssertTrue(try propertyListsEqual(
-            decodeChoices(journal.records[0].originalChoices),
+            decodeChoices(recordedOriginal),
             originalChoices
         ))
     }
@@ -199,6 +202,123 @@ final class WALIAgentTests: XCTestCase {
         XCTAssertEqual(try selectedAsset(in: fixture.index, spaceID: spaceID), assetB)
     }
 
+    func testMissingTopLevelDisplaysAreCreatedWithoutChangingGlobalOrSystemDefaults() throws {
+        let displayAssets = [displayID, secondDisplayID, thirdDisplayID]
+        let fixture = try makeEmptyDisplayStoreFixture()
+        let before = try plistRoot(at: fixture.index)
+        let globalBefore = try encodedPlistValue(before["AllSpacesAndDisplays"] as Any)
+        let systemBefore = try encodedPlistValue(before["SystemDefault"] as Any)
+        let editor = WallpaperStoreEditor(indexURL: fixture.index, journalURL: fixture.journal)
+
+        let result = try editor.reconcile(assignments: displayAssets.map {
+            .init(displayUUID: $0, assetID: assetA)
+        })
+
+        XCTAssertTrue(result.changed)
+        XCTAssertEqual(result.patchedNodeCount, 3)
+        for id in displayAssets {
+            XCTAssertEqual(try selectedAsset(in: fixture.index, displayID: id), assetA)
+        }
+        let after = try plistRoot(at: fixture.index)
+        XCTAssertEqual(try encodedPlistValue(after["AllSpacesAndDisplays"] as Any), globalBefore)
+        XCTAssertEqual(try encodedPlistValue(after["SystemDefault"] as Any), systemBefore)
+        XCTAssertTrue((after["Spaces"] as? [String: Any])?.isEmpty == true)
+        let journal = try JSONDecoder().decode(
+            ChoiceJournalProbe.self,
+            from: Data(contentsOf: fixture.journal)
+        )
+        XCTAssertEqual(journal.records.count, 3)
+        XCTAssertTrue(journal.records.allSatisfy { $0.createdDisplayNode == true })
+        XCTAssertTrue(journal.records.allSatisfy { $0.originalChoices == nil })
+    }
+
+    func testDisablingRemovesOnlySynthesizedDisplayNodesAndRestoresOriginalRoot() throws {
+        let fixture = try makeEmptyDisplayStoreFixture()
+        let original = try plistRoot(at: fixture.index)
+        let editor = WallpaperStoreEditor(indexURL: fixture.index, journalURL: fixture.journal)
+        _ = try editor.reconcile(assignments: [
+            .init(displayUUID: displayID, assetID: assetA),
+            .init(displayUUID: secondDisplayID, assetID: assetA),
+            .init(displayUUID: thirdDisplayID, assetID: assetA),
+        ])
+
+        let result = try editor.reconcile(assignments: [])
+
+        XCTAssertTrue(result.changed)
+        XCTAssertTrue(NSDictionary(dictionary: try plistRoot(at: fixture.index)).isEqual(to: original))
+        let journal = try JSONDecoder().decode(
+            ChoiceJournalProbe.self,
+            from: Data(contentsOf: fixture.journal)
+        )
+        XCTAssertTrue(journal.records.isEmpty)
+    }
+
+    func testPreparedSynthesizedDisplayNodeRecoversBeforeAndAfterIndexReplacement() throws {
+        for indexAlreadyReplaced in [false, true] {
+            let fixture = try makeEmptyDisplayStoreFixture()
+            let before = try Data(contentsOf: fixture.index)
+            let target = try emptyDisplayStoreData(displayAssets: [displayID: assetA])
+            if indexAlreadyReplaced { try target.write(to: fixture.index) }
+            try writeChoiceJournal(
+                phase: "prepared",
+                path: displayChoicePath,
+                originalChoices: nil,
+                managedAssetIDs: [assetA],
+                targetAssetID: assetA,
+                createdDisplayNode: true,
+                expectedData: before,
+                targetData: target,
+                to: fixture.journal
+            )
+            let editor = WallpaperStoreEditor(indexURL: fixture.index, journalURL: fixture.journal)
+
+            let result = try editor.reconcile(assignments: [
+                .init(displayUUID: displayID, assetID: assetA),
+            ])
+
+            XCTAssertTrue(result.changed)
+            XCTAssertEqual(try selectedAsset(in: fixture.index), assetA)
+            _ = try editor.reconcile(assignments: [])
+            XCTAssertTrue(NSDictionary(dictionary: try plistRoot(at: fixture.index)).isEqual(
+                to: try plistRoot(from: before)
+            ))
+        }
+    }
+
+    func testExternallyChangedSynthesizedDisplayNodeIsPreservedOnDisable() throws {
+        let fixture = try makeEmptyDisplayStoreFixture()
+        let editor = WallpaperStoreEditor(indexURL: fixture.index, journalURL: fixture.journal)
+        _ = try editor.reconcile(assignments: [
+            .init(displayUUID: displayID, assetID: assetA),
+        ])
+        var externallyChanged = try plistRoot(at: fixture.index)
+        var displays = try XCTUnwrap(externallyChanged["Displays"] as? [String: Any])
+        let externalNode: [String: Any] = [
+            "Linked": ["Content": ["Choices": try choices(originalAsset)]],
+            "ExternalMarker": Data("preserve me".utf8),
+        ]
+        displays[displayID.uuidString] = externalNode
+        externallyChanged["Displays"] = displays
+        try PropertyListSerialization.data(
+            fromPropertyList: externallyChanged,
+            format: .binary,
+            options: 0
+        ).write(to: fixture.index)
+
+        _ = try editor.reconcile(assignments: [])
+
+        let final = try plistRoot(at: fixture.index)
+        let finalDisplays = try XCTUnwrap(final["Displays"] as? [String: Any])
+        XCTAssertTrue(NSDictionary(dictionary: try XCTUnwrap(
+            finalDisplays[displayID.uuidString] as? [String: Any]
+        )).isEqual(to: externalNode))
+        let journal = try JSONDecoder().decode(
+            ChoiceJournalProbe.self,
+            from: Data(contentsOf: fixture.journal)
+        )
+        XCTAssertTrue(journal.records.isEmpty)
+    }
+
     func testAtomicCompareAndSwapRejectsStaleBaselineWithoutMutation() throws {
         let root = try temporaryDirectory()
         let file = root.appendingPathComponent("Index.plist")
@@ -214,8 +334,16 @@ final class WALIAgentTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: file), current)
     }
 
-    func testInvalidIndexPreflightLeavesAllStoresUntouched() async throws {
+    func testMalformedIndexPreflightLeavesAllStoresUntouched() async throws {
         let fixture = try makeCoordinatorFixture(indexHasDisplay: false)
+        try PropertyListSerialization.data(
+            fromPropertyList: [
+                "Displays": "malformed",
+                "Spaces": [String: Any](),
+            ],
+            format: .binary,
+            options: 0
+        ).write(to: fixture.paths.indexURL)
         let manifestBefore = try Data(contentsOf: fixture.paths.manifestURL)
         let indexBefore = try Data(contentsOf: fixture.paths.indexURL)
         let coordinator = LockScreenContinuityCoordinator(
@@ -235,7 +363,7 @@ final class WALIAgentTests: XCTestCase {
                     posterURL: fixture.poster
                 )]
             )
-            XCTFail("A display absent from Index.plist must fail closed")
+            XCTFail("A malformed Index.plist must fail closed")
         } catch is LockScreenCompatibilityError {
             // Expected.
         }
@@ -423,6 +551,14 @@ final class WALIAgentTests: XCTestCase {
         return .init(index: index, journal: journal)
     }
 
+    private func makeEmptyDisplayStoreFixture() throws -> StoreFixture {
+        let root = try temporaryDirectory()
+        let index = root.appendingPathComponent("Index.plist")
+        let journal = root.appendingPathComponent("choice-journal.json")
+        try emptyDisplayStoreData(displayAssets: [:]).write(to: index)
+        return .init(index: index, journal: journal)
+    }
+
     private func makeCoordinatorFixture(indexHasDisplay: Bool) throws -> CoordinatorFixture {
         let root = try temporaryDirectory()
         let owned = root.appendingPathComponent("owned", isDirectory: true)
@@ -523,26 +659,70 @@ final class WALIAgentTests: XCTestCase {
         )
     }
 
+    private func emptyDisplayStoreData(displayAssets: [UUID: UUID]) throws -> Data {
+        let displays: [String: Any] = try Dictionary(
+            uniqueKeysWithValues: displayAssets.map { displayID, assetID in
+            (
+                displayID.uuidString,
+                ["Linked": ["Content": ["Choices": try choices(assetID)]]] as [String: Any]
+            )
+        })
+        return try PropertyListSerialization.data(
+            fromPropertyList: [
+                "AllSpacesAndDisplays": [
+                    "Linked": [
+                        "Content": [
+                            "Choices": [[
+                                "Provider": "com.apple.wallpaper.choice.image",
+                                "Configuration": Data("global-image-choice".utf8),
+                            ]],
+                            "OpaqueGlobalValue": Data([0x01, 0x02, 0x03]),
+                        ],
+                    ],
+                ],
+                "SystemDefault": [
+                    "Linked": [
+                        "Content": [
+                            "Choices": [[
+                                "Provider": "com.apple.wallpaper.choice.image",
+                                "Configuration": Data("system-image-choice".utf8),
+                            ]],
+                        ],
+                    ],
+                    "OpaqueSystemValue": Data([0x04, 0x05, 0x06]),
+                ],
+                "Displays": displays,
+                "Spaces": [String: Any](),
+            ],
+            format: .binary,
+            options: 0
+        )
+    }
+
     private func writeChoiceJournal(
         phase: String,
         path: String,
-        originalChoices: [Any],
+        originalChoices: [Any]?,
         managedAssetIDs: [UUID],
         targetAssetID: UUID?,
+        createdDisplayNode: Bool = false,
         expectedData: Data? = nil,
         targetData: Data? = nil,
         to url: URL
     ) throws {
-        let original = try PropertyListSerialization.data(
-            fromPropertyList: originalChoices,
-            format: .binary,
-            options: 0
-        )
         var record: [String: Any] = [
             "path": path,
-            "originalChoices": original.base64EncodedString(),
             "managedAssetIDs": managedAssetIDs.map(\.uuidString),
+            "createdDisplayNode": createdDisplayNode,
         ]
+        if let originalChoices {
+            let original = try PropertyListSerialization.data(
+                fromPropertyList: originalChoices,
+                format: .binary,
+                options: 0
+            )
+            record["originalChoices"] = original.base64EncodedString()
+        }
         if let targetAssetID { record["targetAssetID"] = targetAssetID.uuidString }
         var journal: [String: Any] = [
             "schemaVersion": 2,
@@ -558,19 +738,20 @@ final class WALIAgentTests: XCTestCase {
         Data(SHA256.hash(data: data)).base64EncodedString()
     }
 
-    private func selectedAsset(in index: URL, spaceID: UUID? = nil) throws -> UUID? {
-        let root = try PropertyListSerialization.propertyList(
-            from: Data(contentsOf: index),
-            options: [],
-            format: nil
-        ) as? [String: Any]
+    private func selectedAsset(
+        in index: URL,
+        displayID: UUID? = nil,
+        spaceID: UUID? = nil
+    ) throws -> UUID? {
+        let root = try plistRoot(at: index)
+        let resolvedDisplayID = displayID ?? self.displayID
         let display: [String: Any]?
         if let spaceID {
-            let spaces = root?["Spaces"] as? [String: Any]
+            let spaces = root["Spaces"] as? [String: Any]
             let space = spaces?[spaceID.uuidString] as? [String: Any]
-            display = (space?["Displays"] as? [String: Any])?[displayID.uuidString] as? [String: Any]
+            display = (space?["Displays"] as? [String: Any])?[resolvedDisplayID.uuidString] as? [String: Any]
         } else {
-            display = (root?["Displays"] as? [String: Any])?[displayID.uuidString] as? [String: Any]
+            display = (root["Displays"] as? [String: Any])?[resolvedDisplayID.uuidString] as? [String: Any]
         }
         let linked = display?["Linked"] as? [String: Any]
         let content = linked?["Content"] as? [String: Any]
@@ -583,6 +764,26 @@ final class WALIAgentTests: XCTestCase {
               ) as? [String: Any],
               let rawID = decoded["assetID"] as? String else { return nil }
         return UUID(uuidString: rawID)
+    }
+
+    private func plistRoot(at url: URL) throws -> [String: Any] {
+        try plistRoot(from: Data(contentsOf: url))
+    }
+
+    private func plistRoot(from data: Data) throws -> [String: Any] {
+        try XCTUnwrap(PropertyListSerialization.propertyList(
+            from: data,
+            options: [],
+            format: nil
+        ) as? [String: Any])
+    }
+
+    private func encodedPlistValue(_ value: Any) throws -> Data {
+        try PropertyListSerialization.data(
+            fromPropertyList: value,
+            format: .binary,
+            options: 0
+        )
     }
 
     private func decodeChoices(_ data: Data) throws -> [Any] {
@@ -615,9 +816,10 @@ private struct CoordinatorFixture {
 
 private struct ChoiceJournalProbe: Decodable {
     struct Record: Decodable {
-        let originalChoices: Data
+        let originalChoices: Data?
         let managedAssetIDs: [UUID]
         let targetAssetID: UUID?
+        let createdDisplayNode: Bool?
     }
 
     let phase: String
