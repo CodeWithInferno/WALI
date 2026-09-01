@@ -122,9 +122,15 @@ public final class WALIAgentController: WALIUIActionHandling {
             }
         }
 
-        let router = AgentCommandRouter(restoring: restored) { [weak self] effect, snapshot in
-            guard let self else { return }
-            try await self.execute(effect, snapshot: snapshot)
+        let router = AgentCommandRouter(restoring: restored) { [weak self] step, snapshot in
+            guard let self else { return .unchanged }
+            switch step {
+            case let .preflight(action):
+                try await self.preflight(action, snapshot: snapshot)
+                return .unchanged
+            case let .effect(effect):
+                return try await self.execute(effect, snapshot: snapshot)
+            }
         }
         self.router = router
 
@@ -142,8 +148,9 @@ public final class WALIAgentController: WALIUIActionHandling {
         renderDesiredState(restored)
         do {
             try await reconcileLockScreen(restored)
+            await router.replaceRuntimeNotice(nil)
         } catch {
-            present(error)
+            await router.replaceRuntimeNotice(Self.lockScreenNotice(for: error))
         }
         renderer.setUserPaused(restored.isPausedByUser || restored.preferences.startPaused)
         for item in restored.trashedItems {
@@ -236,7 +243,23 @@ public final class WALIAgentController: WALIUIActionHandling {
         }
     }
 
-    private func execute(_ effect: EngineEffect, snapshot: EngineSnapshot) async throws {
+    private func preflight(_ action: EngineAction, snapshot: EngineSnapshot) async throws {
+        guard case let .setPreferences(proposed) = action,
+              !snapshot.preferences.lockScreenContinuityEnabled,
+              proposed.lockScreenContinuityEnabled else { return }
+        guard let lockScreenContinuity else {
+            throw WALIAgentRuntimeError.storageUnavailable
+        }
+        try await lockScreenContinuity.validate(
+            enabled: true,
+            assignments: Self.lockScreenAssignments(from: snapshot)
+        )
+    }
+
+    private func execute(
+        _ effect: EngineEffect,
+        snapshot: EngineSnapshot
+    ) async throws -> EngineEffectOutcome {
         let authoritative = if let router {
             await router.snapshot()
         } else {
@@ -270,7 +293,12 @@ public final class WALIAgentController: WALIUIActionHandling {
             }
         case .render, .stopRendering, .reconcileRendering:
             renderDesiredState(authoritative)
-            try await reconcileLockScreen(authoritative)
+            do {
+                try await reconcileLockScreen(authoritative)
+                return .replaceRuntimeNotice(nil)
+            } catch {
+                return .replaceRuntimeNotice(Self.lockScreenNotice(for: error))
+            }
         case .setPlaybackPaused:
             renderer.setUserPaused(authoritative.isPausedByUser)
         case let .startImport(jobID, bookmark):
@@ -290,6 +318,7 @@ public final class WALIAgentController: WALIUIActionHandling {
         case let .scheduleTrashPurge(itemID):
             scheduleTrashPurge(itemID)
         }
+        return .unchanged
     }
 
     private func startImport(
@@ -736,16 +765,27 @@ public final class WALIAgentController: WALIUIActionHandling {
             let snapshot = await router.snapshot()
             do {
                 try await self.reconcileLockScreen(snapshot)
+                await router.replaceRuntimeNotice(nil)
             } catch {
-                self.present(error)
+                await router.replaceRuntimeNotice(Self.lockScreenNotice(for: error))
             }
+            await self.publishSnapshot()
         }
     }
 
     private func reconcileLockScreen(_ snapshot: EngineSnapshot) async throws {
         guard let lockScreenContinuity else { return }
+        _ = try await lockScreenContinuity.reconcile(
+            enabled: snapshot.preferences.lockScreenContinuityEnabled,
+            assignments: Self.lockScreenAssignments(from: snapshot)
+        )
+    }
+
+    private static func lockScreenAssignments(
+        from snapshot: EngineSnapshot
+    ) -> [LockScreenWallpaperAssignment] {
         let items = Dictionary(uniqueKeysWithValues: snapshot.items.map { ($0.id, $0) })
-        let assignments = snapshot.displays.compactMap { display -> LockScreenWallpaperAssignment? in
+        return snapshot.displays.compactMap { display in
             guard display.isOnline,
                   let itemID = display.assignedItemID,
                   let item = items[itemID] else { return nil }
@@ -757,9 +797,13 @@ public final class WALIAgentController: WALIUIActionHandling {
                 posterURL: item.posterURL
             )
         }
-        _ = try await lockScreenContinuity.reconcile(
-            enabled: snapshot.preferences.lockScreenContinuityEnabled,
-            assignments: assignments
+    }
+
+    private static func lockScreenNotice(for error: Error) -> AgentRuntimeNotice {
+        AgentRuntimeNotice(
+            kind: .warning,
+            title: "Desktop Wallpaper Applied",
+            message: "Lock Screen continuity could not update. \(error.localizedDescription)"
         )
     }
 
@@ -916,7 +960,8 @@ private extension AgentResponse {
             displays: snapshot.displays,
             imports: snapshot.imports,
             preferences: snapshot.preferences,
-            resourceUsage: resourceUsage
+            resourceUsage: resourceUsage,
+            notice: snapshot.notice
         )
         return AgentResponse(
             protocolVersion: protocolVersion,
@@ -966,7 +1011,19 @@ private extension AgentSnapshot {
             storage: .init(
                 usedBytes: Int64(clamping: resourceUsage.storageUsedBytes),
                 limitBytes: resourceUsage.storageLimitBytes.map(Int64.init(clamping:))
-            )
+            ),
+            notice: notice?.agentPresentation
         )
+    }
+}
+
+private extension AgentRuntimeNotice {
+    var agentPresentation: WALINoticePresentation {
+        let presentationKind: WALINoticeKind = switch kind {
+        case .information: .information
+        case .warning: .warning
+        case .error: .error
+        }
+        return .init(id: id, kind: presentationKind, title: title, message: message)
     }
 }

@@ -113,7 +113,9 @@ xcode_test_targets:
     source_path: Tests/WALIAgentTests
     build_dependencies:
       - WALIAgentRuntime
-    package_dependencies: []
+    package_dependencies:
+      - WALIWire
+      - WALIEngine
   WALITranscoderTests:
     type: bundle.unit-test
     source_path: Tests/WALITranscoderTests

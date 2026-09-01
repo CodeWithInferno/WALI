@@ -4,7 +4,20 @@ import WALIEngine
 import WALIModel
 import WALIWire
 
-public typealias EngineEffectHandler = @Sendable (EngineEffect, EngineSnapshot) async throws -> Void
+public enum EngineEffectOutcome: Sendable {
+    case unchanged
+    case replaceRuntimeNotice(AgentRuntimeNotice?)
+}
+
+public enum EnginePipelineStep: Sendable {
+    case preflight(EngineAction)
+    case effect(EngineEffect)
+}
+
+public typealias EngineEffectHandler = @Sendable (
+    EnginePipelineStep,
+    EngineSnapshot
+) async throws -> EngineEffectOutcome
 
 private actor TransactionGate {
     private var isLocked = false
@@ -34,6 +47,7 @@ public actor AgentCommandRouter {
     private let engine: RuntimeEngine
     private let effectHandler: EngineEffectHandler
     private let transactionGate = TransactionGate()
+    private var runtimeNotice: AgentRuntimeNotice?
 
     public init(
         restoring snapshot: EngineSnapshot = .init(),
@@ -147,6 +161,7 @@ public actor AgentCommandRouter {
     ) async throws -> EngineSnapshot {
         await transactionGate.acquire()
         do {
+            _ = try await effectHandler(.preflight(action), await engine.snapshot())
             let transaction = try await engine.perform(action, idempotencyKey: idempotencyKey)
             try await execute(transaction)
             await transactionGate.release()
@@ -165,6 +180,7 @@ public actor AgentCommandRouter {
         do {
             var snapshot = await engine.snapshot()
             for action in actions {
+                _ = try await effectHandler(.preflight(action), snapshot)
                 let transaction = try await engine.perform(action)
                 try await execute(transaction)
                 snapshot = transaction.snapshot
@@ -181,9 +197,14 @@ public actor AgentCommandRouter {
         await engine.snapshot()
     }
 
+    public func replaceRuntimeNotice(_ notice: AgentRuntimeNotice?) {
+        runtimeNotice = notice
+    }
+
     private func mutate(_ request: AgentRequest, action: EngineAction) async throws -> AgentResponse {
         await transactionGate.acquire()
         do {
+            _ = try await effectHandler(.preflight(action), await engine.snapshot())
             let transaction = try await engine.perform(
                 action,
                 idempotencyKey: request.idempotencyKey,
@@ -200,12 +221,20 @@ public actor AgentCommandRouter {
 
     private func execute(_ transaction: EngineTransaction) async throws {
         for effect in transaction.effects {
-            try await effectHandler(effect, transaction.snapshot)
+            switch try await effectHandler(.effect(effect), transaction.snapshot) {
+            case .unchanged:
+                break
+            case let .replaceRuntimeNotice(notice):
+                runtimeNotice = notice
+            }
         }
     }
 
     private func response(for request: AgentRequest, snapshot: EngineSnapshot) -> AgentResponse {
-        AgentResponse(requestID: request.requestID, result: .snapshot(snapshot.wireValue))
+        AgentResponse(
+            requestID: request.requestID,
+            result: .snapshot(snapshot.wireValue(notice: runtimeNotice))
+        )
     }
 
     private static func resolveBookmark(_ data: Data) throws -> URL {
@@ -254,7 +283,7 @@ public actor AgentCommandRouter {
 }
 
 private extension EngineSnapshot {
-    var wireValue: AgentSnapshot {
+    func wireValue(notice: AgentRuntimeNotice?) -> AgentSnapshot {
         AgentSnapshot(
             revision: revision,
             playback: playbackStatus.wireValue,
@@ -262,7 +291,8 @@ private extension EngineSnapshot {
             displays: displays.map(\.wireValue),
             imports: imports.map(\.wireValue),
             preferences: preferences.wireValue,
-            resourceUsage: resourceUsage.wireValue
+            resourceUsage: resourceUsage.wireValue,
+            notice: notice
         )
     }
 }

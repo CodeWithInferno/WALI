@@ -120,7 +120,11 @@ public struct AerialManifestEditor: Sendable {
         _ = try Self.decodeAndValidate(nextData)
         let changed = nextData != normalizedOriginalData
         if changed {
-            try LockScreenFileIO.atomicWrite(nextData, to: manifestURL) { staged in
+            try LockScreenFileIO.atomicCompareAndSwap(
+                expected: originalData,
+                replacement: nextData,
+                at: manifestURL
+            ) { staged in
                 _ = try Self.decodeAndValidate(Data(contentsOf: staged))
             }
         }
@@ -313,6 +317,16 @@ public struct AerialManifestEditor: Sendable {
 }
 
 enum LockScreenFileIO {
+    static func nodeExists(_ url: URL) throws -> Bool {
+        guard url.isFileURL else {
+            throw LockScreenCompatibilityError.unsafePath("Expected a local filesystem node.")
+        }
+        var information = stat()
+        if Darwin.lstat(url.path, &information) == 0 { return true }
+        if errno == ENOENT { return false }
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+
     static func requireDirectory(_ url: URL) throws {
         guard url.isFileURL else {
             throw LockScreenCompatibilityError.unsafePath("Expected a local directory.")
@@ -345,7 +359,7 @@ enum LockScreenFileIO {
         validate: (URL) throws -> Void
     ) throws {
         try requireDirectory(destination.deletingLastPathComponent())
-        if FileManager.default.fileExists(atPath: destination.path) {
+        if try nodeExists(destination) {
             try requireRegularFile(destination, maximumBytes: UInt64.max)
         }
         let staged = destination.deletingLastPathComponent().appendingPathComponent(
@@ -362,6 +376,94 @@ enum LockScreenFileIO {
         try syncDirectory(destination.deletingLastPathComponent())
     }
 
+    /// Replaces a validated file only while its bytes still match the exact
+    /// snapshot used to derive `replacement`. File coordination serializes
+    /// cooperating writers; an atomic exchange then verifies the file actually
+    /// displaced, catching a noncooperating rename in the compare/commit gap.
+    static func atomicCompareAndSwap(
+        expected: Data,
+        replacement: Data,
+        at destination: URL,
+        validate: (URL) throws -> Void
+    ) throws {
+        try requireDirectory(destination.deletingLastPathComponent())
+        try requireRegularFile(destination, maximumBytes: UInt64.max)
+        let staged = destination.deletingLastPathComponent().appendingPathComponent(
+            ".wali-\(UUID().uuidString).tmp",
+            isDirectory: false
+        )
+        var stagedIsSafeToRemove = true
+        defer {
+            if stagedIsSafeToRemove {
+                try? FileManager.default.removeItem(at: staged)
+            }
+        }
+        try replacement.write(to: staged, options: [.withoutOverwriting])
+        try sync(staged)
+        try validate(staged)
+
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?
+        var operationError: Error?
+        coordinator.coordinate(
+            writingItemAt: destination,
+            options: .forReplacing,
+            error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                try requireRegularFile(coordinatedURL, maximumBytes: UInt64.max)
+                let current = try Data(contentsOf: coordinatedURL, options: [.mappedIfSafe])
+                guard current == expected else {
+                    throw LockScreenCompatibilityError.ownershipConflict(
+                        "The wallpaper store changed while WALI was preparing its update; retry safely."
+                    )
+                }
+                guard Darwin.renameatx_np(
+                    AT_FDCWD,
+                    staged.path,
+                    AT_FDCWD,
+                    coordinatedURL.path,
+                    UInt32(RENAME_SWAP)
+                ) == 0 else {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                stagedIsSafeToRemove = false
+                let displaced = try Data(contentsOf: staged, options: [.mappedIfSafe])
+                guard displaced == expected else {
+                    // A noncooperating writer won after the first comparison.
+                    // If our replacement is still current, exchange it back.
+                    // A second noncooperating write during rollback is retained
+                    // in the sibling file rather than deleted.
+                    let installed = try Data(contentsOf: coordinatedURL, options: [.mappedIfSafe])
+                    if installed == replacement,
+                       Darwin.renameatx_np(
+                           AT_FDCWD,
+                           staged.path,
+                           AT_FDCWD,
+                           coordinatedURL.path,
+                           UInt32(RENAME_SWAP)
+                       ) == 0 {
+                        let rolledOut = try Data(contentsOf: staged, options: [.mappedIfSafe])
+                        stagedIsSafeToRemove = rolledOut == replacement
+                    }
+                    throw LockScreenCompatibilityError.ownershipConflict(
+                        stagedIsSafeToRemove
+                            ? "The wallpaper store changed during commit; its update was restored."
+                            : "The wallpaper store changed during commit; conflicting bytes were preserved in a recovery sibling."
+                    )
+                }
+                // The exchanged sibling is the exact baseline WALI already
+                // validated, so it is safe to remove after leaving the scope.
+                stagedIsSafeToRemove = true
+            } catch {
+                operationError = error
+            }
+        }
+        if let coordinationError { throw coordinationError }
+        if let operationError { throw operationError }
+        try syncDirectory(destination.deletingLastPathComponent())
+    }
+
     static func atomicCopy(
         from source: URL,
         to destination: URL,
@@ -369,7 +471,7 @@ enum LockScreenFileIO {
     ) throws {
         try requireRegularFile(source, maximumBytes: maximumBytes)
         try requireDirectory(destination.deletingLastPathComponent())
-        if FileManager.default.fileExists(atPath: destination.path) {
+        if try nodeExists(destination) {
             try requireRegularFile(destination, maximumBytes: maximumBytes)
         }
         let staged = destination.deletingLastPathComponent().appendingPathComponent(
@@ -387,7 +489,7 @@ enum LockScreenFileIO {
     }
 
     static func removeRegularFileIfPresent(_ url: URL, maximumBytes: UInt64) throws {
-        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        guard try nodeExists(url) else { return }
         try requireRegularFile(url, maximumBytes: maximumBytes)
         try FileManager.default.removeItem(at: url)
         try syncDirectory(url.deletingLastPathComponent())

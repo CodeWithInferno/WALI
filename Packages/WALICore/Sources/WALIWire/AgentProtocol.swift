@@ -110,6 +110,7 @@ public struct AgentSnapshot: Codable, Sendable, Hashable {
     public let imports: [AgentImportJob]
     public let preferences: AgentPreferences
     public let resourceUsage: AgentResourceUsage
+    public let notice: AgentRuntimeNotice?
 
     public init(
         revision: EngineRevision,
@@ -119,7 +120,8 @@ public struct AgentSnapshot: Codable, Sendable, Hashable {
         displays: [AgentDisplay] = [],
         imports: [AgentImportJob] = [],
         preferences: AgentPreferences = .init(),
-        resourceUsage: AgentResourceUsage = .init()
+        resourceUsage: AgentResourceUsage = .init(),
+        notice: AgentRuntimeNotice? = nil
     ) {
         self.revision = revision
         self.connection = connection
@@ -129,6 +131,34 @@ public struct AgentSnapshot: Codable, Sendable, Hashable {
         self.imports = imports
         self.preferences = preferences
         self.resourceUsage = resourceUsage
+        self.notice = notice
+    }
+}
+
+/// A recoverable runtime condition that should remain visible across XPC
+/// polling without turning an already-committed desktop command into failure.
+public struct AgentRuntimeNotice: Codable, Sendable, Hashable, Identifiable {
+    public enum Kind: String, Codable, Sendable, Hashable {
+        case information
+        case warning
+        case error
+    }
+
+    public let id: UUID
+    public let kind: Kind
+    public let title: String
+    public let message: String
+
+    public init(
+        id: UUID = UUID(),
+        kind: Kind,
+        title: String,
+        message: String
+    ) {
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.message = message
     }
 }
 

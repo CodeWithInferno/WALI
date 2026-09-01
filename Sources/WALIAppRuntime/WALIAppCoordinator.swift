@@ -226,9 +226,17 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
         guard lastSnapshot == nil || snapshot.revision.rawValue >= lastSnapshot!.revision.rawValue else {
             return
         }
+        let previousRuntimeNotice = lastSnapshot?.notice
         lastSnapshot = snapshot
+        let preservedNotice: WALINoticePresentation? = if clearNotice
+            || snapshot.notice != nil
+            || previousRuntimeNotice != nil {
+            nil
+        } else {
+            model.snapshot.notice
+        }
         model.snapshot = snapshot.presentationValue(
-            preserving: clearNotice ? nil : model.snapshot.notice
+            preserving: preservedNotice
         )
     }
 
@@ -300,7 +308,7 @@ public extension AgentSnapshot {
                 usedBytes: Int64(clamping: resourceUsage.storageUsedBytes),
                 limitBytes: resourceUsage.storageLimitBytes.map(Int64.init(clamping:))
             ),
-            notice: notice
+            notice: self.notice?.presentationValue ?? notice
         )
     }
 
@@ -318,6 +326,17 @@ public extension AgentSnapshot {
             return .automaticallyPaused(reason: resourceUsage.isLowPowerModeEnabled ? "Low Power Mode" : "System activity")
         case .failed: return .error(message: "The wallpaper renderer needs attention.")
         }
+    }
+}
+
+private extension AgentRuntimeNotice {
+    var presentationValue: WALINoticePresentation {
+        let presentationKind: WALINoticeKind = switch kind {
+        case .information: .information
+        case .warning: .warning
+        case .error: .error
+        }
+        return .init(id: id, kind: presentationKind, title: title, message: message)
     }
 }
 

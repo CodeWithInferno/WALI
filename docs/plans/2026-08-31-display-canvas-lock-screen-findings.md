@@ -25,9 +25,13 @@
 
 - ADR 0008 limits the adapter to exact system build `25F80`, Aerial manifest version 1, and the current-user provider `com.apple.wallpaper.choice.aerials`.
 - WALI reserves fixed category/subcategory IDs and `CUSTOM_WALI_` shot IDs, with at most eight registered assets.
-- Manifest and Index editors accept injected roots, validate bounds and ownership before writes, stage sibling files, reparse staged data, sync, and atomically replace.
-- Choice and asset journals distinguish WALI-owned rollback state from unrelated user state and make both crash-before-replace and crash-after-replace retries idempotent.
+- Manifest and Index editors accept injected roots, validate bounds and ownership before writes, stage sibling files, reparse staged data, sync, and compare the exact expected bytes under file coordination before an atomic exchange. The displaced bytes are then verified; an observed noncooperating race is rolled back, while a second race is retained in a recovery sibling rather than deleted.
+- The choice journal retains each original value, all managed pre/post asset IDs, and expected/target Index digests until replacement is durable; A-to-B changes, disable, and removed display/Space paths converge without overwriting external choices.
+- The asset journal persists `refreshPending` through commit and disable cleanup. Each refresh carries a transaction generation, so an older suspended refresh can clear or remove only the exact journal generation it created.
+- Cross-file preflight validates manifest ownership, Index scope/ownership, source and destination paths, removal paths, and journal bounds before the first mutation.
 - Successful disable removes empty ownership journals, returning future disabled launches to a strict no-op, while prepared asset journals reclaim orphan UUID files after interrupted installs.
 - Disabled with no WALI journal is a strict no-op: no build probe failure is surfaced and no Apple or WALI metadata is changed.
 - Only top-level display choices and existing Space-display choices are patched; global, all-user, and Space-default choices remain outside WALI's authority.
+- A newly-created Space that clones the display's current WALI choice inherits rollback from that display's matching journal record. A different WALI choice is treated as an external selection and fails closed without mutation.
 - Directory event sources observe atomic Apple manifest/store replacement without background polling; wake, unlock, Space, and display events also trigger coalesced reconciliation.
+- The authoritative command router dry-validates false-to-true opt-in before engine persistence. Later private-adapter failures preserve the committed desktop command and travel as a durable warning in agent snapshots.

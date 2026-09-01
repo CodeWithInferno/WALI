@@ -237,6 +237,10 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAgentTests
     dependencies:
       - target: WALIAgentRuntime
+      - package: WALICore
+        product: WALIWire
+      - package: WALICore
+        product: WALIEngine
 
   WALITranscoderTests:
     type: bundle.unit-test

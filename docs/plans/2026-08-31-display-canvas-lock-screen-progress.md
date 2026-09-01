@@ -14,4 +14,6 @@
 - Isolated transaction verification covered semantic no-op behavior, unrelated manifest data, global and Space defaults, two display-scoped choice nodes, rollback, orphan cleanup, and disabled/no-journal behavior.
 - Fresh verification passed: `make build`, `make check-architecture`, 147 architecture mutation cases, `make test` (57 package tests plus four macOS runtime test bundles), and `git diff --check`.
 - The live Apple wallpaper store and WallpaperAgent were not mutated or restarted during implementation or verification.
-- Next: commit the authenticated-session adapter without pushing, then reserve live opt-in validation for an explicit manual checkpoint.
+- Runtime-review hardening added exact-byte CAS, pre/post choice transactions, stale display/Space retirement, full cross-file preflight, opt-in validation before persistence, durable refresh intent, and successful desktop commands with truthful Lock Screen warnings.
+- Fifteen focused cases in the existing `WALIAgentTests` target cover A-to-B and disable crash recovery, stale and newly cloned Spaces, external-choice preservation, CAS rejection, corrupt-poster and invalid-Index zero-partial-mutation, pre-persistence opt-in rejection, desktop-success warnings, refresh recovery after commit, and overlapping refresh generations.
+- Next: commit the runtime-review hardening without pushing, then reserve live opt-in validation for an explicit manual checkpoint.
