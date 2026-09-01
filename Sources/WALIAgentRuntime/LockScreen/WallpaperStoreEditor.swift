@@ -127,21 +127,26 @@ public struct WallpaperStoreEditor: Sendable {
             guard existingPathSet.contains(record.path) else { continue }
             let current = Self.currentChoices(in: root, path: record.path)
             if record.createdDisplayNode {
-                if let currentID = Self.aerialAssetID(in: current),
-                   Set(record.managedAssetIDs).contains(currentID) {
-                    guard try Self.isExactSynthesizedDisplayNode(
-                        in: root,
-                        choicePath: record.path,
-                        assetID: currentID
-                    ) else {
+                if let currentID = Self.aerialAssetID(in: current) {
+                    if Set(record.managedAssetIDs).contains(currentID) {
+                        guard try Self.isExactSynthesizedDisplayNode(
+                            in: root,
+                            choicePath: record.path,
+                            assetID: currentID
+                        ) else {
+                            throw LockScreenCompatibilityError.ownershipConflict(
+                                "A WALI-created display override changed outside WALI; it was preserved."
+                            )
+                        }
+                        root = try Self.removingSynthesizedDisplayNode(
+                            atChoicePath: record.path,
+                            in: root
+                        )
+                    } else if knownOwnedAssetIDs.contains(currentID) {
                         throw LockScreenCompatibilityError.ownershipConflict(
-                            "A WALI-created display override changed outside WALI; it was preserved."
+                            "A WALI-created display override points to another owned asset; it was preserved."
                         )
                     }
-                    root = try Self.removingSynthesizedDisplayNode(
-                        atChoicePath: record.path,
-                        in: root
-                    )
                 }
                 // A removed node or one with an external choice is no longer
                 // WALI-owned. Preserve it and retire the stale record.

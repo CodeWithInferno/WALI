@@ -25,6 +25,7 @@
 
 - Live read-only inspection on build `25F80` found a valid store epoch with `AllSpacesAndDisplays` and `SystemDefault` image choices but empty `Displays` and `Spaces` maps. A connected display therefore cannot be required to have a pre-existing override node.
 - The safe compatibility boundary is a synthesized top-level `Displays/<UUID>/Linked/Content/Choices` node only. Recording whole-node absence distinguishes it from an existing node whose `Choices` happened to be absent, so rollback can remove exactly what WALI created without touching global/system defaults or creating Space nodes.
+- If an externally changed synthesized node points to a different asset that is still WALI-owned elsewhere, cleanup must fail closed rather than retire the node journal: retiring it would allow the coordinator to remove an asset registration that the preserved Index node still references.
 
 - ADR 0008 limits the adapter to exact system build `25F80`, Aerial manifest version 1, and the current-user provider `com.apple.wallpaper.choice.aerials`.
 - WALI reserves fixed category/subcategory IDs and `CUSTOM_WALI_` shot IDs, with at most eight registered assets.

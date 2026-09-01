@@ -19,6 +19,6 @@
 - Runtime-review hardening committed as `18305a1`; no live Apple-store mutation or WallpaperAgent restart occurred.
 - Live opt-in preflight then exposed a supported `25F80` Index shape with global/system image choices and empty display maps. Four focused synthesized-display regressions fail at the old “connected display missing” guard, confirming the compatibility gap before implementation.
 - Added fixture-backed top-level display override synthesis for missing connected displays. The rollback journal records whole-node absence; disable removes only exact, unchanged WALI-created nodes and preserves external changes.
-- Nineteen focused agent tests now pass, including three-display enable, exact-root disable, both prepared-crash phases, external-change preservation, and malformed-Index zero-partial-mutation.
+- Twenty focused agent tests now pass, including three-display enable, exact-root disable, both prepared-crash phases, external-change preservation, known-owned alternate-asset rejection, and malformed-Index zero-partial-mutation.
 - Final verification passed: full build, all package and application tests, 19 focused agent tests, architecture checks, 148 architecture mutation cases, and whitespace validation.
 - The live Apple wallpaper store and WallpaperAgent remained untouched throughout implementation and verification.

@@ -319,6 +319,31 @@ final class WALIAgentTests: XCTestCase {
         XCTAssertTrue(journal.records.isEmpty)
     }
 
+    func testDifferentKnownWALIAssetOnSynthesizedNodeBlocksDisableWithoutMutation() throws {
+        let fixture = try makeEmptyDisplayStoreFixture()
+        let editor = WallpaperStoreEditor(indexURL: fixture.index, journalURL: fixture.journal)
+        _ = try editor.reconcile(
+            assignments: [.init(displayUUID: displayID, assetID: assetA)],
+            knownOwnedAssetIDs: [assetA, assetB]
+        )
+        try emptyDisplayStoreData(displayAssets: [displayID: assetB]).write(to: fixture.index)
+        let indexBefore = try Data(contentsOf: fixture.index)
+        let journalBefore = try Data(contentsOf: fixture.journal)
+
+        XCTAssertThrowsError(try editor.reconcile(
+            assignments: [],
+            knownOwnedAssetIDs: [assetA, assetB]
+        )) { error in
+            guard case LockScreenCompatibilityError.ownershipConflict = error else {
+                return XCTFail("Expected an ownership conflict, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(try Data(contentsOf: fixture.index), indexBefore)
+        XCTAssertEqual(try Data(contentsOf: fixture.journal), journalBefore)
+        XCTAssertEqual(try selectedAsset(in: fixture.index), assetB)
+    }
+
     func testAtomicCompareAndSwapRejectsStaleBaselineWithoutMutation() throws {
         let root = try temporaryDirectory()
         let file = root.appendingPathComponent("Index.plist")
