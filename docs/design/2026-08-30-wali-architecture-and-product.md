@@ -391,7 +391,7 @@ WALI will not scrape or redistribute Backdrop's catalog.
 - Network access is absent until the catalog phase.
 - Hardened runtime and Developer ID notarization are release requirements.
 - Direct distribution is expected because desktop-level windows, login-item behavior, and the experimental lock-screen adapter require capabilities that are a poor fit for the Mac App Store sandbox.
-- The app never requests Accessibility, Screen Recording, or Full Disk Access for ordinary wallpaper operation.
+- The app never requests Accessibility, Screen Recording, or Full Disk Access for ordinary wallpaper operation. The explicitly enabled private Lock Screen adapter requires Full Disk Access for WALI Agent because macOS protects the current-user wallpaper store.
 
 ## 14. Observability
 

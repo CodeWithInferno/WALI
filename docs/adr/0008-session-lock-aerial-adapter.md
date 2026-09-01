@@ -41,6 +41,8 @@ fails closed before an Apple-store write.
   login. FileVault preboot, unauthenticated loginwindow, fast-user-switch users,
   direct Lock Screen drawing, SIP bypass, root, and UI injection are excluded.
 - The agent remains the only WALI process that reads or writes this surface.
+- Enabling the adapter requires Full Disk Access for WALI Agent; desktop
+  rendering remains permission-free and independent.
 - Global, all-user, and Space-default choices are never changed.
 - A missing top-level display override is journaled as node absence. Disable
   removes the synthesized node only while its complete shape and exact managed
@@ -70,7 +72,7 @@ fails closed before an Apple-store write.
 ## Consequences
 
 Users on the verified build can explicitly mirror active WALI assignments into
-the authenticated Lock Screen. The feature may stop working after any macOS
+the authenticated Lock Screen after granting WALI Agent Full Disk Access. The feature may stop working after any macOS
 update until a new build/schema is independently verified and registered. It
 adds private per-user storage writes and WALI rollback metadata, but no daemon,
 server, elevated helper, Screen Recording permission, or all-user state.

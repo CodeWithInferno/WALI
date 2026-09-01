@@ -23,6 +23,8 @@ WALI cannot and will not bypass FileVault preboot, SIP, protected login UI, or a
 Lock Screen continuity is an opt-in private compatibility adapter currently
 limited to verified macOS build 25F80. Apple may change this format at any
 update; WALI then fails closed until a new fixture-backed epoch is accepted.
+Because macOS protects the current-user wallpaper store, this optional adapter
+requires Full Disk Access for WALI Agent; normal desktop playback does not.
 Desktop and Lock Screen playback timelines are independent.
 
 ## Architecture

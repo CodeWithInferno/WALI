@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WALIUI
 
@@ -51,9 +52,22 @@ public struct WALISettingsView: View {
                         "Show the current wallpaper after locking",
                         isOn: $draft.lockScreenContinuityEnabled
                     )
-                    Text("Experimental private compatibility on verified macOS builds. It applies only to this signed-in session, uses an independent playback timeline, and is unavailable at FileVault startup. Turning it off restores previous choices that are still managed by WALI.")
+                    Text("Uses an independent playback timeline for this signed-in session. It is unavailable at FileVault startup. Turning it off restores choices still managed by WALI.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Allow WALI Agent once in Full Disk Access", systemImage: "lock.shield")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            Button("Show Agent in Finder") { revealAgent() }
+                                .buttonStyle(.link)
+                            Spacer()
+                            Link("Open Full Disk Access…", destination: fullDiskAccessSettingsURL)
+                        }
+                        .font(.caption)
+                    }
                 }
 
                 Section("Storage") {
@@ -105,5 +119,16 @@ public struct WALISettingsView: View {
             return storage.usedBytes.formatted(.byteCount(style: .file))
         }
         return "\(storage.usedBytes.formatted(.byteCount(style: .file))) of \(limit.formatted(.byteCount(style: .file)))"
+    }
+
+    private var fullDiskAccessSettingsURL: URL {
+        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+            ?? URL(fileURLWithPath: "/System/Applications/System Settings.app")
+    }
+
+    private func revealAgent() {
+        let agentURL = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Library/LoginItems/WALIAgent.app", isDirectory: true)
+        NSWorkspace.shared.activateFileViewerSelecting([agentURL])
     }
 }
