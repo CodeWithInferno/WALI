@@ -4,7 +4,7 @@ ARG WALI_MODEL_IMAGE=empty-model
 
 FROM --platform=linux/amd64 ghcr.io/astral-sh/uv@sha256:db99140470350437166de1fc646323ecb59e4d99d7857d0baf429a7b4a9523f3 AS uv
 
-FROM --platform=linux/amd64 python:3.12.11-slim-bookworm@sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49 AS dependencies
+FROM --platform=linux/amd64 python:3.14.7-slim-bookworm@sha256:9ab8d9c8514b44f90cf0029dd42fdd7e9e211e639c8b995304cc04568dee900f AS dependencies
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /opt/wali
 ENV UV_COMPILE_BYTECODE=1 \
@@ -21,7 +21,7 @@ RUN install -d /model
 
 FROM ${WALI_MODEL_IMAGE} AS verified-model
 
-FROM --platform=linux/amd64 python:3.12.11-slim-bookworm@sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49 AS source-only
+FROM --platform=linux/amd64 python:3.14.7-slim-bookworm@sha256:9ab8d9c8514b44f90cf0029dd42fdd7e9e211e639c8b995304cc04568dee900f AS source-only
 RUN groupadd --gid 65532 wali && useradd --uid 65532 --gid 65532 --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin wali \
     && install -d -o 65532 -g 65532 /opt/wali/model /work/input /work/output
 WORKDIR /work
