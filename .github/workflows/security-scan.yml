@@ -32,7 +32,10 @@ jobs:
       - run: ./scripts/check-licenses.sh
 
   dependency-review:
-    if: github.event_name == 'pull_request'
+    # GitHub's dependency-review API is unavailable while this repository is
+    # private without Advanced Security. Enforce it automatically when the
+    # repository is opened to the public.
+    if: github.event_name == 'pull_request' && github.event.repository.private == false
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
