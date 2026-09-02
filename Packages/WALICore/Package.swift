@@ -22,6 +22,11 @@ let package = Package(
             name: "WALIEngine",
             type: .static,
             targets: ["WALIEngine"]
+        ),
+        .library(
+            name: "WALICatalog",
+            type: .static,
+            targets: ["WALICatalog"]
         )
     ],
     targets: [
@@ -38,6 +43,11 @@ let package = Package(
             name: "WALIEngine",
             dependencies: ["WALIModel"],
             path: "Sources/WALIEngine"
+        ),
+        .target(
+            name: "WALICatalog",
+            dependencies: ["WALIModel"],
+            path: "Sources/WALICatalog"
         ),
         .testTarget(
             name: "WALIModelTests",
@@ -56,8 +66,12 @@ let package = Package(
             name: "WALIEngineTests",
             dependencies: ["WALIEngine"],
             path: "Tests/WALIEngineTests"
+        ),
+        .testTarget(
+            name: "WALICatalogTests",
+            dependencies: ["WALICatalog"],
+            path: "Tests/WALICatalogTests"
         )
     ],
     swiftLanguageModes: [.v6]
 )
-

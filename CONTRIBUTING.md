@@ -17,16 +17,16 @@ The following is the target placement, not current product capability:
 - Bounded/versioned cross-process DTOs → `WALIWire`
 - Use cases, durable jobs, and orchestration policy → `WALIEngine`
 - Shared native presentation → `WALIUI`
+- Canonical catalog identifiers/manifests/trust/revocation → `WALICatalog`
+- Foreground network/auth/catalog/download adapters → `WALICatalogRuntime`
 - Foreground intentions and snapshot presentation → `WALI.app`
 - Long-lived rendering, state, jobs, and persistence adapters → `WALIAgent.app`
-- Bounded media analysis/encoding only → future agent-private `WALITranscoder.xpc`
+- Bounded media analysis/encoding only → agent-private `WALITranscoder.xpc`
+- Fixed authenticated-session Lock Screen mutations only → `WALILockScreenHelper.app`
 
-The current app and agent surfaces are placeholders. The agent embeds the
-agent-private transcoder; no app↔agent IPC, Engine, rendering, jobs, or storage
-exists yet. `WALIModel`, `WALIWire`, and `WALIEngine` currently contain only
-package-scoped module-availability markers. `WALICore` names their local
-package reference and folder, not an importable product. Check
-`docs/architecture/modules.yml` before changing imports, and do not bypass
+`WALICore` names the local package reference and folder, not an importable
+product. Current capabilities and allowed edges are recorded in
+`docs/architecture/modules.yml`; do not infer them from this summary or bypass
 these seams to make a feature faster to write.
 
 ## Development workflow
@@ -45,6 +45,18 @@ CONFIGURATION=Release ./scripts/verify-bundle.sh
 ```
 
 7. Include exact verification results and screenshots for visual changes.
+
+Marketplace database work must pass `make backend-reset`, `make backend-test`,
+`make backend-lint`, `make marketplace-contracts`, and
+`make marketplace-verify`. Use only the local
+Supabase project while developing; linking, migration pushes, or destructive
+commands against a hosted project require an explicit deployment procedure and
+separate authorization.
+
+Wallpaper contributions need item-level source, rights holder, redistribution
+grant, attribution, source/canonical digests, reviewer, and date in
+`docs/content/seed-catalog.yml` or the authoritative marketplace rights record.
+An empty seed catalog is preferred to uncertain rights.
 
 ## Architecture changes
 

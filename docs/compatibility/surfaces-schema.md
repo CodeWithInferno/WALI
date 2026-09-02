@@ -35,7 +35,14 @@ Required IDs and kinds:
 - `application_group_containers` → `container_identity`
 - app/agent and agent/worker service-name surfaces → `service_identity`
 - content store, preferences, URL schemes, catalog manifest, lock-screen
-  manifest, and diagnostic export → their same-named singular kind
+  manifest, and diagnostic export → their same-named singular kind;
+- `catalog_revocations` → `catalog_revocations`;
+- `marketplace_server_schema` → `server_schema`;
+- catalog/creator/moderation API entries → `public_api`;
+- `catalog_signing_keys` → `signing_key_registry`;
+- `classifier_model_registry` → `model_registry`;
+- `marketplace_storage_paths` → `storage_paths`; and
+- `lock_screen_helper_wire` → `wire_channel`.
 
 Missing, extra, or malformed required detail fields fail closed.
 
@@ -88,8 +95,14 @@ key, expected revision, and payload length.
 `content_store` records current/target layout, SHA-256, same-volume scope, and
 no-replace publication. Preferences record agent authority and fail-closed
 unknown-newer policy. URL schemes are configuration-keyed and require
-validation/confirmation. Catalog details require signatures and remain
-deferred. Diagnostics require a lease, redaction classes, and excluded payload
+validation/confirmation. Catalog manifest/revocation details fix canonical
+bounds, Ed25519 trust, SHA-256 identity, allowed roles/reasons, approved-host
+policy, fixture paths, and catalog-only revocation scope. Public API surfaces
+name the versioned contract, body/page bounds, and prohibition on exposed
+tables. Server-schema, signing-key, model, and storage surfaces record accepted
+target epochs and fail-closed migration/trust/path rules without claiming a
+runtime implementation before their migrations/services exist. Diagnostics
+require a lease, redaction classes, and excluded payload
 classes. The implemented Lock Screen surface is limited by accepted ADR 0009,
 an exact system-build and manifest-version allowlist, fixed WALI ownership
 identifiers and bounds, a reject-before-write policy, and a redacted
@@ -122,6 +135,12 @@ reference those variables rather than repeating identifier literals in
 
 These maps prevent a Development-only identity from being presented as a Debug
 or Release guarantee.
+
+ADR 0013 moves the `lock_screen_manifest` reader/writer to
+`WALILockScreenHelper`. The helper service identity, bundle identity, and app
+group become configured facts only when its generated target, xcconfig, and
+entitlements exist and match; a planned module or accepted ADR alone is not a
+claim that signing or registration is configured.
 
 ## Fixture lifecycle
 

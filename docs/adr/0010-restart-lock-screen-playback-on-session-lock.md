@@ -1,12 +1,19 @@
 # 0010: Restart active Lock Screen playback on each session lock
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-09-01
 - owner_role: compatibility_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner autonomous Lock Screen completion directive 2026-09-01
 - supersedes: 0009
-- supersedes_scope: refresh_only_after_required_mutation
+- supersedes_scope: 0009=refresh_only_after_required_mutation
+- superseded_by: 0013
+- superseded_scope: 0013=lock_screen_privileged_process_ownership
+
+ADR 0013 supersedes only the clause assigning the allowlisted Apple wallpaper
+process refresh to `WALIAgent`. The distinct-lock coalescing, read-only
+preflight, and refresh behavior in this record remain accepted and move to the
+narrow Lock Screen helper.
 
 ## Context
 

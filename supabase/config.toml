@@ -1,0 +1,134 @@
+# Local-only Supabase configuration. Never link this directory to a hosted project.
+project_id = "wali-marketplace-local"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 100
+auto_expose_new_tables = false
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+health_timeout = "2m"
+
+[db.pooler]
+enabled = false
+port = 54329
+pool_mode = "transaction"
+default_pool_size = 20
+max_client_conn = 100
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[realtime]
+enabled = false
+
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1"
+
+[local_smtp]
+enabled = true
+port = 54324
+
+[storage]
+enabled = true
+file_size_limit = "1GiB"
+
+[storage.s3_protocol]
+enabled = true
+
+[storage.analytics]
+enabled = false
+max_namespaces = 1
+max_tables = 1
+max_catalogs = 1
+
+[storage.vector]
+enabled = false
+max_buckets = 1
+max_indexes = 1
+
+[auth]
+enabled = true
+site_url = "wali://auth/callback"
+additional_redirect_urls = ["wali-development://auth/callback"]
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+enable_signup = true
+enable_anonymous_sign_ins = false
+enable_manual_linking = false
+minimum_password_length = 12
+password_requirements = "lower_upper_letters_digits_symbols"
+
+[auth.email]
+enable_signup = true
+double_confirm_changes = true
+enable_confirmations = false
+secure_password_change = true
+max_frequency = "1s"
+otp_length = 6
+otp_expiry = 3600
+
+[auth.sms]
+enable_signup = false
+enable_confirmations = false
+
+[edge_runtime]
+enabled = true
+policy = "per_worker"
+inspector_port = 8083
+
+# Gateway JWT verification is deliberately disabled because every mutation
+# handler validates the bearer token against GoTrue before parsing claims.
+# The catalog security-state endpoint is intentionally signed-out/public.
+[functions.admin-role-grant]
+verify_jwt = false
+[functions.catalog-security-state]
+verify_jwt = false
+[functions.complete-upload]
+verify_jwt = false
+[functions.create-upload]
+verify_jwt = false
+[functions.creator-command]
+verify_jwt = false
+[functions.moderate-submission]
+verify_jwt = false
+[functions.publish-release]
+verify_jwt = false
+[functions.record-install]
+verify_jwt = false
+[functions.report-wallpaper]
+verify_jwt = false
+[functions.request-account-deletion]
+verify_jwt = false
+[functions.request-account-export]
+verify_jwt = false
+[functions.request-install]
+verify_jwt = false
+[functions.submit-wallpaper]
+verify_jwt = false
+
+[analytics]
+enabled = false
+port = 54327
+backend = "postgres"
+
+[experimental]
+orioledb_version = ""
+s3_host = "env(S3_HOST)"
+s3_region = "env(S3_REGION)"
+s3_access_key = "env(S3_ACCESS_KEY)"
+s3_secret_key = "env(S3_SECRET_KEY)"

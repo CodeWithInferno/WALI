@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "revision": "wali-taxonomy-v1",
+  "embedding_dimension": 768,
+  "thresholds": {
+    "category": 0.42,
+    "tag": 0.46
+  },
+  "categories": [
+    {"id": "nature", "label": "Nature", "prompt": "a live wallpaper showing natural landscapes, plants, water, weather, or wildlife"},
+    {"id": "space", "label": "Space", "prompt": "a live wallpaper showing planets, stars, galaxies, spacecraft, or deep space"},
+    {"id": "city", "label": "City", "prompt": "a live wallpaper showing streets, architecture, skylines, or urban life"},
+    {"id": "abstract", "label": "Abstract", "prompt": "a live wallpaper made of abstract shapes, gradients, particles, light, or procedural motion"},
+    {"id": "technology", "label": "Technology", "prompt": "a live wallpaper showing computers, cyber imagery, code, machinery, or futuristic technology"},
+    {"id": "illustration", "label": "Illustration", "prompt": "a live wallpaper rendered as drawing, animation, graphic art, or stylized illustration"}
+  ],
+  "tags": [
+    {"id": "mountains", "label": "Mountains", "prompt": "mountains, cliffs, or alpine scenery"},
+    {"id": "ocean", "label": "Ocean", "prompt": "ocean, sea, coast, beach, or underwater scenery"},
+    {"id": "forest", "label": "Forest", "prompt": "forest, trees, woodland, or jungle scenery"},
+    {"id": "night", "label": "Night", "prompt": "a dark nighttime scene"},
+    {"id": "aurora", "label": "Aurora", "prompt": "aurora borealis or colorful polar lights"},
+    {"id": "rain", "label": "Rain", "prompt": "rain, droplets, wet surfaces, or a storm"},
+    {"id": "minimal", "label": "Minimal", "prompt": "minimal composition with sparse visual detail"},
+    {"id": "neon", "label": "Neon", "prompt": "neon lights or vivid luminous colors"},
+    {"id": "cyber", "label": "Cyber", "prompt": "cyberpunk, terminal, matrix, hacker, or digital code imagery"},
+    {"id": "calm", "label": "Calm", "prompt": "calm, relaxing, slow, or meditative movement"},
+    {"id": "energetic", "label": "Energetic", "prompt": "fast, energetic, dramatic, or intense movement"},
+    {"id": "dark", "label": "Dark", "prompt": "predominantly dark or black visual palette"},
+    {"id": "colorful", "label": "Colorful", "prompt": "a broad vivid colorful palette"},
+    {"id": "loop", "label": "Seamless Loop", "prompt": "motion designed as a seamless repeating loop"}
+  ]
+}

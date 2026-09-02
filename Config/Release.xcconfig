@@ -1,15 +1,24 @@
 #include "Base.xcconfig"
+#include? "Marketplace.production.local.xcconfig"
 
 WALI_APP_BUNDLE_IDENTIFIER = com.wali.WALI
 WALI_AGENT_BUNDLE_IDENTIFIER = com.wali.WALIAgent
 WALI_TRANSCODER_BUNDLE_IDENTIFIER = com.wali.WALITranscoder
 WALI_APP_GROUP_IDENTIFIER = group.com.wali.shared
 WALI_AGENT_CONTROL_SERVICE_NAME = com.wali.WALIAgent.control
+WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER = com.wali.WALILockScreenHelper
+WALI_LOCK_SCREEN_HELPER_SERVICE_NAME = com.wali.WALILockScreenHelper.control
+
+// Release IPC authentication requires a real common Team ID. Copy
+// Signing.example.xcconfig to the ignored Signing.local.xcconfig; an
+// unconfigured OSS checkout intentionally cannot produce a trusted Release.
+WALI_CODE_SIGN_IDENTITY =
+WALI_DEVELOPMENT_TEAM =
+#include? "Signing.local.xcconfig"
 
 CODE_SIGN_STYLE = Manual
-CODE_SIGN_IDENTITY = -
-DEVELOPMENT_TEAM =
+CODE_SIGN_IDENTITY = $(WALI_CODE_SIGN_IDENTITY)
+DEVELOPMENT_TEAM = $(WALI_DEVELOPMENT_TEAM)
 ENABLE_HARDENED_RUNTIME = YES
 SWIFT_COMPILATION_MODE = wholemodule
 SWIFT_OPTIMIZATION_LEVEL = -O
-

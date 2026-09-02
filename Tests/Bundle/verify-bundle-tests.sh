@@ -14,6 +14,7 @@ write_bundle_plists() {
     local app_identifier="$2"
     local agent_identifier="$3"
     local transcoder_identifier="$4"
+    local helper_identifier="${app_identifier%WALI}WALILockScreenHelper"
 
     cat > "${app_path}/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -24,6 +25,20 @@ write_bundle_plists() {
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
+</dict>
+</plist>
+EOF
+
+    cat > "${app_path}/Contents/Library/LoginItems/WALILockScreenHelper.app/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>WALILockScreenHelper</string>
+  <key>CFBundleIdentifier</key><string>${helper_identifier}</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSUIElement</key><true/>
 </dict>
 </plist>
 EOF
@@ -69,7 +84,8 @@ new_fixture() {
     mkdir -p \
         "${app_path}/Contents/MacOS" \
         "${app_path}/Contents/Library/LoginItems/WALIAgent.app/Contents/MacOS" \
-        "${app_path}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/WALITranscoder.xpc/Contents/MacOS"
+        "${app_path}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/WALITranscoder.xpc/Contents/MacOS" \
+        "${app_path}/Contents/Library/LoginItems/WALILockScreenHelper.app/Contents/MacOS"
 
     write_bundle_plists \
         "${app_path}" \
@@ -91,6 +107,9 @@ EOF
     cp \
         "${app_path}/Contents/MacOS/WALI" \
         "${app_path}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/WALITranscoder.xpc/Contents/MacOS/WALITranscoder"
+    cp \
+        "${app_path}/Contents/MacOS/WALI" \
+        "${app_path}/Contents/Library/LoginItems/WALILockScreenHelper.app/Contents/MacOS/WALILockScreenHelper"
 
     printf '%s\n' "${app_path}"
 }
@@ -201,6 +220,7 @@ development_app="$(new_fixture \
 development_root="${TEMP_ROOT}/development-adhoc"
 agent_path="${development_app}/Contents/Library/LoginItems/WALIAgent.app"
 worker_path="${agent_path}/Contents/XPCServices/WALITranscoder.xpc"
+helper_path="${development_app}/Contents/Library/LoginItems/WALILockScreenHelper.app"
 
 write_entitlements \
     "${development_root}/worker.entitlements" \
@@ -209,6 +229,10 @@ write_entitlements \
 write_entitlements \
     "${development_root}/agent.entitlements" \
     TESTTEAM01.com.wali.development.WALIAgent \
+    yes
+write_entitlements \
+    "${development_root}/helper.entitlements" \
+    TESTTEAM01.com.wali.development.WALILockScreenHelper \
     yes
 write_entitlements \
     "${development_root}/app.entitlements" \
@@ -222,6 +246,13 @@ write_entitlements \
     --options runtime \
     --entitlements "${development_root}/worker.entitlements" \
     "${worker_path}"
+/usr/bin/codesign \
+    --force \
+    --sign - \
+    --timestamp=none \
+    --options runtime \
+    --entitlements "${development_root}/helper.entitlements" \
+    "${helper_path}"
 /usr/bin/codesign \
     --force \
     --sign - \
@@ -278,6 +309,7 @@ release_adhoc="$(new_fixture \
 release_adhoc_root="${TEMP_ROOT}/release-adhoc"
 release_adhoc_agent="${release_adhoc}/Contents/Library/LoginItems/WALIAgent.app"
 release_adhoc_worker="${release_adhoc_agent}/Contents/XPCServices/WALITranscoder.xpc"
+release_adhoc_helper="${release_adhoc}/Contents/Library/LoginItems/WALILockScreenHelper.app"
 write_release_entitlements \
     "${release_adhoc_root}/worker.entitlements" \
     com.wali.WALITranscoder \
@@ -287,6 +319,10 @@ write_release_entitlements \
     com.wali.WALIAgent \
     yes
 write_release_entitlements \
+    "${release_adhoc_root}/helper.entitlements" \
+    com.wali.WALILockScreenHelper \
+    yes
+write_release_entitlements \
     "${release_adhoc_root}/app.entitlements" \
     com.wali.WALI \
     yes
@@ -294,6 +330,10 @@ write_release_entitlements \
     --force --sign - --timestamp=none --options runtime \
     --entitlements "${release_adhoc_root}/worker.entitlements" \
     "${release_adhoc_worker}"
+/usr/bin/codesign \
+    --force --sign - --timestamp=none --options runtime \
+    --entitlements "${release_adhoc_root}/helper.entitlements" \
+    "${release_adhoc_helper}"
 /usr/bin/codesign \
     --force --sign - --timestamp=none --options runtime \
     --entitlements "${release_adhoc_root}/agent.entitlements" \
@@ -316,6 +356,7 @@ release_fake_seal="$(new_fixture \
 for bundle_path in \
     "${release_fake_seal}" \
     "${release_fake_seal}/Contents/Library/LoginItems/WALIAgent.app" \
+    "${release_fake_seal}/Contents/Library/LoginItems/WALILockScreenHelper.app" \
     "${release_fake_seal}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/WALITranscoder.xpc"; do
     mkdir -p "${bundle_path}/Contents/_CodeSignature"
     : > "${bundle_path}/Contents/_CodeSignature/CodeResources"
@@ -409,7 +450,7 @@ expect_verifier_failure \
     "duplicate-login-item" \
     Release \
     "${duplicate_login}" \
-    "expected exactly one embedded login item"
+    "expected exactly two embedded login items"
 
 hidden_login="$(new_fixture \
     hidden-login \
@@ -421,7 +462,7 @@ expect_verifier_failure \
     "hidden-login-item" \
     Release \
     "${hidden_login}" \
-    "expected exactly one embedded login item"
+    "expected exactly two embedded login items"
 
 wrong_login="$(new_fixture \
     wrong-login \

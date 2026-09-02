@@ -1,0 +1,23 @@
+schema_version: 1
+catalog_id: wali-seed-v1
+status: empty_pending_licensed_media
+policy:
+  unverified_media: reject
+  missing_redistribution_grant: reject
+  prohibited_sources:
+    - Backdrop
+    - Wallsflow
+required_item_fields:
+  - id
+  - title
+  - source_url
+  - rights_holder
+  - license_spdx_or_policy_code
+  - license_terms_url
+  - redistribution_evidence_reference
+  - attribution_text
+  - source_artifact_sha256
+  - canonical_artifact_sha256
+  - reviewed_by
+  - reviewed_at
+items: []

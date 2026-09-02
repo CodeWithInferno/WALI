@@ -3,7 +3,7 @@ import WALIModel
 
 /// The compatibility version shared by the foreground app and background agent.
 public enum WALIProtocol {
-    public static let currentVersion: UInt16 = 1
+    public static let currentVersion: UInt16 = 2
     public static let maximumMessageBytes = 4 * 1_024 * 1_024
 }
 
@@ -36,6 +36,9 @@ public enum AgentCommand: Codable, Sendable, Hashable {
     case snapshot
     case diagnosticsSnapshot
     case importFiles(bookmarks: [Data])
+    case installCatalogRelease(AgentCatalogInstallRequest)
+    case updateCatalogTrustTransition(AgentCatalogTrustTransitionUpdate)
+    case updateCatalogRevocations(AgentCatalogRevocationUpdate)
     case cancelImport(jobID: UUID)
     case apply(itemID: UUID, displayIDs: [String], scaling: AgentPreferences.Scaling)
     case setPlaybackPaused(Bool)
@@ -80,6 +83,8 @@ public struct AgentFailure: Codable, Sendable, Hashable, Error {
         case itemNotFound
         case displayNotFound
         case importFailed
+        case catalogTrustFailed
+        case catalogReleaseRevoked
         case storageUnavailable
         case rendererUnavailable
         case internalFailure
@@ -93,6 +98,82 @@ public struct AgentFailure: Codable, Sendable, Hashable, Error {
         self.code = code
         self.message = message
         self.recoverySuggestion = recoverySuggestion
+    }
+}
+
+/// Opaque WALI-owned quarantine object presented to the agent for one install.
+/// The agent resolves the reference below its compiled fixed quarantine root;
+/// no path or URL crosses IPC.
+public struct AgentCatalogInstallRequest: Codable, Sendable, Hashable {
+    public static let maximumManifestBytes = 65_536
+    public static let maximumMetadataBytes = 16_384
+    public static let maximumSignatureUTF8Length = 86
+    public static let maximumKeyIDUTF8Length = 64
+
+    public let canonicalManifest: Data
+    public let canonicalMetadata: Data
+    public let signatureBase64URL: String
+    public let keyID: String
+    public let quarantineReference: UUID
+
+    public init(
+        canonicalManifest: Data,
+        canonicalMetadata: Data,
+        signatureBase64URL: String,
+        keyID: String,
+        quarantineReference: UUID
+    ) {
+        self.canonicalManifest = canonicalManifest
+        self.canonicalMetadata = canonicalMetadata
+        self.signatureBase64URL = signatureBase64URL
+        self.keyID = keyID
+        self.quarantineReference = quarantineReference
+    }
+}
+
+/// Cumulative signing-key state signed by a compiled trust anchor. The agent
+/// independently verifies and persists it before accepting dependent releases.
+public struct AgentCatalogTrustTransitionUpdate: Codable, Sendable, Hashable {
+    public static let maximumBodyBytes = 32_768
+
+    public let revision: UInt64
+    public let canonicalBody: Data
+    public let signatureBase64URL: String
+    public let keyID: String
+
+    public init(
+        revision: UInt64,
+        canonicalBody: Data,
+        signatureBase64URL: String,
+        keyID: String
+    ) {
+        self.revision = revision
+        self.canonicalBody = canonicalBody
+        self.signatureBase64URL = signatureBase64URL
+        self.keyID = keyID
+    }
+}
+
+/// Signed critical-revocation document. Verification and persistence are owned
+/// by the agent and never grant remote deletion authority over local media.
+public struct AgentCatalogRevocationUpdate: Codable, Sendable, Hashable {
+    public static let maximumBodyBytes = 1_048_576
+
+    public let canonicalBody: Data
+    public let revision: UInt64
+    public let signatureBase64URL: String
+    public let keyID: String
+
+    public init(
+        revision: UInt64,
+        canonicalBody: Data,
+        signatureBase64URL: String,
+        keyID: String
+    ) {
+        self.revision = revision
+        self.canonicalBody = canonicalBody
+        self.signatureBase64URL = signatureBase64URL
+        self.keyID = keyID
     }
 }
 

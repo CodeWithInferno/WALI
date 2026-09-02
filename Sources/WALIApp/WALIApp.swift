@@ -8,5 +8,6 @@ struct WALIApp: App {
             WALIConnectedAppRootView()
         }
         .defaultSize(width: 1120, height: 720)
+        .windowToolbarStyle(.unified(showsTitle: false))
     }
 }

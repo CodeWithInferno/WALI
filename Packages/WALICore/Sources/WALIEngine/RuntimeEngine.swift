@@ -5,6 +5,7 @@ public enum EngineAction: Sendable {
     case beginImports([(id: UUID, fileName: String, bookmark: Data)])
     case updateImport(id: UUID, phase: EngineImportJob.Phase, progress: Double, detail: String?)
     case finishImport(jobID: UUID, item: EngineLibraryItem)
+    case installCatalogItem(EngineLibraryItem)
     case cancelImport(UUID)
     case replaceDisplays([EngineDisplay])
     case apply(itemID: UUID, displayIDs: [String], scaling: EnginePreferences.Scaling)
@@ -50,6 +51,7 @@ public enum EngineError: Error, Sendable, Equatable {
     case displayNotFound(String)
     case importNotFound(UUID)
     case invalidName
+    case catalogInstallConflict(UUID)
 }
 
 /// Serializes all state transitions and makes repeated commands idempotent.
@@ -65,6 +67,12 @@ public actor RuntimeEngine {
 
     public func snapshot() -> EngineSnapshot {
         state
+    }
+
+    /// Lets an orchestration boundary avoid replaying irreversible work before
+    /// `perform` can return the engine's cached idempotent result.
+    public func completedTransaction(for idempotencyKey: UUID) -> EngineTransaction? {
+        completedTransactions[idempotencyKey]
     }
 
     @discardableResult
@@ -130,6 +138,20 @@ public actor RuntimeEngine {
             }
             state.imports[index].phase = .complete
             state.imports[index].progress = 1
+            return []
+
+        case let .installCatalogItem(item):
+            if let existing = state.items.first(where: { $0.id == item.id }) {
+                guard existing.contentDigest == item.contentDigest else {
+                    throw EngineError.catalogInstallConflict(item.id)
+                }
+                return []
+            }
+            if state.items.contains(where: { $0.contentDigest == item.contentDigest }) {
+                return []
+            }
+            state.items.append(item)
+            state.items.sort { $0.createdAt > $1.createdAt }
             return []
 
         case let .cancelImport(id):

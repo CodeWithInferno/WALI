@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
+
+readonly INPUT=/work/input
+readonly OUTPUT=/work/output
+readonly POLICY=/opt/wali/policy/ffmpeg-policy.json
+readonly MEDIA_CLAIM="$INPUT/media-claim.json"
+readonly FAILURE="$OUTPUT/failure.json"
+
+emit_failure() {
+  local code="${1:-verification_failed}" status="${2:-65}"
+  case "$code" in
+    invalid_contract|policy_mismatch|credential_exposed|invalid_media_claim|artifact_missing|artifact_mismatch|unsafe_track_layout|verification_failed) ;;
+    *) code=verification_failed ;;
+  esac
+  jq -n --argjson schema_version 1 --arg attempt_id "${WALI_ATTEMPT_ID:-unknown}" \
+    --arg submission_id "${WALI_SUBMISSION_ID:-unknown}" --argjson generation "${WALI_GENERATION:-0}" \
+    --arg safe_code "$code" '{schema_version:$schema_version,attempt_id:$attempt_id,submission_id:$submission_id,generation:$generation,safe_code:$safe_code}' \
+    >"$OUTPUT/.failure.json.tmp" 2>/dev/null || true
+  mv -f -- "$OUTPUT/.failure.json.tmp" "$FAILURE" 2>/dev/null || true
+  exit "$status"
+}
+trap 'status=$?; trap - ERR; emit_failure verification_failed "$status"' ERR
+
+for secret in AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN SUPABASE_SERVICE_ROLE_KEY WALI_STORAGE_SECRET_KEY DATABASE_URL; do
+  [[ -z "${!secret:-}" ]] || emit_failure credential_exposed
+done
+[[ -f "$POLICY" && ! -L "$POLICY" ]] || emit_failure policy_mismatch
+[[ "$(sha256sum "$POLICY" | cut -d' ' -f1)" == "${WALI_POLICY_DIGEST:-}" ]] || emit_failure policy_mismatch
+[[ -f "$MEDIA_CLAIM" && ! -L "$MEDIA_CLAIM" ]] || emit_failure invalid_media_claim
+
+jq -e '
+  (keys | sort) == (["artifacts","attempt_id","encoder_build","generation","input_digest","kind","policy_digest","safe_code","sample_frames","schema_version","submission_id"] | sort) and
+  .schema_version == 1 and .kind == "media" and .safe_code == "ok" and
+  (.artifacts | type == "array" and length == 4) and
+  ((.artifacts | map(.role) | sort) == ["poster","preview","thumbnail","video_default"]) and
+  (.sample_frames | type == "array" and length == 7) and
+  ((.sample_frames | map(.ordinal)) == [1,2,3,4,5,6,7]) and
+  (all(.artifacts[]; (keys | sort) == (["byte_count","codec","color_space","digest","duration_ms","frame_rate_denominator","frame_rate_numerator","has_audio","height","media_type","pixel_format","relative_path","role","width"] | sort))) and
+  (all(.artifacts[];
+    (.digest | type == "string" and test("^[a-f0-9]{64}$")) and
+    (.byte_count | type == "number" and . > 0 and . <= 2147483648) and
+    (.width | type == "number" and . > 0 and . <= 7680) and
+    (.height | type == "number" and . > 0 and . <= 4320) and
+    (.duration_ms | type == "number" and . >= 0 and . <= 600000) and
+    (.frame_rate_numerator | type == "number" and . >= 0) and
+    (.frame_rate_denominator | type == "number" and . > 0) and
+    (.has_audio == false))) and
+  (all(.sample_frames[];
+    (keys | sort) == (["byte_count","digest","height","ordinal","relative_path","width"] | sort) and
+    (.digest | type == "string" and test("^[a-f0-9]{64}$")) and
+    (.byte_count | type == "number" and . > 0 and . <= 16777216) and
+    (.width | type == "number" and . > 0 and . <= 1024) and
+    (.height | type == "number" and . > 0 and . <= 1024)))
+' "$MEDIA_CLAIM" >/dev/null || emit_failure invalid_media_claim
+
+[[ "$(jq -r '.attempt_id' "$MEDIA_CLAIM")" == "${WALI_ATTEMPT_ID:-}" ]] || emit_failure invalid_media_claim
+[[ "$(jq -r '.submission_id' "$MEDIA_CLAIM")" == "${WALI_SUBMISSION_ID:-}" ]] || emit_failure invalid_media_claim
+[[ "$(jq -r '.generation' "$MEDIA_CLAIM")" == "${WALI_GENERATION:-}" ]] || emit_failure invalid_media_claim
+[[ "$(jq -r '.input_digest' "$MEDIA_CLAIM")" == "${WALI_INPUT_DIGEST:-}" ]] || emit_failure invalid_media_claim
+[[ "$(jq -r '.policy_digest' "$MEDIA_CLAIM")" == "${WALI_POLICY_DIGEST:-}" ]] || emit_failure invalid_media_claim
+
+verify_artifact() {
+  local role=$1 relative_path=$2 expected_type=$3 expected_codec=$4
+  local file="$INPUT/$relative_path" count expected_digest expected_bytes expected_width expected_height expected_duration expected_numerator expected_denominator expected_pixel expected_color probe
+  count="$(jq --arg role "$role" '[.artifacts[] | select(.role == $role)] | length' "$MEDIA_CLAIM")"
+  [[ "$count" -eq 1 ]] || emit_failure artifact_missing
+  [[ "$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .relative_path' "$MEDIA_CLAIM")" == "$relative_path" ]] || emit_failure artifact_mismatch
+  [[ -f "$file" && ! -L "$file" ]] || emit_failure artifact_missing
+  expected_digest="$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .digest' "$MEDIA_CLAIM")"
+  expected_bytes="$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .byte_count' "$MEDIA_CLAIM")"
+  expected_width="$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .width' "$MEDIA_CLAIM")"
+  expected_height="$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .height' "$MEDIA_CLAIM")"
+  expected_duration="$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .duration_ms' "$MEDIA_CLAIM")"
+  expected_numerator="$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .frame_rate_numerator' "$MEDIA_CLAIM")"
+  expected_denominator="$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .frame_rate_denominator' "$MEDIA_CLAIM")"
+  expected_pixel="$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .pixel_format' "$MEDIA_CLAIM")"
+  expected_color="$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .color_space' "$MEDIA_CLAIM")"
+  [[ "$(sha256sum "$file" | cut -d' ' -f1)" == "$expected_digest" ]] || emit_failure artifact_mismatch
+  [[ "$(stat -c '%s' "$file")" == "$expected_bytes" ]] || emit_failure artifact_mismatch
+  probe="/tmp/verify-${role}.json"
+  ffprobe -v error -show_streams -show_format -of json "$file" >"$probe" || emit_failure artifact_mismatch
+  jq -e --arg codec "$expected_codec" --arg pixel "$expected_pixel" --arg color "$expected_color" --argjson width "$expected_width" --argjson height "$expected_height" '
+    (.streams | length) == 1 and .streams[0].codec_type == "video" and
+    .streams[0].codec_name == $codec and .streams[0].width == $width and .streams[0].height == $height and
+    .streams[0].pix_fmt == $pixel and (.streams[0].color_space // "unknown") == $color
+  ' "$probe" >/dev/null || emit_failure unsafe_track_layout
+  [[ "$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .media_type' "$MEDIA_CLAIM")" == "$expected_type" ]] || emit_failure artifact_mismatch
+  [[ "$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .has_audio' "$MEDIA_CLAIM")" == false ]] || emit_failure unsafe_track_layout
+  if [[ "$expected_type" == video/mp4 ]]; then
+    [[ "$(jq -r '((.format.duration | tonumber) * 1000 | floor)' "$probe")" == "$expected_duration" ]] || emit_failure artifact_mismatch
+    [[ "$(jq -r '.streams[0].avg_frame_rate | split("/")[0] | tonumber' "$probe")" == "$expected_numerator" ]] || emit_failure artifact_mismatch
+    [[ "$(jq -r '.streams[0].avg_frame_rate | split("/")[1] | tonumber' "$probe")" == "$expected_denominator" ]] || emit_failure artifact_mismatch
+    [[ "$expected_pixel" == yuv420p && "$expected_color" == bt709 ]] || emit_failure unsafe_track_layout
+  else
+    [[ "$expected_duration" == 0 && "$expected_numerator" == 0 && "$expected_denominator" == 1 ]] || emit_failure artifact_mismatch
+  fi
+}
+
+verify_artifact thumbnail artifacts/thumbnail.jpg image/jpeg mjpeg
+verify_artifact poster artifacts/poster.jpg image/jpeg mjpeg
+verify_artifact preview artifacts/preview.mp4 video/mp4 h264
+verify_artifact video_default artifacts/video-default.mp4 video/mp4 h264
+
+for ordinal in 1 2 3 4 5 6 7; do
+  frame="$(printf 'frame-%03d.jpg' "$ordinal")"
+  frame_path="$INPUT/frames/$frame"
+  [[ -f "$frame_path" && ! -L "$frame_path" ]] || emit_failure artifact_missing
+  [[ "$(jq -r --argjson ordinal "$ordinal" '.sample_frames[] | select(.ordinal == $ordinal) | .relative_path' "$MEDIA_CLAIM")" == "frames/$frame" ]] || emit_failure artifact_mismatch
+  [[ "$(sha256sum "$frame_path" | cut -d' ' -f1)" == "$(jq -r --argjson ordinal "$ordinal" '.sample_frames[] | select(.ordinal == $ordinal) | .digest' "$MEDIA_CLAIM")" ]] || emit_failure artifact_mismatch
+  [[ "$(stat -c '%s' "$frame_path")" == "$(jq -r --argjson ordinal "$ordinal" '.sample_frames[] | select(.ordinal == $ordinal) | .byte_count' "$MEDIA_CLAIM")" ]] || emit_failure artifact_mismatch
+  frame_probe="/tmp/verify-frame-${ordinal}.json"
+  ffprobe -v error -show_streams -of json "$frame_path" >"$frame_probe" || emit_failure artifact_mismatch
+  jq -e --argjson width "$(jq -r --argjson ordinal "$ordinal" '.sample_frames[] | select(.ordinal == $ordinal) | .width' "$MEDIA_CLAIM")" \
+    --argjson height "$(jq -r --argjson ordinal "$ordinal" '.sample_frames[] | select(.ordinal == $ordinal) | .height' "$MEDIA_CLAIM")" '
+      (.streams | length) == 1 and .streams[0].codec_type == "video" and .streams[0].codec_name == "mjpeg" and
+      .streams[0].width == $width and .streams[0].height == $height
+    ' "$frame_probe" >/dev/null || emit_failure unsafe_track_layout
+done
+
+jq '.kind = "verification"' "$MEDIA_CLAIM" >"$OUTPUT/.verification-claim.json.tmp"
+mv -- "$OUTPUT/.verification-claim.json.tmp" "$OUTPUT/verification-claim.json"
+trap - ERR

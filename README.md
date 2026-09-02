@@ -4,7 +4,9 @@ WALI is an open-source, native macOS live-wallpaper system focused on efficient 
 
 > **Status:** functional local pre-release. The native library, per-display
 > renderer, background Engine host, local XPC boundaries, durable storage, and
-> video import/transcode path are implemented. Distribution is still gated on
+> video import/transcode path are implemented. A secure marketplace foundation
+> is under active integration and public creator uploads remain disabled.
+> Distribution is still gated on
 > real-team signing, notarization, and physical-hardware endurance and Spaces
 > verification; this is not yet a supported public release.
 
@@ -17,14 +19,17 @@ WALI is an open-source, native macOS live-wallpaper system focused on efficient 
 - Keep the lightweight renderer alive when the library window closes.
 - Control playback and inspect WALI CPU/memory from the menu bar.
 - Offer a native SwiftUI library following macOS interaction and accessibility conventions.
+- Browse an optional signed catalog whose downloads remain playable offline.
+- Plan a future creator flow for explicitly licensed media through a hostile-media pipeline.
 - Support the current user's session lock screen only through tested, version-gated compatibility adapters.
 
 WALI cannot and will not bypass FileVault preboot, SIP, protected login UI, or another user's consent.
 Lock Screen continuity is an opt-in private compatibility adapter currently
 limited to verified macOS build 25F80. Apple may change this format at any
 update; WALI then fails closed until a new fixture-backed epoch is accepted.
-Because macOS protects the current-user wallpaper store, this optional adapter
-requires Full Disk Access for WALI Agent; normal desktop playback does not.
+Because macOS protects the current-user wallpaper store, the marketplace plan
+isolates this optional permission in a narrow `WALILockScreenHelper`; the app,
+renderer agent, catalog client, and media components must work without it.
 It mirrors the main display's wallpaper through macOS's current-user global
 linked selection and restores the prior global/display/Space values on disable.
 Desktop and Lock Screen playback timelines are independent.
@@ -34,13 +39,16 @@ Desktop and Lock Screen playback timelines are independent.
 Current implementation:
 
 ```text
-WALI.app              native library, create/download surfaces, settings, and XPC client
-WALIAgent.app         Engine, renderer, menu-bar, persistence, and import authority
+WALI.app              native library, public marketplace, basic account shell, settings, and XPC client
+WALIAgent.app         Engine, renderer, menu-bar, persistence, import/install authority
 WALITranscoder.xpc    agent-private HEVC/HEIC media worker with a bounded XPC contract
+WALILockScreenHelper  optional fixed-operation Lock Screen compatibility helper
 WALIModel             immutable records and pure playback/import-job reducers
 WALIWire              bounded versioned app/agent and agent/worker DTOs and codecs
 WALIEngine            revisioned, idempotent use cases and orchestration policy
 WALIUI                reusable native presentation models and status panel
+WALICatalog           canonical manifest, trust, revocation, and identifier contract
+WALICatalogRuntime    foreground auth/catalog/report/install/download adapter
 ```
 
 The foreground process sends intentions and presents snapshots; the agent owns
@@ -64,6 +72,8 @@ Start with:
 - [`GOVERNANCE.md`](GOVERNANCE.md)
 - [Architecture and product design](docs/design/2026-08-30-wali-architecture-and-product.md)
 - [Active architecture-hardening plan](docs/plans/2026-08-30-wali-architecture-hardening.md)
+- [Marketplace foundation design](docs/design/2026-09-01-marketplace-foundation.md)
+- [Marketplace implementation plan](docs/plans/2026-09-01-marketplace-foundation.md)
 
 ## Development
 
@@ -86,19 +96,42 @@ make clean
 
 # Signed local build; requires provisioning access to WALI's identifiers.
 DEVELOPMENT_TEAM=ABCDE12345 make development
+
+# Developer ID Release: copy Config/Signing.example.xcconfig to the ignored
+# Config/Signing.local.xcconfig and select your local certificate/team there.
+CONFIGURATION=Release ./scripts/build.sh
 ```
 
 The Xcode project is generated and intentionally ignored. Edit `project.yml`, then regenerate.
 
-Debug and Release verification require credential-free, unsealed app, agent,
-and XPC wrappers. Linker-produced ad-hoc signatures on Mach-O payloads are not
-treated as cryptographically signed wrappers. Debug compiles the UI-test target
+The marketplace control plane runs locally through Supabase. Install the
+Supabase CLI and Docker, then use `make backend-start`, `make backend-reset`,
+`make backend-test`, and `make backend-lint`. See
+[`supabase/README.md`](supabase/README.md). Hosted projects are never linked or
+mutated by these local targets.
+
+The full local marketplace gate is `make marketplace-verify`. It additionally
+checks Edge Functions, the race-enabled Go worker, frozen classifier tests,
+static networkless-sandbox policy, SPDX/license provenance, and worker-host
+isolation. CI also builds an ephemeral media image and runs the hostile corpus
+inside an isolated Docker runtime; rerunning that corpus against the exact
+signed release image remains a release gate. Hosted staging load/canary,
+isolated restore, signed helper lifecycle, and notarization remain explicit
+environment gates; see the
+[public-beta checklist](docs/release/marketplace-public-beta-checklist.md).
+
+Debug verification permits credential-free, unsealed app, agent, and XPC
+wrappers, but Lock Screen continuity stays unavailable because an ad-hoc peer
+cannot be authenticated strongly enough for Full Disk Access. Linker-produced
+ad-hoc signatures on Mach-O payloads are not treated as cryptographically
+signed wrappers. Debug compiles the UI-test target
 and runs every hostless unit suite, but it uses `com.wali.debug.*`, omits
 app-group entitlements, and cannot validate shared-container behavior.
 Development uses `com.wali.development.*`, automatic Apple Development signing,
 and `group.com.wali.development.shared`; the supplied team must be authorized
 for those identifiers. Release retains `com.wali.*` and
-`group.com.wali.shared`.
+`group.com.wali.shared`, requires a real common Team ID for authenticated IPC,
+and intentionally fails until `Config/Signing.local.xcconfig` is configured.
 
 ### Remaining release gates
 
@@ -110,10 +143,19 @@ for those identifiers. Release retains `com.wali.*` and
 - Complete physical-hardware endurance runs for sustained playback and imports,
   sleep/wake and lock/unlock, low-power and thermal states, display hot-plug and
   scale changes, and multiple Spaces/full-screen configurations.
+- Complete marketplace Gates A–E, including counsel approval, dedicated worker
+  deployment, hosted staging canary, restore proof, key rotation, and
+  exact-candidate SBOM/vulnerability evidence.
+- Keep creator uploads disabled until rights-proof policy is either implemented
+  or explicitly excluded, creator/moderator production gateways are composed,
+  and publication/revocation pass the hosted signing canary.
+- Do not expose account export/deletion until native request/status/retrieval,
+  private export download, session revocation, and Auth identity cleanup are
+  complete and exercised end to end.
 
-Credential-free Debug and Release builds prove the project graph and bundle
-shape only. They do not prove the external signing lifecycle, notarization, or
-real display/window-server behavior above.
+Credential-free Debug builds prove the project graph and hostless behavior
+only. They do not prove authenticated helper IPC, external signing,
+notarization, or real display/window-server behavior above.
 
 ## Principles
 
@@ -131,7 +173,9 @@ WALI is being structured for both human and autonomous-agent contributions. Read
 
 ## Clean-room boundary
 
-Backdrop and other products are behavioral references only. Do not contribute copied proprietary code, media, endpoints, credentials, reverse-engineered authentication, or confusingly similar branding.
+Backdrop, Wallsflow, and other products are behavioral references only. Do not
+contribute copied proprietary code, media, endpoints, credentials,
+reverse-engineered authentication, or confusingly similar branding.
 The sanitized evidence record is
 [Backdrop clean-room research](docs/research/2026-08-30-backdrop-research.md).
 

@@ -5,14 +5,15 @@ import WALIUI
 
 struct LoopingVideoView: View {
     let url: URL
+    var cornerRadius: CGFloat = 12
+    var videoGravity: AVLayerVideoGravity = .resizeAspectFill
 
     @State private var playback: LoopingPlayback?
 
     var body: some View {
         Group {
             if let playback {
-                VideoPlayer(player: playback.player)
-                    .disabled(true)
+                LayerBackedVideoPlayer(player: playback.player, videoGravity: videoGravity)
             } else {
                 Color(nsColor: .controlBackgroundColor)
                     .overlay {
@@ -21,7 +22,7 @@ struct LoopingVideoView: View {
                     }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .onAppear {
             let playback = LoopingPlayback(url: url)
             self.playback = playback
@@ -32,6 +33,54 @@ struct LoopingVideoView: View {
             playback = nil
         }
         .accessibilityHidden(true)
+    }
+}
+
+private struct LayerBackedVideoPlayer: NSViewRepresentable {
+    let player: AVPlayer
+    let videoGravity: AVLayerVideoGravity
+
+    func makeNSView(context: Context) -> PlayerLayerView {
+        let view = PlayerLayerView()
+        view.player = player
+        view.videoGravity = videoGravity
+        return view
+    }
+
+    func updateNSView(_ view: PlayerLayerView, context: Context) {
+        view.player = player
+        view.videoGravity = videoGravity
+    }
+}
+
+private final class PlayerLayerView: NSView {
+    override func makeBackingLayer() -> CALayer { AVPlayerLayer() }
+
+    var player: AVPlayer? {
+        get { playerLayer.player }
+        set { playerLayer.player = newValue }
+    }
+
+    var videoGravity: AVLayerVideoGravity {
+        get { playerLayer.videoGravity }
+        set { playerLayer.videoGravity = newValue }
+    }
+
+    private var playerLayer: AVPlayerLayer {
+        guard let playerLayer = layer as? AVPlayerLayer else {
+            preconditionFailure("PlayerLayerView requires AVPlayerLayer backing")
+        }
+        return playerLayer
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
     }
 }
 
@@ -92,7 +141,7 @@ struct WallpaperPreviewView: View {
     @ViewBuilder
     private var preview: some View {
         if let previewURL = wallpaper.previewURL {
-            LoopingVideoView(url: previewURL)
+            LoopingVideoView(url: previewURL, videoGravity: .resizeAspect)
                 .clipShape(Rectangle())
         } else {
             ArtworkThumbnail(imageURL: wallpaper.thumbnailURL, title: wallpaper.title, cornerRadius: 0)

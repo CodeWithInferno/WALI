@@ -396,7 +396,79 @@ surfaces:
   - id: catalog_manifest
     kind: catalog_manifest
     owner_role: catalog_maintainer
-    implementation: deferred
+    implementation: implemented
+    version:
+      current: { epoch: 1, revision: 0 }
+      readable_epochs:
+        - { epoch: 1, minimum_revision: 0, maximum_revision: 0 }
+      additive_compatibility: declared_ranges_only
+    product_compatibility:
+      minimum_reader: 0.1.0
+      minimum_writer: 0.1.0
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALICatalog]
+      writers: [WALICatalog]
+    fixture_gate:
+      status: passing
+      paths:
+        - Fixtures/Catalog/manifest-v1.json
+        - Fixtures/Catalog/manifest-v1.signature
+        - Fixtures/Catalog/invalid/duplicate-key.json
+        - Fixtures/Catalog/invalid/oversized-count.json
+        - Fixtures/Catalog/invalid/unapproved-host.json
+    details:
+      trust_model: signed_manifest_required
+      signature_required: true
+      signature_algorithm: Ed25519
+      digest_algorithm: SHA-256
+      canonicalization: schema_ordered_compact_utf8
+      maximum_body_bytes: 65536
+      maximum_nesting: 4
+      minimum_artifacts: 4
+      maximum_artifacts: 7
+      required_artifact_roles: [thumbnail, poster, preview, video_default]
+      approved_host_policy: injected_exact_allowlist_no_redirects
+      network_status: foreground_adapter_only
+      schema_policy: reject_unknown_epoch_and_undeclared_revision
+      contract: docs/api/catalog-v1.md
+
+  - id: catalog_revocations
+    kind: catalog_revocations
+    owner_role: security_responder
+    implementation: implemented
+    version:
+      current: { epoch: 1, revision: 0 }
+      readable_epochs:
+        - { epoch: 1, minimum_revision: 0, maximum_revision: 0 }
+      additive_compatibility: declared_ranges_only
+    product_compatibility:
+      minimum_reader: 0.1.0
+      minimum_writer: 0.1.0
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALICatalog]
+      writers: [WALICatalog]
+    fixture_gate:
+      status: passing
+      paths:
+        - Fixtures/Catalog/revocations-v1.json
+    details:
+      trust_model: detached_ed25519_from_trusted_key
+      digest_algorithm: SHA-256
+      maximum_body_bytes: 1048576
+      maximum_entries: 4096
+      ordering: release_id_then_artifact_sha256
+      allowed_reasons: [critical_security, corrupt_artifact, signing_compromise]
+      scope: catalog_origin_only
+      contract: docs/api/catalog-v1.md
+
+  - id: marketplace_server_schema
+    kind: server_schema
+    owner_role: catalog_maintainer
+    implementation: unimplemented
     version:
       current: null
       readable_epochs: []
@@ -410,13 +482,222 @@ surfaces:
       readers: []
       writers: []
     fixture_gate:
-      status: deferred
+      status: planned
       paths: []
     details:
-      trust_model: signed_manifest_required
-      signature_required: true
-      network_status: deferred
-      schema_policy: bounded_versioned
+      target: { epoch: 1, revision: 0 }
+      authoritative_schema: wali
+      exposed_schema: public
+      exposed_table_policy: none
+      migration_policy: ordered_local_then_staging_then_production
+      unknown_newer_policy: reject_before_write
+      contract: docs/adr/0014-marketplace-schema-and-rls.md
+
+  - id: catalog_public_api
+    kind: public_api
+    owner_role: catalog_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALICatalogRuntime]
+      writers: []
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      target_version: catalog.v1
+      contract: docs/api/catalog-v1.md
+      maximum_request_bytes: 65536
+      maximum_response_bytes: 1048576
+      maximum_page_items: 50
+      exposed_table_policy: none
+
+  - id: creator_public_api
+    kind: public_api
+    owner_role: catalog_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALICatalogRuntime]
+      writers: []
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      target_version: creator.v1
+      contract: docs/api/creator-v1.md
+      maximum_request_bytes: 65536
+      maximum_response_bytes: 1048576
+      maximum_page_items: 50
+      exposed_table_policy: none
+
+  - id: moderation_public_api
+    kind: public_api
+    owner_role: security_responder
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALICatalogRuntime]
+      writers: []
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      target_version: moderation.v1
+      contract: docs/api/moderation-v1.md
+      maximum_request_bytes: 65536
+      maximum_response_bytes: 1048576
+      maximum_page_items: 50
+      exposed_table_policy: none
+
+  - id: catalog_signing_keys
+    kind: signing_key_registry
+    owner_role: security_responder
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALICatalog]
+      writers: []
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      target: { epoch: 1, revision: 0 }
+      algorithm: Ed25519
+      private_key_location: signing_edge_secret_only
+      trust_anchor: shipped_public_key
+      transition_policy: signed_by_existing_trusted_key
+      history_policy: append_only
+
+  - id: classifier_model_registry
+    kind: model_registry
+    owner_role: media_worker_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: []
+      writers: []
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      target: { epoch: 1, revision: 0 }
+      default_model_id: google-siglip-base-patch16-224
+      default_model_revision: 1
+      embedding_dimension: 768
+      license: Apache-2.0
+      weight_digest_required: true
+      taxonomy_revision_required: true
+      fallback: noop_classifier
+
+  - id: marketplace_storage_paths
+    kind: storage_paths
+    owner_role: storage_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: []
+      writers: []
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      target: { epoch: 1, revision: 0 }
+      buckets: [uploads-private, moderation-private, catalog-public, exports-private]
+      public_path_template: sha256/<hex-0-1>/<hex-2-3>/<digest>/<role>.<extension>
+      creator_filename_in_path: false
+      overwrite: false
+      upsert: false
+      object_backup_required: true
+
+  - id: lock_screen_helper_wire
+    kind: wire_channel
+    owner_role: security_responder
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALIAgent, WALILockScreenHelper]
+      writers: [WALIAgent, WALILockScreenHelper]
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      direction:
+        - from: WALIAgent
+          to: WALILockScreenHelper
+          message_flow: fixed_lock_screen_intentions
+        - from: WALILockScreenHelper
+          to: WALIAgent
+          message_flow: bounded_status_and_results
+      message_catalog:
+        status: planned
+        path: null
+        messages: [status, activateVerifiedRelease, deactivate, restore]
+        required_envelope_fields:
+          - protocol_version
+          - message_type
+          - message_version
+          - request_id
+          - idempotency_key
+          - expected_revision
+          - payload_length
+      rejected_payload_classes: [url, path, bookmark, media_bytes, command, script, unknown_operation]
 
   - id: lock_screen_manifest
     kind: lock_screen_manifest
@@ -433,15 +714,15 @@ surfaces:
       rollback_readers: []
       rollback_fixture_paths: []
     module_access:
-      readers: [WALIAgent]
-      writers: [WALIAgent]
+      readers: [WALILockScreenHelper]
+      writers: [WALILockScreenHelper]
     fixture_gate:
       status: passing
       paths:
         - Fixtures/LockScreen/modern-aerial-v1.json
     details:
       support_scope: session_lock_screen_only
-      implementation_gate: accepted_adr_0010
+      implementation_gate: accepted_adrs_0010_and_0013
       fixture_policy: redacted_version_gated_store
       verified_system_builds: [25F80, 25G83]
       manifest_version: 1

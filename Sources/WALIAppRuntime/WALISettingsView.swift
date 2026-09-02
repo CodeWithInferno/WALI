@@ -52,19 +52,27 @@ public struct WALISettingsView: View {
                         "Show the main display wallpaper after locking",
                         isOn: $draft.lockScreenContinuityEnabled
                     )
-                    Text("Uses one global, independent playback timeline for this signed-in session. It is unavailable at FileVault startup. Turning it off restores the prior wallpaper choices when they remain safe to restore.")
+                    Text("Uses one global, independent playback timeline for the current signed-in session. It cannot appear at FileVault startup or before a user signs in. Turning it off restores prior wallpaper choices when they remain safe to restore.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("Allow WALI Agent once in Full Disk Access", systemImage: "lock.shield")
+                        Label(
+                            "Permission is separate from wallpaper playback",
+                            systemImage: "lock.shield"
+                        )
+                        .font(.caption.weight(.medium))
+                        Text("Only WALI Lock Screen Helper needs Full Disk Access. WALI, WALI Agent, previews, downloads, and desktop playback do not receive it.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Use a signed Development or Release build. Ad-hoc Debug builds cannot authenticate the helper and must not be granted Full Disk Access.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack {
-                            Button("Show Agent in Finder") { revealAgent() }
+                            Button("Show Helper in Finder") { revealLockScreenHelper() }
                                 .buttonStyle(.link)
                             Spacer()
-                            Link("Open Full Disk Access…", destination: fullDiskAccessSettingsURL)
+                            Link("Review Helper Permission…", destination: fullDiskAccessSettingsURL)
                         }
                         .font(.caption)
                     }
@@ -126,9 +134,11 @@ public struct WALISettingsView: View {
             ?? URL(fileURLWithPath: "/System/Applications/System Settings.app")
     }
 
-    private func revealAgent() {
-        let agentURL = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Library/LoginItems/WALIAgent.app", isDirectory: true)
-        NSWorkspace.shared.activateFileViewerSelecting([agentURL])
+    private func revealLockScreenHelper() {
+        let helperURL = Bundle.main.bundleURL.appendingPathComponent(
+            "Contents/Library/LoginItems/WALILockScreenHelper.app",
+            isDirectory: true
+        )
+        NSWorkspace.shared.activateFileViewerSelecting([helperURL])
     }
 }

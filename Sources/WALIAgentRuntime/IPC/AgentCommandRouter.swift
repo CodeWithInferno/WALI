@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import WALICatalog
 import WALIEngine
 import WALIModel
 import WALIWire
@@ -18,6 +19,20 @@ public typealias EngineEffectHandler = @Sendable (
     EnginePipelineStep,
     EngineSnapshot
 ) async throws -> EngineEffectOutcome
+
+public typealias CatalogInstallHandler = @Sendable (
+    AgentCatalogInstallRequest,
+    UUID,
+    EngineRevision
+) async throws -> EngineLibraryItem
+
+public typealias CatalogRevocationHandler = @Sendable (
+    AgentCatalogRevocationUpdate
+) async throws -> Void
+
+public typealias CatalogTrustTransitionHandler = @Sendable (
+    AgentCatalogTrustTransitionUpdate
+) async throws -> Void
 
 private actor TransactionGate {
     private var isLocked = false
@@ -46,15 +61,27 @@ private actor TransactionGate {
 public actor AgentCommandRouter {
     private let engine: RuntimeEngine
     private let effectHandler: EngineEffectHandler
+    private let catalogInstallHandler: CatalogInstallHandler?
+    private let catalogRevocationHandler: CatalogRevocationHandler?
+    private let catalogTrustTransitionHandler: CatalogTrustTransitionHandler?
     private let transactionGate = TransactionGate()
+    private var completedCatalogRequests: [UUID: AgentCatalogInstallRequest] = [:]
+    private var completedCatalogRequestOrder: [UUID] = []
+    private let maximumRememberedCatalogRequests = 256
     private var runtimeNotice: AgentRuntimeNotice?
 
     public init(
         restoring snapshot: EngineSnapshot = .init(),
+        catalogInstallHandler: CatalogInstallHandler? = nil,
+        catalogRevocationHandler: CatalogRevocationHandler? = nil,
+        catalogTrustTransitionHandler: CatalogTrustTransitionHandler? = nil,
         effectHandler: @escaping EngineEffectHandler
     ) {
         engine = RuntimeEngine(restoring: snapshot)
         self.effectHandler = effectHandler
+        self.catalogInstallHandler = catalogInstallHandler
+        self.catalogRevocationHandler = catalogRevocationHandler
+        self.catalogTrustTransitionHandler = catalogTrustTransitionHandler
     }
 
     public func handle(_ request: AgentRequest) async -> AgentResponse {
@@ -72,6 +99,78 @@ public actor AgentCommandRouter {
                     request,
                     action: .beginImports(inputs)
                 )
+
+            case let .installCatalogRelease(install):
+                guard let catalogInstallHandler else {
+                    throw CatalogInstallError.invalidQuarantineReference
+                }
+                await transactionGate.acquire()
+                do {
+                    if let prior = await engine.completedTransaction(
+                        for: request.idempotencyKey
+                    ) {
+                        guard completedCatalogRequests[request.idempotencyKey] == install else {
+                            throw CatalogTrustStoreError.requestMismatch
+                        }
+                        await transactionGate.release()
+                        return response(for: request, snapshot: prior.snapshot)
+                    }
+                    let snapshot = await engine.snapshot()
+                    if let expected = request.expectedRevision,
+                       expected.rawValue != snapshot.revision.rawValue {
+                        throw EngineError.staleRevision(
+                            expected: expected.rawValue,
+                            actual: snapshot.revision.rawValue
+                        )
+                    }
+                    let item = try await catalogInstallHandler(
+                        install,
+                        request.idempotencyKey,
+                        snapshot.revision
+                    )
+                    let transaction = try await engine.perform(
+                        .installCatalogItem(item),
+                        idempotencyKey: request.idempotencyKey,
+                        expectedRevision: request.expectedRevision
+                    )
+                    try await execute(transaction)
+                    rememberCatalogRequest(install, for: request.idempotencyKey)
+                    await transactionGate.release()
+                    return response(for: request, snapshot: transaction.snapshot)
+                } catch {
+                    await transactionGate.release()
+                    throw error
+                }
+
+            case let .updateCatalogRevocations(update):
+                guard let catalogRevocationHandler else {
+                    throw CatalogTrustStoreError.invalidConfiguration
+                }
+                await transactionGate.acquire()
+                do {
+                    try await catalogRevocationHandler(update)
+                    let snapshot = await engine.snapshot()
+                    await transactionGate.release()
+                    return response(for: request, snapshot: snapshot)
+                } catch {
+                    await transactionGate.release()
+                    throw error
+                }
+
+            case let .updateCatalogTrustTransition(update):
+                guard let catalogTrustTransitionHandler else {
+                    throw CatalogTrustStoreError.invalidConfiguration
+                }
+                await transactionGate.acquire()
+                do {
+                    try await catalogTrustTransitionHandler(update)
+                    let snapshot = await engine.snapshot()
+                    await transactionGate.release()
+                    return response(for: request, snapshot: snapshot)
+                } catch {
+                    await transactionGate.release()
+                    throw error
+                }
 
             case let .cancelImport(jobID):
                 return try await mutate(request, action: .cancelImport(jobID))
@@ -201,6 +300,18 @@ public actor AgentCommandRouter {
         runtimeNotice = notice
     }
 
+    private func rememberCatalogRequest(
+        _ request: AgentCatalogInstallRequest,
+        for idempotencyKey: UUID
+    ) {
+        guard completedCatalogRequests[idempotencyKey] == nil else { return }
+        completedCatalogRequests[idempotencyKey] = request
+        completedCatalogRequestOrder.append(idempotencyKey)
+        if completedCatalogRequestOrder.count > maximumRememberedCatalogRequests {
+            completedCatalogRequests.removeValue(forKey: completedCatalogRequestOrder.removeFirst())
+        }
+    }
+
     private func mutate(_ request: AgentRequest, action: EngineAction) async throws -> AgentResponse {
         await transactionGate.acquire()
         do {
@@ -275,6 +386,21 @@ public actor AgentCommandRouter {
                 code: .incompatibleProtocol,
                 message: "The WALI app and agent versions do not match.",
                 recoverySuggestion: "Quit WALI completely, then reopen it."
+            )
+        case CatalogValidationError.revokedRelease:
+            AgentFailure(
+                code: .catalogReleaseRevoked,
+                message: "This catalog release was revoked for a critical security reason."
+            )
+        case is CatalogValidationError:
+            AgentFailure(
+                code: .catalogTrustFailed,
+                message: "The signed catalog release could not be verified."
+            )
+        case is CatalogTrustStoreError:
+            AgentFailure(
+                code: .catalogTrustFailed,
+                message: "The signed catalog release could not be verified."
             )
         default:
             AgentFailure(code: .internalFailure, message: error.localizedDescription)

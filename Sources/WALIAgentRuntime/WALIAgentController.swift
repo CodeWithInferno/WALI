@@ -26,9 +26,9 @@ public final class WALIAgentController: WALIUIActionHandling {
     private let diagnostics = ProcessDiagnostics()
     private let stateStore: EngineSnapshotStore?
     private let runtimeStore: RuntimeStore?
-    private let lockScreenContinuity: LockScreenContinuityCoordinator?
-    private let lockScreenStoreMonitor: LockScreenStoreMonitor?
-    private let transcoder = TranscoderConnection()
+    private let lockScreenHelper: LockScreenHelperConnection?
+    private let transcoder: TranscoderConnection
+    private let catalogInstallCoordinator: CatalogInstallCoordinator?
     private var router: AgentCommandRouter?
     private var serviceHost: AgentServiceHost?
     private var startupTask: Task<Void, Never>?
@@ -40,22 +40,38 @@ public final class WALIAgentController: WALIUIActionHandling {
     private var lockScreenPlaybackRestartTask: Task<Void, Never>?
 
     public init() {
+        let transcoder = TranscoderConnection()
+        self.transcoder = transcoder
         let libraryPaths = try? LibraryPaths.applicationSupport()
         stateStore = try? EngineSnapshotStore()
         runtimeStore = libraryPaths.map(RuntimeStore.init(paths:))
-        lockScreenContinuity = libraryPaths.map {
-            LockScreenContinuityCoordinator.live(
-                waliMetadataDirectory: $0.metadata,
-                ownedLibraryRoot: $0.root
+        if let runtimeStore,
+           let libraryPaths,
+           let trustStore = try? CatalogTrustStore.configured(
+               fileURL: libraryPaths.metadata.appendingPathComponent(
+                   "catalog-trust-transition.json",
+                   isDirectory: false
+               )
+           ),
+           let quarantineRoot = try? CatalogInstallCoordinator.defaultQuarantineRoot() {
+            let revocations = CatalogRevocationStore(
+                fileURL: libraryPaths.metadata.appendingPathComponent(
+                    "catalog-revocations.json",
+                    isDirectory: false
+                ),
+                trustStore: trustStore
             )
+            catalogInstallCoordinator = CatalogInstallCoordinator(
+                runtimeStore: runtimeStore,
+                trustStore: trustStore,
+                revocationStore: revocations,
+                quarantineRoot: quarantineRoot,
+                transcode: { request in try await transcoder.transcode(request) }
+            )
+        } else {
+            catalogInstallCoordinator = nil
         }
-        lockScreenStoreMonitor = libraryPaths.map {
-            let paths = LockScreenStorePaths.live(waliMetadataDirectory: $0.metadata)
-            return LockScreenStoreMonitor(directories: [
-                paths.manifestURL.deletingLastPathComponent(),
-                paths.indexURL.deletingLastPathComponent(),
-            ])
-        }
+        lockScreenHelper = libraryPaths.map { LockScreenHelperConnection.live(libraryPaths: $0) }
     }
 
     public func start() {
@@ -69,10 +85,6 @@ public final class WALIAgentController: WALIUIActionHandling {
         renderer.onSessionLock = { [weak self] in
             self?.scheduleLockScreenPlaybackRestart()
         }
-        lockScreenStoreMonitor?.onChange = { [weak self] in
-            self?.scheduleLockScreenReconciliation()
-        }
-        lockScreenStoreMonitor?.start()
         renderer.start()
         startupTask = Task { @MainActor [weak self] in
             await self?.bootstrap()
@@ -86,7 +98,6 @@ public final class WALIAgentController: WALIUIActionHandling {
         lockScreenTask = nil
         lockScreenPlaybackRestartTask?.cancel()
         lockScreenPlaybackRestartTask = nil
-        lockScreenStoreMonitor?.stop()
         for task in purgeTasks.values { task.cancel() }
         purgeTasks.removeAll()
         for task in importTasks.values { task.cancel() }
@@ -128,7 +139,33 @@ public final class WALIAgentController: WALIUIActionHandling {
             }
         }
 
-        let router = AgentCommandRouter(restoring: restored) { [weak self] step, snapshot in
+        let router = AgentCommandRouter(
+            restoring: restored,
+            catalogInstallHandler: { [weak self] install, idempotencyKey, revision in
+                guard let coordinator = self?.catalogInstallCoordinator else {
+                    throw CatalogTrustStoreError.invalidConfiguration
+                }
+                let item = try await coordinator.install(
+                    install,
+                    idempotencyKey: idempotencyKey,
+                    acceptedRevision: revision
+                )
+                await self?.updateStorageUsage()
+                return item
+            },
+            catalogRevocationHandler: { [weak self] update in
+                guard let coordinator = self?.catalogInstallCoordinator else {
+                    throw CatalogTrustStoreError.invalidConfiguration
+                }
+                try await coordinator.updateRevocations(update)
+            },
+            catalogTrustTransitionHandler: { [weak self] update in
+                guard let coordinator = self?.catalogInstallCoordinator else {
+                    throw CatalogTrustStoreError.invalidConfiguration
+                }
+                try await coordinator.updateTrustTransition(update)
+            }
+        ) { [weak self] step, snapshot in
             guard let self else { return .unchanged }
             switch step {
             case let .preflight(action):
@@ -253,13 +290,11 @@ public final class WALIAgentController: WALIUIActionHandling {
         guard case let .setPreferences(proposed) = action,
               !snapshot.preferences.lockScreenContinuityEnabled,
               proposed.lockScreenContinuityEnabled else { return }
-        guard let lockScreenContinuity else {
+        guard let lockScreenHelper else {
             throw WALIAgentRuntimeError.storageUnavailable
         }
-        try await lockScreenContinuity.validate(
-            enabled: true,
-            assignments: try await lockScreenAssignments(from: snapshot)
-        )
+        _ = try await lockScreenHelper.status()
+        _ = try await lockScreenHelperReleaseIntent(from: snapshot)
     }
 
     private func execute(
@@ -798,16 +833,42 @@ public final class WALIAgentController: WALIUIActionHandling {
         _ snapshot: EngineSnapshot,
         restartPlayback: Bool = false
     ) async throws {
-        guard let lockScreenContinuity else { return }
-        let assignments: [LockScreenWallpaperAssignment] = if snapshot.preferences.lockScreenContinuityEnabled {
-            try await lockScreenAssignments(from: snapshot)
+        guard let lockScreenHelper else { return }
+        if snapshot.preferences.lockScreenContinuityEnabled {
+            try await lockScreenHelper.activate(
+                try await lockScreenHelperReleaseIntent(from: snapshot),
+                restartPlayback: restartPlayback
+            )
         } else {
-            []
+            try await lockScreenHelper.deactivate()
         }
-        _ = try await lockScreenContinuity.reconcile(
-            enabled: snapshot.preferences.lockScreenContinuityEnabled,
-            assignments: assignments,
-            restartPlayback: restartPlayback
+    }
+
+    private func lockScreenHelperReleaseIntent(
+        from snapshot: EngineSnapshot
+    ) async throws -> LockScreenHelperReleaseIntent {
+        guard let runtimeStore else { throw WALIAgentRuntimeError.storageUnavailable }
+        let durable = try await runtimeStore.snapshot()
+        guard let display = snapshot.displays.first(where: { $0.isOnline && $0.isMain }),
+              let itemID = display.assignedItemID,
+              let item = snapshot.items.first(where: { $0.id == itemID }),
+              let record = durable.library.first(where: {
+                  UUID(uuidString: $0.item.id.rawValue) == itemID
+              }),
+              let releaseID = UUID(uuidString: record.release.id.rawValue),
+              let master = record.artifacts.first(where: { $0.role == .masterVideo }),
+              let posterURL = record.posterURL,
+              record.release.artifacts.first(where: {
+                  $0.contentID == master.digest
+              })?.characteristics.bitDepth == 10 else {
+            throw LockScreenHelperConnectionError.sourceRejected
+        }
+        return LockScreenHelperReleaseIntent(
+            releaseID: releaseID,
+            assetID: itemID,
+            title: item.name,
+            masterSHA256: master.digest.value,
+            posterURL: posterURL
         )
     }
 

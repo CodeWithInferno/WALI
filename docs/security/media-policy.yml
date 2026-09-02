@@ -1,0 +1,116 @@
+schema_version: 1
+policy_id: wali-media-v1
+status: accepted
+owner_role: media_worker_maintainer
+accepted_by: project_owner
+approval_reference: project-owner AFK marketplace implementation directive 2026-09-01
+
+intake:
+  maximum_raw_bytes: 1073741824
+  maximum_duration_ms: 600000
+  maximum_width: 7680
+  maximum_height: 4320
+  maximum_frame_rate_numerator: 120
+  maximum_frame_rate_denominator: 1
+  maximum_tracks: 2
+  required_video_tracks: 1
+  allowed_containers:
+    - id: mp4
+      signatures: [isom, iso2, mp41, mp42, avc1, M4V]
+      media_types: [video/mp4]
+    - id: mov
+      signatures: [qt]
+      media_types: [video/quicktime]
+  allowed_video_codecs: [h264, hevc]
+  rejected_stream_types: [audio, subtitle, attachment, data]
+  rejected_features:
+    - encrypted_tracks
+    - external_references
+    - embedded_fonts
+    - executable_metadata
+    - archive_members
+    - playlists
+    - pathological_edit_lists
+    - unbounded_atoms
+
+processing:
+  maximum_creator_concurrent_attempts: 2
+  maximum_attempt_wall_seconds: 1800
+  maximum_attempt_memory_bytes: 8589934592
+  maximum_attempt_processes: 64
+  maximum_scratch_bytes: 4294967296
+  maximum_total_output_bytes: 2147483648
+  input_mount: read_only
+  root_filesystem: read_only
+  network: none
+  credentials: none
+  linux_capabilities: none
+  no_new_privileges: true
+  devices: none
+  host_mounts: none
+  runtime_socket: none
+  fresh_sandbox_per_attempt: true
+  independent_verifier_sandbox: true
+
+canonical_output:
+  video:
+    container: mp4
+    codec: h264
+    pixel_formats: [yuv420p, yuv420p10le]
+    maximum_width: 7680
+    maximum_height: 4320
+    maximum_duration_ms: 600000
+    maximum_frame_rate_numerator: 120
+    maximum_frame_rate_denominator: 1
+    exact_video_tracks: 1
+    exact_audio_tracks: 0
+    metadata_policy: allowlist_only
+    external_references: false
+    encrypted: false
+  required_roles: [thumbnail, poster, preview, video_default]
+  optional_roles: [video_1080p, video_1440p, video_2160p]
+  maximum_roles: 7
+  raster:
+    allowed_media_types: [image/jpeg, image/png]
+    animated: false
+    maximum_width: 7680
+    maximum_height: 4320
+  forbidden_media_types:
+    - image/svg+xml
+    - application/pdf
+    - text/html
+    - application/zip
+    - application/x-tar
+
+classification:
+  optional: true
+  failure_blocks_media_processing: false
+  deterministic_frame_count: 7
+  frame_color_space: srgb
+  maximum_frame_width: 384
+  maximum_frame_height: 384
+  default_model_id: google-siglip-base-patch16-224
+  default_model_revision: 1
+  model_license: Apache-2.0
+  network: none
+  model_output_authority: suggestion_only
+  no_op_fallback: true
+
+publication:
+  digest_algorithm: SHA-256
+  object_path_template: sha256/<hex-0-1>/<hex-2-3>/<digest>/<role>.<extension>
+  immutable: true
+  overwrite: false
+  upsert: false
+  requires_current_generation: true
+  requires_independent_verification: true
+  requires_moderation_approval: true
+  requires_signed_manifest: true
+
+policy_copy:
+  canonical_serialization: sorted-key-json
+  digest_algorithm: SHA-256
+  generated_consumers:
+    - supabase/functions/_shared/media-policy.generated.ts
+    - Services/WALIMediaWorker/internal/policy/generated.go
+  mismatch_policy: fail_build_and_startup

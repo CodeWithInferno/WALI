@@ -12,7 +12,8 @@ require "set"
 class ArchitectureChecker
   REQUIRED_MODULE_IDS = %w[
     WALICore WALIModel WALIWire WALIEngine WALIUI WALIAppRuntime
-    WALIAgentRuntime WALITranscoderRuntime WALI WALIAgent WALITranscoder
+    WALICatalog WALICatalogRuntime WALIAgentRuntime WALITranscoderRuntime
+    WALI WALIAgent WALITranscoder WALILockScreenHelperRuntime WALILockScreenHelper
   ].freeze
 
   REQUIRED_SURFACES = {
@@ -29,6 +30,15 @@ class ArchitectureChecker
     "preferences" => "preferences",
     "url_schemes" => "url_scheme",
     "catalog_manifest" => "catalog_manifest",
+    "catalog_revocations" => "catalog_revocations",
+    "marketplace_server_schema" => "server_schema",
+    "catalog_public_api" => "public_api",
+    "creator_public_api" => "public_api",
+    "moderation_public_api" => "public_api",
+    "catalog_signing_keys" => "signing_key_registry",
+    "classifier_model_registry" => "model_registry",
+    "marketplace_storage_paths" => "storage_paths",
+    "lock_screen_helper_wire" => "wire_channel",
     "lock_screen_manifest" => "lock_screen_manifest",
     "diagnostic_export" => "diagnostic_export"
   }.freeze
@@ -97,25 +107,36 @@ class ArchitectureChecker
   }.freeze
   REQUIRED_EMBED_ONLY_EDGES = Set.new([
     ["WALI", "WALIAgent"],
-    ["WALIAgent", "WALITranscoder"]
+    ["WALIAgent", "WALITranscoder"],
+    ["WALI", "WALILockScreenHelper"]
   ]).freeze
   REQUIRED_BUILD_EDGES = Set.new([
     ["WALI", "WALIAppRuntime"],
     ["WALIAppRuntime", "WALIUI"],
+    ["WALIAppRuntime", "WALICatalogRuntime"],
     ["WALIAgent", "WALIAgentRuntime"],
     ["WALIAgentRuntime", "WALIUI"],
-    ["WALITranscoder", "WALITranscoderRuntime"]
+    ["WALITranscoder", "WALITranscoderRuntime"],
+    ["WALILockScreenHelper", "WALILockScreenHelperRuntime"]
   ]).freeze
+  TARGET_BUILD_EDGES = REQUIRED_BUILD_EDGES
   REQUIRED_PACKAGE_EDGES = Set.new([
     ["WALIAppRuntime", "WALIModel"],
     ["WALIAppRuntime", "WALIWire"],
     ["WALIAgentRuntime", "WALIModel"],
     ["WALIAgentRuntime", "WALIWire"],
     ["WALIAgentRuntime", "WALIEngine"],
+    ["WALIAgentRuntime", "WALICatalog"],
     ["WALITranscoderRuntime", "WALIModel"],
     ["WALITranscoderRuntime", "WALIWire"],
-    ["WALIUI", "WALIModel"]
+    ["WALIUI", "WALIModel"],
+    ["WALICatalogRuntime", "WALICatalog"],
+    ["WALILockScreenHelperRuntime", "WALIWire"]
   ]).freeze
+  TARGET_PACKAGE_EDGES = (REQUIRED_PACKAGE_EDGES + Set.new([
+    ["WALICatalogRuntime", "WALIModel"]
+  ])).freeze
+  TARGET_EMBED_ONLY_EDGES = REQUIRED_EMBED_ONLY_EDGES
   REQUIRED_PACKAGE_PRODUCTS = {
     "WALIModel" => {
       "kind" => "library", "linkage" => "static", "targets" => ["WALIModel"]
@@ -125,6 +146,9 @@ class ArchitectureChecker
     },
     "WALIEngine" => {
       "kind" => "library", "linkage" => "static", "targets" => ["WALIEngine"]
+    },
+    "WALICatalog" => {
+      "kind" => "library", "linkage" => "static", "targets" => ["WALICatalog"]
     }
   }.freeze
   REQUIRED_PACKAGE_TARGETS = {
@@ -150,6 +174,20 @@ class ArchitectureChecker
     "WALIEngineTests" => {
       "kind" => "test", "path" => "Tests/WALIEngineTests",
       "dependencies" => ["WALIEngine"]
+    },
+    "WALICatalog" => {
+      "kind" => "regular", "path" => "Sources/WALICatalog",
+      "dependencies" => ["WALIModel"]
+    },
+    "WALICatalogTests" => {
+      "kind" => "test", "path" => "Tests/WALICatalogTests",
+      "dependencies" => ["WALICatalog"]
+    }
+  }.freeze
+  APPROVED_EXTERNAL_PACKAGES = {
+    "Supabase" => {
+      "url" => "https://github.com/supabase/supabase-swift.git",
+      "exactVersion" => "2.54.1"
     }
   }.freeze
   PRESENCE_VALUES = %w[current planned absent].freeze
@@ -640,7 +678,7 @@ class ArchitectureChecker
     unless @modules.dig("WALICore", "presence") == "absent"
       error("WALICore imported module must be absent after the package split")
     end
-    %w[WALIModel WALIWire WALIEngine].each do |module_id|
+    %w[WALIModel WALIWire WALIEngine WALICatalog WALICatalogRuntime].each do |module_id|
       unless @modules.dig(module_id, "presence") == "current"
         error("#{module_id} must be current after the package split")
       end
@@ -660,19 +698,26 @@ class ArchitectureChecker
       products = @swift_packages.dig("WALICore", phase, "products")
       targets = @swift_packages.dig("WALICore", phase, "targets")
       unless products == REQUIRED_PACKAGE_PRODUCTS
-        error("#{phase} WALICore package products must be exactly WALIModel, WALIWire, and WALIEngine")
+        error("#{phase} WALICore package products do not match the governed product graph")
       end
       unless targets == REQUIRED_PACKAGE_TARGETS
-        error("#{phase} WALICore package targets must match the six-target split graph")
+        error("#{phase} WALICore package targets do not match the governed target graph")
       end
     end
 
     {
-      "build" => REQUIRED_BUILD_EDGES,
-      "package" => REQUIRED_PACKAGE_EDGES,
-      "embed_only" => REQUIRED_EMBED_ONLY_EDGES
-    }.each do |kind, expected|
-      %w[current target].each do |phase|
+      "current" => {
+        "build" => REQUIRED_BUILD_EDGES,
+        "package" => REQUIRED_PACKAGE_EDGES,
+        "embed_only" => REQUIRED_EMBED_ONLY_EDGES
+      },
+      "target" => {
+        "build" => TARGET_BUILD_EDGES,
+        "package" => TARGET_PACKAGE_EDGES,
+        "embed_only" => TARGET_EMBED_ONLY_EDGES
+      }
+    }.each do |phase, expected_by_kind|
+      expected_by_kind.each do |kind, expected|
         actual = Array(document.dig("edges", phase, kind)).each_with_object(Set.new) do |edge, result|
           result << [edge["from"], edge["to"]] if edge.is_a?(Hash)
         end
@@ -1165,6 +1210,21 @@ class ArchitectureChecker
         error("project.yml #{configuration} config file does not exist")
       end
     end
+
+    marketplace_flag = @project.dig(
+      "targets", "WALI", "info", "properties", "WALIMarketplaceEnabled"
+    )
+    return if marketplace_flag.nil?
+
+    unless marketplace_flag == "$(WALI_MARKETPLACE_ENABLED)"
+      error("WALI WALIMarketplaceEnabled must reference $(WALI_MARKETPLACE_ENABLED)")
+    end
+    release_value = resolved_target_build_setting(
+      "WALI", "Release", "WALI_MARKETPLACE_ENABLED"
+    )
+    if release_value != "NO" && ENV["WALI_ALLOW_RELEASE_MARKETPLACE"] != "YES"
+      error("Release marketplace must default to NO")
+    end
   end
 
   def configuration_file_settings(configuration)
@@ -1414,16 +1474,24 @@ class ArchitectureChecker
       error("project.yml packages must be a mapping")
       return
     end
-    (project_packages.keys - @swift_packages.keys).sort.each do |reference|
+    internal_references = @swift_packages.keys
+    external_references = APPROVED_EXTERNAL_PACKAGES.keys
+    (project_packages.keys - internal_references - external_references).sort.each do |reference|
       error("project.yml contains undeclared XcodeGen package reference #{reference}")
     end
-    (@swift_packages.keys - project_packages.keys).sort.each do |reference|
+    (internal_references - project_packages.keys).sort.each do |reference|
       error("project.yml is missing XcodeGen package reference #{reference}")
     end
-    (@swift_packages.keys & project_packages.keys).each do |reference|
+    (internal_references & project_packages.keys).each do |reference|
       declared_path = @swift_packages.dig(reference, "xcodegen_reference", "path")
       actual_path = project_packages.dig(reference, "path")
       error("#{reference} XcodeGen package path does not match project.yml") unless declared_path == actual_path
+    end
+    APPROVED_EXTERNAL_PACKAGES.each do |reference, expected|
+      actual = project_packages[reference]
+      unless actual == expected
+        error("#{reference} external package must use its reviewed URL and exact version")
+      end
     end
   end
 
@@ -1471,6 +1539,8 @@ class ArchitectureChecker
           product = dependency["product"] || reference
           destination = package_product_to_module[[reference, product]]
           unless destination
+            next if APPROVED_EXTERNAL_PACKAGES.key?(reference)
+
             error("#{module_id} project.yml dependency references unregistered package #{dependency['package']}")
             next
           end
@@ -1696,6 +1766,12 @@ class ArchitectureChecker
       error("surface #{id} has rollback fixture paths without a rollback promise")
     end
     rollback_paths.each { |path| validate_existing_fixture_path(id, path) }
+  end
+
+  def validate_target_epoch(value, id)
+    unless value == {"epoch" => 1, "revision" => 0}
+      error("#{id} target must be epoch 1 revision 0")
+    end
   end
 
   def validate_readable_epochs(id, ranges, current)
@@ -1979,6 +2055,25 @@ class ArchitectureChecker
       (golden + invalid).each { |path| validate_existing_fixture_path(id, path) }
     when "app_agent_wire", "agent_worker_wire"
       validate_wire_details(id, implementation, details)
+    when "lock_screen_helper_wire"
+      require_exact_fields(
+        details,
+        %w[direction message_catalog rejected_payload_classes],
+        "#{id} details"
+      )
+      validate_wire_details(
+        id,
+        implementation,
+        {
+          "direction" => details["direction"],
+          "message_catalog" => details["message_catalog"]
+        }
+      )
+      validate_exact_string_set(
+        details["rejected_payload_classes"],
+        %w[url path bookmark media_bytes command script unknown_operation],
+        "#{id} rejected_payload_classes"
+      )
     when "bundle_identifiers"
       require_exact_fields(details, %w[configurations], "#{id} details")
       validate_bundle_configurations(id, details["configurations"])
@@ -2023,13 +2118,160 @@ class ArchitectureChecker
     when "catalog_manifest"
       require_exact_fields(
         details,
-        %w[trust_model signature_required network_status schema_policy],
+        %w[
+          trust_model signature_required signature_algorithm digest_algorithm
+          canonicalization maximum_body_bytes maximum_nesting minimum_artifacts
+          maximum_artifacts required_artifact_roles approved_host_policy
+          network_status schema_policy contract
+        ],
         "#{id} details"
       )
       error("catalog_manifest trust model is invalid") unless details["trust_model"] == "signed_manifest_required"
       error("catalog_manifest must require signatures") unless details["signature_required"] == true
-      error("catalog_manifest network_status must be deferred") unless details["network_status"] == "deferred"
-      error("catalog_manifest schema_policy is invalid") unless details["schema_policy"] == "bounded_versioned"
+      error("catalog_manifest signature algorithm is invalid") unless details["signature_algorithm"] == "Ed25519"
+      error("catalog_manifest digest algorithm is invalid") unless details["digest_algorithm"] == "SHA-256"
+      unless details["canonicalization"] == "schema_ordered_compact_utf8"
+        error("catalog_manifest canonicalization is invalid")
+      end
+      error("catalog_manifest body bound is invalid") unless details["maximum_body_bytes"] == 65_536
+      error("catalog_manifest nesting bound is invalid") unless details["maximum_nesting"] == 4
+      error("catalog_manifest minimum artifact bound is invalid") unless details["minimum_artifacts"] == 4
+      error("catalog_manifest maximum artifact bound is invalid") unless details["maximum_artifacts"] == 7
+      validate_exact_string_set(
+        details["required_artifact_roles"],
+        %w[thumbnail poster preview video_default],
+        "catalog_manifest required artifact roles"
+      )
+      unless details["approved_host_policy"] == "injected_exact_allowlist_no_redirects"
+        error("catalog_manifest approved host policy is invalid")
+      end
+      unless details["network_status"] == "foreground_adapter_only"
+        error("catalog_manifest network status is invalid")
+      end
+      unless details["schema_policy"] == "reject_unknown_epoch_and_undeclared_revision"
+        error("catalog_manifest schema policy is invalid")
+      end
+      unless details["contract"] == "docs/api/catalog-v1.md"
+        error("catalog_manifest contract path is invalid")
+      end
+    when "catalog_revocations"
+      require_exact_fields(
+        details,
+        %w[
+          trust_model digest_algorithm maximum_body_bytes maximum_entries
+          ordering allowed_reasons scope contract
+        ],
+        "#{id} details"
+      )
+      error("catalog_revocations trust model is invalid") unless details["trust_model"] == "detached_ed25519_from_trusted_key"
+      error("catalog_revocations digest is invalid") unless details["digest_algorithm"] == "SHA-256"
+      error("catalog_revocations body bound is invalid") unless details["maximum_body_bytes"] == 1_048_576
+      error("catalog_revocations entry bound is invalid") unless details["maximum_entries"] == 4_096
+      error("catalog_revocations ordering is invalid") unless details["ordering"] == "release_id_then_artifact_sha256"
+      validate_exact_string_set(
+        details["allowed_reasons"],
+        %w[critical_security corrupt_artifact signing_compromise],
+        "catalog_revocations reasons"
+      )
+      error("catalog_revocations scope is invalid") unless details["scope"] == "catalog_origin_only"
+      error("catalog_revocations contract is invalid") unless details["contract"] == "docs/api/catalog-v1.md"
+    when "marketplace_server_schema"
+      require_exact_fields(
+        details,
+        %w[
+          target authoritative_schema exposed_schema exposed_table_policy
+          migration_policy unknown_newer_policy contract
+        ],
+        "#{id} details"
+      )
+      validate_target_epoch(details["target"], id)
+      error("#{id} authoritative schema is invalid") unless details["authoritative_schema"] == "wali"
+      error("#{id} exposed schema is invalid") unless details["exposed_schema"] == "public"
+      error("#{id} exposed table policy is invalid") unless details["exposed_table_policy"] == "none"
+      unless details["migration_policy"] == "ordered_local_then_staging_then_production"
+        error("#{id} migration policy is invalid")
+      end
+      error("#{id} unknown-newer policy is invalid") unless details["unknown_newer_policy"] == "reject_before_write"
+      error("#{id} contract is invalid") unless details["contract"] == "docs/adr/0014-marketplace-schema-and-rls.md"
+    when "catalog_public_api", "creator_public_api", "moderation_public_api"
+      require_exact_fields(
+        details,
+        %w[
+          target_version contract maximum_request_bytes maximum_response_bytes
+          maximum_page_items exposed_table_policy
+        ],
+        "#{id} details"
+      )
+      expected_version = {
+        "catalog_public_api" => "catalog.v1",
+        "creator_public_api" => "creator.v1",
+        "moderation_public_api" => "moderation.v1"
+      }.fetch(id)
+      expected_contract = {
+        "catalog_public_api" => "docs/api/catalog-v1.md",
+        "creator_public_api" => "docs/api/creator-v1.md",
+        "moderation_public_api" => "docs/api/moderation-v1.md"
+      }.fetch(id)
+      error("#{id} target version is invalid") unless details["target_version"] == expected_version
+      error("#{id} contract path is invalid") unless details["contract"] == expected_contract
+      error("#{id} request bound is invalid") unless details["maximum_request_bytes"] == 65_536
+      error("#{id} response bound is invalid") unless details["maximum_response_bytes"] == 1_048_576
+      error("#{id} page bound is invalid") unless details["maximum_page_items"] == 50
+      error("#{id} exposed table policy is invalid") unless details["exposed_table_policy"] == "none"
+    when "catalog_signing_keys"
+      require_exact_fields(
+        details,
+        %w[target algorithm private_key_location trust_anchor transition_policy history_policy],
+        "#{id} details"
+      )
+      validate_target_epoch(details["target"], id)
+      error("#{id} algorithm is invalid") unless details["algorithm"] == "Ed25519"
+      unless details["private_key_location"] == "signing_edge_secret_only"
+        error("#{id} private key location is invalid")
+      end
+      error("#{id} trust anchor is invalid") unless details["trust_anchor"] == "shipped_public_key"
+      unless details["transition_policy"] == "signed_by_existing_trusted_key"
+        error("#{id} transition policy is invalid")
+      end
+      error("#{id} history policy is invalid") unless details["history_policy"] == "append_only"
+    when "classifier_model_registry"
+      require_exact_fields(
+        details,
+        %w[
+          target default_model_id default_model_revision embedding_dimension
+          license weight_digest_required taxonomy_revision_required fallback
+        ],
+        "#{id} details"
+      )
+      validate_target_epoch(details["target"], id)
+      error("#{id} model ID is invalid") unless details["default_model_id"] == "google-siglip-base-patch16-224"
+      error("#{id} model revision is invalid") unless details["default_model_revision"] == 1
+      error("#{id} embedding dimension is invalid") unless details["embedding_dimension"] == 768
+      error("#{id} license is invalid") unless details["license"] == "Apache-2.0"
+      error("#{id} must require weight digests") unless details["weight_digest_required"] == true
+      error("#{id} must require taxonomy revisions") unless details["taxonomy_revision_required"] == true
+      error("#{id} fallback is invalid") unless details["fallback"] == "noop_classifier"
+    when "marketplace_storage_paths"
+      require_exact_fields(
+        details,
+        %w[
+          target buckets public_path_template creator_filename_in_path overwrite
+          upsert object_backup_required
+        ],
+        "#{id} details"
+      )
+      validate_target_epoch(details["target"], id)
+      validate_exact_string_set(
+        details["buckets"],
+        %w[uploads-private moderation-private catalog-public exports-private],
+        "#{id} buckets"
+      )
+      expected_template = "sha256/<hex-0-1>/<hex-2-3>/<digest>/<role>.<extension>"
+      error("#{id} public path template is invalid") unless details["public_path_template"] == expected_template
+      error("#{id} must exclude creator filenames") unless details["creator_filename_in_path"] == false
+      error("#{id} overwrite must be false") unless details["overwrite"] == false
+      error("#{id} upsert must be false") unless details["upsert"] == false
+      error("#{id} must require object backups") unless details["object_backup_required"] == true
     when "lock_screen_manifest"
       require_exact_fields(
         details,
@@ -2044,7 +2286,9 @@ class ArchitectureChecker
       )
       error("lock_screen_manifest must be implemented") unless implementation == "implemented"
       error("lock_screen_manifest support scope is invalid") unless details["support_scope"] == "session_lock_screen_only"
-      error("lock_screen_manifest implementation_gate is invalid") unless details["implementation_gate"] == "accepted_adr_0010"
+      unless details["implementation_gate"] == "accepted_adrs_0010_and_0013"
+        error("lock_screen_manifest implementation_gate is invalid")
+      end
       error("lock_screen_manifest fixture_policy is invalid") unless details["fixture_policy"] == "redacted_version_gated_store"
       error("lock_screen_manifest verified builds are invalid") unless details["verified_system_builds"] == ["25F80", "25G83"]
       error("lock_screen_manifest manifest version is invalid") unless details["manifest_version"] == 1
@@ -2214,12 +2458,17 @@ class ArchitectureChecker
         direction_pairs << [entry["from"], entry["to"]]
       end
     end
-    expected_pairs =
-      if id == "app_agent_wire"
-        Set.new([["WALI", "WALIAgent"], ["WALIAgent", "WALI"]])
-      else
-        Set.new([["WALIAgent", "WALITranscoder"], ["WALITranscoder", "WALIAgent"]])
-      end
+    expected_pairs = case id
+    when "app_agent_wire"
+      Set.new([["WALI", "WALIAgent"], ["WALIAgent", "WALI"]])
+    when "lock_screen_helper_wire"
+      Set.new([
+        ["WALIAgent", "WALILockScreenHelper"],
+        ["WALILockScreenHelper", "WALIAgent"]
+      ])
+    else
+      Set.new([["WALIAgent", "WALITranscoder"], ["WALITranscoder", "WALIAgent"]])
+    end
     error("#{id} direction does not match its channel endpoints") unless direction_pairs == expected_pairs
 
     catalog = details["message_catalog"]
@@ -2244,6 +2493,15 @@ class ArchitectureChecker
       error("#{id} implemented message_catalog status must be implemented") unless catalog["status"] == "implemented"
       error("#{id} implemented message_catalog path must exist") unless catalog_path && File.file?(catalog_path)
       error("#{id} implemented message_catalog must declare messages") if messages.empty?
+    elsif id == "lock_screen_helper_wire"
+      unless catalog["status"] == "planned" && catalog["path"].nil?
+        error("#{id} unimplemented message_catalog must remain planned with a null path")
+      end
+      validate_exact_string_set(
+        messages,
+        %w[status activateVerifiedRelease deactivate restore],
+        "#{id} planned messages"
+      )
     elsif catalog["status"] != "planned" || !catalog["path"].nil? || catalog["messages"] != []
       error("#{id} unimplemented message_catalog must use null path and empty messages")
     end
@@ -2337,8 +2595,8 @@ class ArchitectureChecker
           error("ADR #{record_id} superseded_by #{newer_id} is not reciprocated")
           next
         end
-        old_scope = metadata_scopes(metadata["superseded_scope"])
-        new_scope = metadata_scopes(newer[:metadata]["supersedes_scope"])
+        old_scope = metadata_scopes_for(metadata["superseded_scope"], newer_id)
+        new_scope = metadata_scopes_for(newer[:metadata]["supersedes_scope"], record_id)
         if old_scope.empty? || old_scope != new_scope
           error("supersession scope mismatch between ADR #{record_id} and ADR #{newer_id}")
         end
@@ -2359,6 +2617,18 @@ class ArchitectureChecker
 
   def metadata_scopes(value)
     value.to_s.split(",").map(&:strip).reject(&:empty?).sort
+  end
+
+  def metadata_scopes_for(value, counterpart_id)
+    serialized = value.to_s
+    return metadata_scopes(serialized) unless serialized.include?("=")
+
+    entry = serialized.split(";").map(&:strip).find do |candidate|
+      candidate.start_with?("#{counterpart_id}=")
+    end
+    return [] unless entry
+
+    metadata_scopes(entry.split("=", 2).last)
   end
 
   def validate_generated_project_ignore

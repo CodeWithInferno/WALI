@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "model_id": "google/siglip-base-patch16-224",
+  "upstream_revision": "7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed",
+  "license": "Apache-2.0",
+  "artifact_set_digest": "2a86b6bf585b3b071c5ccc46a01c18abb08b018dacc868513e592da7bcc9f877",
+  "embedding_dimension": 768,
+  "files": {
+    "config.json": {"sha256": "cd85b3d28829722820bcb89a2cfbb4160e55fd359249a3044da724166a8d9688", "byte_count": 432},
+    "model.safetensors": {"sha256": "2c63cb7d1f2e95ba501893cbb8faeb4ea9a3af295498d35097126228659c2af8", "byte_count": 812672320},
+    "preprocessor_config.json": {"sha256": "d11ccb80f15d358a11bdb070e92e2d889005874b7db15823d5f10d9b2533b14a", "byte_count": 368},
+    "special_tokens_map.json": {"sha256": "2b6a1ff67a27e0df9ac0c7d93250fc0d87431c7b366b3d5669217104f9088a26", "byte_count": 409},
+    "spiece.model": {"sha256": "1e5036bed065526c3c212dfbe288752391797c4bb1a284aa18c9a0b23fcaf8ec", "byte_count": 798330},
+    "tokenizer.json": {"sha256": "c6e405cb7c670d56636a9402c81023a55bc6c3c53d89cf02b92f5c5005bfe920", "byte_count": 2399357},
+    "tokenizer_config.json": {"sha256": "d6423dae508cc3a129d22ea443841c111832a1a73125b8f25ea8736951698bcb", "byte_count": 711}
+  }
+}

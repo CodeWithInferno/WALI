@@ -1,0 +1,53 @@
+#cloud-config
+# Fresh, dedicated WALI worker hosts only. Never apply this to a shared VM.
+# Root-volume encryption and egress allowlisting are provider-level prerequisites.
+ssh_pwauth: false
+disable_root: true
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - cosign
+  - curl
+  - fuse-overlayfs
+  - jq
+  - nftables
+  - podman
+  - slirp4netns
+  - uidmap
+  - unattended-upgrades
+
+users:
+  - name: wali-worker
+    system: true
+    lock_passwd: true
+    no_create_home: false
+    homedir: /var/lib/wali-worker
+    shell: /usr/sbin/nologin
+
+write_files:
+  - path: /etc/apt/apt.conf.d/52wali-unattended-upgrades
+    owner: root:root
+    permissions: '0644'
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      Unattended-Upgrade::Automatic-Reboot "false";
+  - path: /etc/sysctl.d/90-wali-rootless.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      kernel.unprivileged_userns_clone=1
+  - path: /etc/wali-worker/HOST_IS_DEDICATED
+    owner: root:root
+    permissions: '0444'
+    content: |
+      Provisioned exclusively for the WALI marketplace worker.
+
+runcmd:
+  - [sysctl, --system]
+  - [systemctl, enable, --now, unattended-upgrades.service]
+  - [usermod, --add-subuids, '200000-265535', --add-subgids, '200000-265535', wali-worker]
+  - [install, -d, -o, wali-worker, -g, wali-worker, -m, '0700', /var/lib/wali-worker/attempts]
+
+final_message: "Dedicated WALI worker base provisioned; application and secrets remain uninstalled."

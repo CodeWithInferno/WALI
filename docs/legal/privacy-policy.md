@@ -1,0 +1,64 @@
+# WALI Privacy Policy
+
+**Version:** 2026-09-01
+**Status:** Draft for counsel review; not yet effective for public UGC
+
+WALI is an open-source macOS live-wallpaper application. This policy separates
+information that stays on the Mac from information used by the optional WALI
+marketplace.
+
+## Information that stays on the Mac
+
+Ordinary local-library wallpaper files and filenames, display layout,
+per-display assignments, playback state, Lock Screen history, and the contents
+of unrelated files stay on the Mac. WALI does not upload them as marketplace
+analytics. Media, the original submission filename, and user-provided metadata
+are uploaded only when a user explicitly submits through Creator Studio. The
+optional Lock Screen helper has a narrow fixed-store role; it does not make
+network requests, parse media, or browse arbitrary files.
+
+## Marketplace information
+
+When a person signs in or uses marketplace features, WALI may process:
+
+- an account identifier and Sign in with Apple identity claims;
+- profile and creator information the person submits;
+- favorites, saves, follows, reports, downloads, and verified installs;
+- upload bytes and source/attribution metadata, plus rights evidence only when
+  the deferred proof workflow is enabled;
+- moderation decisions and security/audit records;
+- bounded technical data needed to prevent abuse and diagnose failures.
+
+WALI does not need contacts, precise location, advertising identifiers, or the
+contents of unrelated files. Public catalog metrics are aggregated and are not
+intended to identify an individual user.
+
+## Purposes and sharing
+
+Information is used to authenticate accounts, publish licensed content,
+operate search and ranking, prevent abuse, respond to reports, and secure the
+service. Service providers may process the minimum data needed to host the
+database, objects, authentication, and isolated media pipeline. WALI does not
+sell personal information or use marketplace activity for third-party ads.
+
+## Retention and deletion
+
+Account data is retained while the account is active and then deleted or
+anonymized according to [Account Deletion](account-deletion.md), subject to
+security, legal, copyright, and backup-retention requirements. Immutable public
+release artifacts may remain when continued redistribution is legally allowed;
+otherwise they are delisted and removed under the applicable policy.
+
+## Security and choices
+
+Uploads are treated as hostile, processed without network access, and never
+sent directly to the wallpaper renderer. Users may use local wallpapers without
+creating a marketplace account. The native Account screen implements export
+and deletion request/status UX in the development build. Public enablement
+remains gated on hosted processing, private export retrieval, fresh MFA for
+deletion, session revocation, Auth identity cleanup, a production support
+contact, and an exercised end-to-end deployment.
+
+Material policy changes require a new version and renewed acceptance when
+required. A production operator and contact address must replace this paragraph
+before public beta.

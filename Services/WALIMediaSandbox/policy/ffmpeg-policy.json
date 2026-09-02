@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "policy_id": "wali-media-v1",
+  "accepted_containers": ["mov", "mp4"],
+  "accepted_video_codecs": ["h264", "hevc"],
+  "limits": {
+    "input_bytes": 1073741824,
+    "output_bytes": 2147483648,
+    "duration_ms": 600000,
+    "width": 7680,
+    "height": 4320,
+    "frames_per_second": 120,
+    "input_tracks": 2,
+    "sample_frames": 7
+  },
+  "required_artifact_roles": [
+    "thumbnail",
+    "poster",
+    "preview",
+    "video_default"
+  ],
+  "canonical": {
+    "video_codec": "h264",
+    "video_encoder": "libopenh264",
+    "pixel_format": "yuv420p",
+    "color_space": "bt709",
+    "audio_tracks": 0,
+    "metadata": "stripped"
+  }
+}

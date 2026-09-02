@@ -1,0 +1,66 @@
+# syntax=docker/dockerfile:1.7
+
+# WALI's worker VM is x86-64; this is the immutable linux/amd64 manifest.
+FROM docker.io/library/debian:bookworm-slim@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867 AS build
+
+ARG DEBIAN_SNAPSHOT=20260824T000000Z
+ARG FFMPEG_VERSION=7.1.2
+ARG FFMPEG_SHA256=089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304
+ARG OPENH264_VERSION=2.6.0
+ARG OPENH264_SHA256=558544ad358283a7ab2930d69a9ceddf913f4a51ee9bf1bfb9e377322af81a69
+
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+    && printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list \
+    && printf 'Acquire::Check-Valid-Until "false";\n' >/etc/apt/apt.conf.d/99snapshot \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends build-essential ca-certificates curl nasm pkg-config xz-utils zlib1g-dev
+
+WORKDIR /build
+RUN curl --fail --location --proto '=https' --tlsv1.2 \
+      "https://github.com/cisco/openh264/archive/refs/tags/v${OPENH264_VERSION}.tar.gz" -o openh264.tar.gz \
+    && printf '%s  %s\n' "$OPENH264_SHA256" openh264.tar.gz | sha256sum --check --strict \
+    && mkdir openh264 \
+    && tar --extract --gzip --file openh264.tar.gz --directory openh264 --strip-components=1 \
+    && make -C openh264 -j2 \
+    && make -C openh264 PREFIX=/opt/openh264 install
+
+RUN curl --fail --location --proto '=https' --tlsv1.2 \
+      "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -o ffmpeg.tar.xz \
+    && printf '%s  %s\n' "$FFMPEG_SHA256" ffmpeg.tar.xz | sha256sum --check --strict \
+    && mkdir ffmpeg \
+    && tar --extract --xz --file ffmpeg.tar.xz --directory ffmpeg --strip-components=1 \
+    && cd ffmpeg \
+    && PKG_CONFIG_PATH=/opt/openh264/lib/pkgconfig ./configure \
+      --prefix=/opt/ffmpeg --disable-autodetect --disable-doc --disable-debug \
+      --disable-network --disable-gpl --disable-nonfree --disable-iconv \
+      --disable-everything --enable-ffmpeg --enable-ffprobe \
+      --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-zlib \
+      --enable-protocol=file,pipe --enable-demuxer=mov,image2 --enable-muxer=mp4,image2 \
+      --enable-decoder=h264,hevc,mjpeg,png --enable-encoder=libopenh264,mjpeg,png \
+      --enable-parser=h264,hevc,mjpeg,png --enable-libopenh264 \
+      --enable-filter=scale,crop,pad,thumbnail,select,fps,format,setpts \
+    && make -j2 \
+    && make install
+
+FROM docker.io/library/debian:bookworm-slim@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867
+ARG DEBIAN_SNAPSHOT=20260824T000000Z
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+    && printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list \
+    && printf 'Acquire::Check-Valid-Until "false";\n' >/etc/apt/apt.conf.d/99snapshot \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends jq ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /opt/ffmpeg /opt/ffmpeg
+COPY --from=build /opt/openh264/lib /opt/wali/lib
+COPY policy/ffmpeg-policy.json /opt/wali/policy/ffmpeg-policy.json
+COPY bin/process-media bin/verify-media /opt/wali/bin/
+
+ENV PATH=/opt/ffmpeg/bin:/usr/bin:/bin \
+    LD_LIBRARY_PATH=/opt/wali/lib \
+    HOME=/nonexistent \
+    TMPDIR=/tmp
+USER 65532:65532
+WORKDIR /work
+ENTRYPOINT []
+CMD ["/opt/wali/bin/process-media"]

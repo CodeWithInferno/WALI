@@ -19,32 +19,40 @@ public enum AgentLifecycleError: LocalizedError {
 /// Registers the bundled launch agent and exposes its user-approval state.
 @MainActor
 public final class AgentLifecycleController {
-    private var service: SMAppService? {
+    private var services: [SMAppService]? {
         guard let plistName = Bundle.main.object(
             forInfoDictionaryKey: "WALIAgentLaunchAgentPlistName"
-        ) as? String, !plistName.isEmpty else {
+        ) as? String, !plistName.isEmpty,
+        let helperPlistName = Bundle.main.object(
+            forInfoDictionaryKey: "WALILockScreenHelperLaunchAgentPlistName"
+        ) as? String, !helperPlistName.isEmpty else {
             return nil
         }
-        return SMAppService.agent(plistName: plistName)
+        return [
+            SMAppService.agent(plistName: plistName),
+            SMAppService.agent(plistName: helperPlistName),
+        ]
     }
 
     public init() {}
 
     public var requiresApproval: Bool {
-        service?.status == .requiresApproval
+        services?.contains(where: { $0.status == .requiresApproval }) == true
     }
 
     public func ensureRunning() throws {
-        guard let service else { throw AgentLifecycleError.missingConfiguration }
-        switch service.status {
-        case .enabled:
-            return
-        case .requiresApproval:
-            throw AgentLifecycleError.requiresApproval
-        case .notRegistered, .notFound:
-            try service.register()
-        @unknown default:
-            try service.register()
+        guard let services else { throw AgentLifecycleError.missingConfiguration }
+        for service in services {
+            switch service.status {
+            case .enabled:
+                continue
+            case .requiresApproval:
+                throw AgentLifecycleError.requiresApproval
+            case .notRegistered, .notFound:
+                try service.register()
+            @unknown default:
+                try service.register()
+            }
         }
     }
 
@@ -52,15 +60,13 @@ public final class AgentLifecycleController {
     /// app bundle has been rebuilt in place. Normal installed updates do not
     /// need this; it is an explicit recovery path for support and development.
     public func reinstallAgent() async throws {
-        guard let service else { throw AgentLifecycleError.missingConfiguration }
-        if service.status != .notRegistered, service.status != .notFound {
+        guard let services else { throw AgentLifecycleError.missingConfiguration }
+        for service in services where service.status != .notRegistered && service.status != .notFound {
             try await service.unregister()
-            // Service Management removes its launchd job synchronously but
-            // retires the background-item record asynchronously. Re-registering
-            // in the same run can reuse the stale launch constraint.
-            try await Task.sleep(for: .seconds(3))
         }
-        try service.register()
+        // Service Management retires background-item records asynchronously.
+        try await Task.sleep(for: .seconds(3))
+        for service in services { try service.register() }
     }
 
     public func openApprovalSettings() {

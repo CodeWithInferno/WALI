@@ -1,10 +1,15 @@
 #include "Base.xcconfig"
+#include? "Marketplace.local.xcconfig"
+
+WALI_MARKETPLACE_ENABLED = YES
 
 WALI_APP_BUNDLE_IDENTIFIER = com.wali.development.WALI
 WALI_AGENT_BUNDLE_IDENTIFIER = com.wali.development.WALIAgent
 WALI_TRANSCODER_BUNDLE_IDENTIFIER = com.wali.development.WALITranscoder
 WALI_APP_GROUP_IDENTIFIER = group.com.wali.development.shared
 WALI_AGENT_CONTROL_SERVICE_NAME = com.wali.development.WALIAgent.control
+WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER = com.wali.development.WALILockScreenHelper
+WALI_LOCK_SCREEN_HELPER_SERVICE_NAME = com.wali.development.WALILockScreenHelper.control
 
 CODE_SIGN_STYLE = Automatic
 CODE_SIGN_IDENTITY = Apple Development
@@ -12,4 +17,3 @@ ENABLE_HARDENED_RUNTIME = YES
 ENABLE_TESTABILITY = YES
 ONLY_ACTIVE_ARCH = YES
 SWIFT_OPTIMIZATION_LEVEL = -Onone
-

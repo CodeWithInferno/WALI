@@ -1,0 +1,859 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "WALI marketplace dependency inventory",
+  "documentNamespace": "https://github.com/TryCleanMcp/WALI/sbom/wali-marketplace-v1",
+  "creationInfo": {
+    "created": "2026-09-01T00:00:00Z",
+    "creators": [
+      "Organization: WALI contributors"
+    ],
+    "licenseListVersion": "3.26"
+  },
+  "documentDescribes": [
+    "SPDXRef-Package-generic-ffmpeg-7.1.2",
+    "SPDXRef-Package-generic-google-siglip-base-patch16-224-7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed",
+    "SPDXRef-Package-generic-openh264-2.6.0",
+    "SPDXRef-Package-golang-github.com-jackc-pgpassfile-v1.0.0",
+    "SPDXRef-Package-golang-github.com-jackc-pgservicefile-v0.0.0-20240606120523-5a60cdf6a761",
+    "SPDXRef-Package-golang-github.com-jackc-puddle-v2-v2.2.2",
+    "SPDXRef-Package-golang-golang.org-x-crypto-v0.37.0",
+    "SPDXRef-Package-golang-golang.org-x-sync-v0.13.0",
+    "SPDXRef-Package-golang-golang.org-x-text-v0.24.0",
+    "SPDXRef-Package-oci-docker.io-library-debian-bookworm-slim-sha256-5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867",
+    "SPDXRef-Package-pypi-certifi-2026.7.22",
+    "SPDXRef-Package-pypi-charset-normalizer-3.5.1",
+    "SPDXRef-Package-pypi-colorama-0.4.6",
+    "SPDXRef-Package-pypi-filelock-3.32.5",
+    "SPDXRef-Package-pypi-fsspec-2026.7.0",
+    "SPDXRef-Package-pypi-hf-xet-1.6.0",
+    "SPDXRef-Package-pypi-huggingface-hub-0.36.2",
+    "SPDXRef-Package-pypi-idna-3.19",
+    "SPDXRef-Package-pypi-iniconfig-2.3.0",
+    "SPDXRef-Package-pypi-jinja2-3.1.6",
+    "SPDXRef-Package-pypi-markupsafe-3.0.3",
+    "SPDXRef-Package-pypi-mpmath-1.3.0",
+    "SPDXRef-Package-pypi-networkx-3.6.1",
+    "SPDXRef-Package-pypi-numpy-2.2.6",
+    "SPDXRef-Package-pypi-packaging-26.3",
+    "SPDXRef-Package-pypi-pillow-11.3.0",
+    "SPDXRef-Package-pypi-pluggy-1.6.0",
+    "SPDXRef-Package-pypi-pygments-2.21.0",
+    "SPDXRef-Package-pypi-pytest-8.4.1",
+    "SPDXRef-Package-pypi-pyyaml-6.0.3",
+    "SPDXRef-Package-pypi-regex-2026.9.3",
+    "SPDXRef-Package-pypi-requests-2.34.2",
+    "SPDXRef-Package-pypi-safetensors-0.5.3",
+    "SPDXRef-Package-pypi-setuptools-84.0.0",
+    "SPDXRef-Package-pypi-sympy-1.14.0",
+    "SPDXRef-Package-pypi-tokenizers-0.21.4",
+    "SPDXRef-Package-pypi-torch-2.7.1",
+    "SPDXRef-Package-pypi-torch-2.7.1-cpu",
+    "SPDXRef-Package-pypi-tqdm-4.70.0",
+    "SPDXRef-Package-pypi-transformers-4.53.3",
+    "SPDXRef-Package-pypi-typing-extensions-4.16.0",
+    "SPDXRef-Package-pypi-urllib3-2.7.0",
+    "SPDXRef-Package-pypi-wali-classifier-0.1.0"
+  ],
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-generic-ffmpeg-7.1.2",
+      "name": "ffmpeg",
+      "versionInfo": "7.1.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LGPL-2.1-or-later",
+      "licenseDeclared": "LGPL-2.1-or-later",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/ffmpeg@7.1.2"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-generic-google-siglip-base-patch16-224-7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed",
+      "name": "google/siglip-base-patch16-224",
+      "versionInfo": "7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed",
+      "downloadLocation": "https://huggingface.co/google/siglip-base-patch16-224",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/google/siglip-base-patch16-224@7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "2a86b6bf585b3b071c5ccc46a01c18abb08b018dacc868513e592da7bcc9f877"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-generic-openh264-2.6.0",
+      "name": "openh264",
+      "versionInfo": "2.6.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/openh264@2.6.0"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "558544ad358283a7ab2930d69a9ceddf913f4a51ee9bf1bfb9e377322af81a69"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-golang-github.com-jackc-pgpassfile-v1.0.0",
+      "name": "github.com/jackc/pgpassfile",
+      "versionInfo": "v1.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/jackc/pgpassfile@v1.0.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-golang-github.com-jackc-pgservicefile-v0.0.0-20240606120523-5a60cdf6a761",
+      "name": "github.com/jackc/pgservicefile",
+      "versionInfo": "v0.0.0-20240606120523-5a60cdf6a761",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/jackc/pgservicefile@v0.0.0-20240606120523-5a60cdf6a761"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-golang-github.com-jackc-puddle-v2-v2.2.2",
+      "name": "github.com/jackc/puddle/v2",
+      "versionInfo": "v2.2.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/jackc/puddle/v2@v2.2.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-golang-golang.org-x-crypto-v0.37.0",
+      "name": "golang.org/x/crypto",
+      "versionInfo": "v0.37.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/golang.org/x/crypto@v0.37.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-golang-golang.org-x-sync-v0.13.0",
+      "name": "golang.org/x/sync",
+      "versionInfo": "v0.13.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/golang.org/x/sync@v0.13.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-golang-golang.org-x-text-v0.24.0",
+      "name": "golang.org/x/text",
+      "versionInfo": "v0.24.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/golang.org/x/text@v0.24.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-oci-docker.io-library-debian-bookworm-slim-sha256-5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867",
+      "name": "docker.io/library/debian:bookworm-slim",
+      "versionInfo": "sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LicenseRef-Debian-Image-Mixed",
+      "licenseDeclared": "LicenseRef-Debian-Image-Mixed",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "CONTAINER",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:oci/docker.io/library/debian:bookworm-slim@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-certifi-2026.7.22",
+      "name": "certifi",
+      "versionInfo": "2026.7.22",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MPL-2.0",
+      "licenseDeclared": "MPL-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/certifi@2026.7.22"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-charset-normalizer-3.5.1",
+      "name": "charset-normalizer",
+      "versionInfo": "3.5.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/charset-normalizer@3.5.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-colorama-0.4.6",
+      "name": "colorama",
+      "versionInfo": "0.4.6",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/colorama@0.4.6"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-filelock-3.32.5",
+      "name": "filelock",
+      "versionInfo": "3.32.5",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Unlicense",
+      "licenseDeclared": "Unlicense",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/filelock@3.32.5"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-fsspec-2026.7.0",
+      "name": "fsspec",
+      "versionInfo": "2026.7.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/fsspec@2026.7.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-hf-xet-1.6.0",
+      "name": "hf-xet",
+      "versionInfo": "1.6.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/hf-xet@1.6.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-huggingface-hub-0.36.2",
+      "name": "huggingface-hub",
+      "versionInfo": "0.36.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/huggingface-hub@0.36.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-idna-3.19",
+      "name": "idna",
+      "versionInfo": "3.19",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/idna@3.19"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-iniconfig-2.3.0",
+      "name": "iniconfig",
+      "versionInfo": "2.3.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/iniconfig@2.3.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-jinja2-3.1.6",
+      "name": "jinja2",
+      "versionInfo": "3.1.6",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/jinja2@3.1.6"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-markupsafe-3.0.3",
+      "name": "markupsafe",
+      "versionInfo": "3.0.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/markupsafe@3.0.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-mpmath-1.3.0",
+      "name": "mpmath",
+      "versionInfo": "1.3.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/mpmath@1.3.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-networkx-3.6.1",
+      "name": "networkx",
+      "versionInfo": "3.6.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/networkx@3.6.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-numpy-2.2.6",
+      "name": "numpy",
+      "versionInfo": "2.2.6",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/numpy@2.2.6"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-packaging-26.3",
+      "name": "packaging",
+      "versionInfo": "26.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0 OR BSD-2-Clause",
+      "licenseDeclared": "Apache-2.0 OR BSD-2-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/packaging@26.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-pillow-11.3.0",
+      "name": "pillow",
+      "versionInfo": "11.3.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "HPND",
+      "licenseDeclared": "HPND",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pillow@11.3.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-pluggy-1.6.0",
+      "name": "pluggy",
+      "versionInfo": "1.6.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pluggy@1.6.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-pygments-2.21.0",
+      "name": "pygments",
+      "versionInfo": "2.21.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-2-Clause",
+      "licenseDeclared": "BSD-2-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pygments@2.21.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-pytest-8.4.1",
+      "name": "pytest",
+      "versionInfo": "8.4.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pytest@8.4.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-pyyaml-6.0.3",
+      "name": "pyyaml",
+      "versionInfo": "6.0.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pyyaml@6.0.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-regex-2026.9.3",
+      "name": "regex",
+      "versionInfo": "2026.9.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/regex@2026.9.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-requests-2.34.2",
+      "name": "requests",
+      "versionInfo": "2.34.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/requests@2.34.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-safetensors-0.5.3",
+      "name": "safetensors",
+      "versionInfo": "0.5.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/safetensors@0.5.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-setuptools-84.0.0",
+      "name": "setuptools",
+      "versionInfo": "84.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/setuptools@84.0.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-sympy-1.14.0",
+      "name": "sympy",
+      "versionInfo": "1.14.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/sympy@1.14.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-tokenizers-0.21.4",
+      "name": "tokenizers",
+      "versionInfo": "0.21.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/tokenizers@0.21.4"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-torch-2.7.1",
+      "name": "torch",
+      "versionInfo": "2.7.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/torch@2.7.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-torch-2.7.1-cpu",
+      "name": "torch",
+      "versionInfo": "2.7.1+cpu",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/torch@2.7.1+cpu"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-tqdm-4.70.0",
+      "name": "tqdm",
+      "versionInfo": "4.70.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MPL-2.0 AND MIT",
+      "licenseDeclared": "MPL-2.0 AND MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/tqdm@4.70.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-transformers-4.53.3",
+      "name": "transformers",
+      "versionInfo": "4.53.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/transformers@4.53.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-typing-extensions-4.16.0",
+      "name": "typing-extensions",
+      "versionInfo": "4.16.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "PSF-2.0",
+      "licenseDeclared": "PSF-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/typing-extensions@4.16.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-urllib3-2.7.0",
+      "name": "urllib3",
+      "versionInfo": "2.7.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/urllib3@2.7.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-wali-classifier-0.1.0",
+      "name": "wali-classifier",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/wali-classifier@0.1.0"
+        }
+      ]
+    }
+  ]
+}

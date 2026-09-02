@@ -145,6 +145,65 @@ Cleanup never owns or deletes user source media.
   is never rewritten in place.
 - Diagnostic exports are immutable; readers do not mutate them.
 
+## Marketplace server migrations
+
+The marketplace server schema starts at epoch 1 revision 0 under accepted ADR
+0014. Ordered Supabase migrations are authored and replayed locally, applied to
+staging, verified, and only then applied to production. Staging and production
+never share project IDs, data, buckets, queues, credentials, signing keys, or
+worker service accounts.
+
+Authoritative tables live in the non-exposed `wali` schema. An exposed
+`public` table is prohibited. Public views and RPCs must be named in the v1 API
+allowlist, use invoker security where possible, and have explicit grants. A
+security-definer function fixes `search_path`, schema-qualifies objects, uses no
+dynamic SQL, and rechecks the authenticated identity, current role/AAL, state,
+generation, revision, idempotency key, and rate limit.
+
+Production database changes are forward-only. A destructive change uses:
+
+```text
+expand -> dual-read/write only when specified -> bounded backfill
+       -> verify counts/digests/RLS -> switch readers -> contract later
+```
+
+Every migration is transaction-safe where PostgreSQL permits, has explicit
+lock/statement bounds, preserves immutable release/audit history, and includes
+RLS tests for visitor, user A, user B, creator, moderator AAL1/AAL2, admin, and
+worker paths. A failed or unknown newer migration never triggers destructive
+reset. Restore uses database PITR plus separately digest-verified Storage backup;
+database backups do not contain Storage objects.
+
+## Catalog and public API evolution
+
+Catalog manifest and signed revocation bodies begin at epoch 1 revision 0.
+Their canonical bytes, ordering, size/count limits, key/signature rules, and
+fixtures are defined by `docs/api/catalog-v1.md`. An incompatible canonical
+change creates a new epoch and accepted ADR; older clients reject it before
+download. Additive revisions are readable only inside declared compatibility
+ranges with golden/malformed fixtures.
+
+Public Catalog, Creator, and Moderation APIs use explicit `v1` names. A changed
+meaning or removed required field creates a new version. Old and new versions
+coexist until supported clients migrate and server evidence proves the old
+surface is unused. Internal table shape never becomes a compatibility promise.
+
+Published media and manifests are immutable. Updating media or metadata that
+affects the public metadata digest creates a new release edition. Copyright or
+policy removal delists without mutating old bytes. Only a trusted signed
+critical-security revocation blocks catalog-origin local selection; local
+imports remain outside server authority.
+
+The app/agent wire protocol version 2 adds bounded signed catalog install
+metadata, cumulative trust transitions, and monotonic revocation updates.
+Version 1 peers fail the protocol handshake before catalog state is exchanged;
+catalog installs are retried only after both processes run version 2.
+
+Model and taxonomy changes register a new immutable model/taxonomy revision and
+write new embeddings/suggestions. They never reinterpret existing rows in
+place. Storage paths remain generated content-addressed values; migration or
+backup code never constructs paths from a creator filename/title.
+
 ## Rollback and fail-closed policy
 
 For each migration, `rollback_readers` in `surfaces.yml` is the complete binary
