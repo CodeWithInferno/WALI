@@ -18,14 +18,6 @@ class MarketplaceContractError < StandardError
   end
 end
 
-class StrictJSONObject < Hash
-  def []=(key, value)
-    raise MarketplaceContractError.new("MKT-JSON-DUPLICATE-KEY", "duplicate JSON key #{key}") if key?(key)
-
-    super
-  end
-end
-
 class MarketplaceContractChecker
   ACCEPTANCE_REFERENCE = "project-owner AFK marketplace implementation directive 2026-09-01"
   REQUIRED_ADRS = %w[0011 0012 0013 0014 0015 0016].freeze
@@ -436,13 +428,43 @@ class MarketplaceContractChecker
     raise MarketplaceContractError.new("MKT-JSON-SIZE", "#{relative(file)} exceeds #{maximum_bytes} bytes") if raw.bytesize > maximum_bytes
     raise MarketplaceContractError.new("MKT-JSON-BOM", "#{relative(file)} contains a UTF-8 BOM") if raw.start_with?("\xEF\xBB\xBF".b)
     raise MarketplaceContractError.new("MKT-JSON-ENCODING", "#{relative(file)} is not valid UTF-8") unless raw.dup.force_encoding(Encoding::UTF_8).valid_encoding?
-    value = JSON.parse(raw, object_class: StrictJSONObject, array_class: Array, create_additions: false)
+    reject_duplicate_json_keys(raw)
+    value = JSON.parse(raw, create_additions: false)
     if canonical && JSON.generate(value) != raw
       raise MarketplaceContractError.new("MKT-JSON-NONCANONICAL", "#{relative(file)} is not compact schema-canonical JSON")
     end
     [raw, value]
   rescue JSON::ParserError => error
     raise MarketplaceContractError.new("MKT-JSON-SHAPE", "#{relative(file)} is invalid JSON: #{error.message}")
+  end
+
+  # JSON's object_class hook does not consistently call Hash#[]= across the
+  # C-extension versions shipped by macOS and Ubuntu. Psych preserves mapping
+  # pairs in its syntax tree, so use it only as a portable duplicate-key pass;
+  # JSON.parse below remains the authority for JSON grammar and values.
+  def reject_duplicate_json_keys(raw)
+    document = Psych.parse(raw)
+    visit = lambda do |node|
+      if node.is_a?(Psych::Nodes::Mapping)
+        keys = Set.new
+        node.children.each_slice(2) do |key, value|
+          if key.is_a?(Psych::Nodes::Scalar)
+            decoded = key.value
+            if keys.include?(decoded)
+              raise MarketplaceContractError.new("MKT-JSON-DUPLICATE-KEY", "duplicate JSON key #{decoded}")
+            end
+            keys << decoded
+          end
+          visit.call(value)
+        end
+      else
+        node.children&.each { |child| visit.call(child) }
+      end
+    end
+    visit.call(document)
+  rescue Psych::SyntaxError
+    # Let JSON.parse report malformed JSON using the stable contract code.
+    nil
   end
 
   def validate_manifest(value, allowed_hosts:)

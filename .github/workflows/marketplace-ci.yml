@@ -34,7 +34,17 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned XcodeGen
-        run: brew install xcodegen && test "$(xcodegen --version | awk '{print $2}')" = "2.44.1"
+        env:
+          XCODEGEN_URL: https://github.com/yonaskolb/XcodeGen/releases/download/2.44.1/xcodegen.zip
+          XCODEGEN_SHA256: a2e905fb68446e9bb4008cdfe2e13e3f176d0cbcca828b71770f8e53fca91b73
+        run: |
+          archive="$RUNNER_TEMP/xcodegen.zip"
+          install_root="$RUNNER_TEMP/xcodegen-release"
+          curl --fail --location --proto '=https' --tlsv1.2 "$XCODEGEN_URL" --output "$archive"
+          printf '%s  %s\n' "$XCODEGEN_SHA256" "$archive" | shasum -a 256 --check
+          unzip -q "$archive" -d "$install_root"
+          test "$("$install_root/xcodegen/bin/xcodegen" --version | awk '{print $2}')" = "2.44.1"
+          echo "$install_root/xcodegen/bin" >> "$GITHUB_PATH"
       - run: make verify
 
   backend:
