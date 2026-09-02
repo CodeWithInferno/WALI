@@ -10,10 +10,10 @@ its SBOM/license bundle.
 | Python | 3.12.11 | PSF-2.0 |
 | uv | 0.8.17 | Apache-2.0 OR MIT |
 | NumPy | 2.2.6 | BSD-3-Clause |
-| Pillow | 11.3.0 | HPND |
-| safetensors | 0.5.3 | Apache-2.0 |
+| Pillow | 12.3.0 | HPND |
+| safetensors | 0.8.0 | Apache-2.0 |
 | PyTorch | 2.7.1 | BSD-3-Clause |
-| Transformers | 4.53.3 | Apache-2.0 |
+| Transformers | 5.16.1 | Apache-2.0 |
 | google/siglip-base-patch16-224 | revision `7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed` | Apache-2.0 |
 
 The SigLIP model files are not stored in this repository or baked into the

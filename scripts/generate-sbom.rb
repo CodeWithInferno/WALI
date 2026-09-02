@@ -9,16 +9,21 @@ ROOT = Pathname.new(__dir__).parent.freeze
 OUTPUT = ROOT / "sbom/wali-marketplace.spdx.json"
 
 LICENSES = {
+  "annotated-doc" => "MIT", "anyio" => "MIT", "click" => "BSD-3-Clause",
   "certifi" => "MPL-2.0", "charset-normalizer" => "MIT", "colorama" => "BSD-3-Clause",
   "filelock" => "Unlicense", "fsspec" => "BSD-3-Clause", "hf-xet" => "Apache-2.0",
+  "h11" => "MIT", "httpcore" => "BSD-3-Clause", "httpx" => "BSD-3-Clause",
   "huggingface-hub" => "Apache-2.0", "idna" => "BSD-3-Clause", "iniconfig" => "MIT",
   "jinja2" => "BSD-3-Clause", "markupsafe" => "BSD-3-Clause", "mpmath" => "BSD-3-Clause",
+  "markdown-it-py" => "MIT", "mdurl" => "MIT",
   "networkx" => "BSD-3-Clause", "numpy" => "BSD-3-Clause", "packaging" => "Apache-2.0 OR BSD-2-Clause",
   "pillow" => "HPND", "pluggy" => "MIT", "pygments" => "BSD-2-Clause", "pytest" => "MIT",
-  "pyyaml" => "MIT", "regex" => "Apache-2.0", "requests" => "Apache-2.0",
+  "pyyaml" => "MIT", "regex" => "Apache-2.0", "requests" => "Apache-2.0", "rich" => "MIT",
   "safetensors" => "Apache-2.0", "setuptools" => "MIT", "sympy" => "BSD-3-Clause",
+  "shellingham" => "ISC",
   "tokenizers" => "Apache-2.0", "torch" => "BSD-3-Clause", "tqdm" => "MPL-2.0 AND MIT",
-  "transformers" => "Apache-2.0", "typing-extensions" => "PSF-2.0", "urllib3" => "MIT",
+  "transformers" => "Apache-2.0", "typer" => "MIT", "typing-extensions" => "PSF-2.0",
+  "urllib3" => "MIT",
   "wali-classifier" => "Apache-2.0",
   "github.com/jackc/pgx/v5" => "MIT", "github.com/jackc/pgpassfile" => "MIT",
   "github.com/jackc/pgservicefile" => "MIT", "github.com/jackc/puddle/v2" => "MIT",
