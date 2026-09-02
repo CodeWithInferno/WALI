@@ -80,11 +80,16 @@ async function execute(
   dependencies: EndpointDependencies,
 ): Promise<unknown> {
   if (action === "accept_terms") {
-    exactKeys(payload, ["creator_terms_version"]);
+    exactKeys(payload, ["expected_subject_id", "creator_terms_version"]);
+    const expectedSubjectID = requireUUID(payload.expected_subject_id);
+    if (expectedSubjectID !== actorID) {
+      throw new EdgeError("authentication_required", 401);
+    }
     return await dependencies.database.rpc(
       "wali_edge_accept_creator_terms_v1",
       {
         actor_id: actorID,
+        expected_subject_id: expectedSubjectID,
         request_id: requestID,
         idempotency_key: idempotencyKey,
         creator_terms_version: requirePlainText(

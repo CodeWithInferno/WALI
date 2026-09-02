@@ -7,6 +7,7 @@ public enum AgentConnectionError: LocalizedError {
     case invalidProxy
     case emptyResponse
     case requestMismatch
+    case timedOut
 
     public var errorDescription: String? {
         switch self {
@@ -14,6 +15,7 @@ public enum AgentConnectionError: LocalizedError {
         case .invalidProxy: "WALI could not create a secure connection to its agent."
         case .emptyResponse: "The WALI agent returned an empty response."
         case .requestMismatch: "The WALI agent returned a response for another request."
+        case .timedOut: "The WALI background agent did not respond in time."
         }
     }
 }
@@ -82,11 +84,19 @@ private final class AgentConnectionEndHandler: @unchecked Sendable {
 @MainActor
 public final class AgentConnection {
     private let serviceName: String
+    private let responseTimeout: Duration
+    private let catalogInstallResponseTimeout: Duration
     private var connection: NSXPCConnection?
     private var connectionID: UUID?
 
-    public init(serviceName: String = AgentServiceName.current) {
+    public init(
+        serviceName: String = AgentServiceName.current,
+        responseTimeout: Duration = .seconds(15),
+        catalogInstallResponseTimeout: Duration = .seconds(900)
+    ) {
         self.serviceName = serviceName
+        self.responseTimeout = responseTimeout
+        self.catalogInstallResponseTimeout = catalogInstallResponseTimeout
     }
 
     public func send(
@@ -101,7 +111,10 @@ public final class AgentConnection {
         )
         let requestData = try WireCodec.encodeRequest(request)
 
-        let responseData = try await perform(requestData)
+        let responseData = try await perform(
+            requestData,
+            timeout: timeout(for: command)
+        )
         let response = try WireCodec.decodeResponse(from: responseData)
         guard response.requestID == request.requestID else {
             throw AgentConnectionError.requestMismatch
@@ -120,10 +133,21 @@ public final class AgentConnection {
         connectionID = nil
     }
 
-    private func perform(_ request: Data) async throws -> Data {
+    private func timeout(for command: AgentCommand) -> Duration {
+        if case .installCatalogRelease = command {
+            return catalogInstallResponseTimeout
+        }
+        return responseTimeout
+    }
+
+    private func perform(_ request: Data, timeout: Duration) async throws -> Data {
         let connection = activeConnection()
         return try await withCheckedThrowingContinuation { continuation in
             let oneShot = AgentOneShotContinuation<Data>(continuation)
+            Task {
+                try? await Task.sleep(for: timeout)
+                oneShot.resume(with: .failure(AgentConnectionError.timedOut))
+            }
             guard let proxy = connection.remoteObjectProxyWithErrorHandler(
                 AgentCallbackFactory.errorHandler(oneShot)
             ) as? WALIAgentXPCProtocol else {

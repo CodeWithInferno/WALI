@@ -21,7 +21,11 @@ public protocol CreatorAuthorizationGateway: Sendable {
     /// Must be backed by current server grants. JWT role claims alone are insufficient.
     func authorizationSnapshot() async throws -> CreatorAuthorizationSnapshot
     func creatorMetadata() async throws -> CreatorMetadata
-    func acceptCreatorTerms(version: String, idempotencyKey: String) async throws -> CreatorAuthorizationSnapshot
+    func acceptCreatorTerms(
+        expectedSubjectID: String,
+        version: String,
+        idempotencyKey: String
+    ) async throws -> CreatorAuthorizationSnapshot
 }
 
 public enum CreatorRemoteFailureDisposition: Sendable, Equatable {

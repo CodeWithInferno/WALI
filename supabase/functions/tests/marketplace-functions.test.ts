@@ -1,6 +1,6 @@
 import { authenticate } from "../_shared/auth.ts";
 import type { DatabaseGateway } from "../_shared/database.ts";
-import { EdgeError } from "../_shared/errors.ts";
+import { EdgeError, mapDatabaseError } from "../_shared/errors.ts";
 import type { EndpointDependencies } from "../_shared/runtime.ts";
 import { readExactJSON } from "../_shared/validation.ts";
 import { handleCreateUpload } from "../create-upload/index.ts";
@@ -726,15 +726,61 @@ Deno.test("creator enrollment accepts only the exact current terms command", asy
       request_id: "90000000-0000-4000-8000-000000000001",
       idempotency_key: "accept_creator_terms_000000001",
       action: "accept_terms",
-      payload: { creator_terms_version: "2026-09-01" },
+      payload: {
+        expected_subject_id: "00000000-0000-4000-8000-000000000003",
+        creator_terms_version: "2026-09-01",
+      },
     })),
     dependencies(database),
   );
   assertEquals(response.status, 201);
   assertEquals(database.calls[1].name, "wali_edge_accept_creator_terms_v1");
   assertEquals(
+    database.calls[1].parameters.expected_subject_id,
+    "00000000-0000-4000-8000-000000000003",
+  );
+  assertEquals(
     database.calls[1].parameters.creator_terms_version,
     "2026-09-01",
+  );
+});
+
+Deno.test("creator enrollment rejects an account switch before the acceptance mutation", async () => {
+  const database = new FakeDatabase({
+    wali_edge_take_rate_limit_v1: { allowed: true, retry_after_seconds: 0 },
+  });
+  const response = await handleCreatorCommand(
+    jsonRequest(JSON.stringify({
+      api_version: "creator.v1",
+      request_id: "90000000-0000-4000-8000-000000000002",
+      idempotency_key: "accept_creator_terms_000000002",
+      action: "accept_terms",
+      payload: {
+        expected_subject_id: "00000000-0000-4000-8000-000000000002",
+        creator_terms_version: "2026-09-01",
+      },
+    })),
+    dependencies(database),
+  );
+
+  assertEquals(response.status, 401);
+  assertEquals((await responseJSON(response)).error, {
+    code: "authentication_required",
+    message: "Sign in to continue.",
+    retryable: false,
+  });
+  assertEquals(database.calls.length, 1);
+  assertEquals(database.calls[0].name, "wali_edge_take_rate_limit_v1");
+});
+
+Deno.test("revoked creator self-enrollment maps to a bounded access denial", () => {
+  const error = mapDatabaseError(
+    "database rejected command: WALI_CREATOR_ROLE_REVOKED",
+  );
+
+  assertEquals(
+    { code: error.code, status: error.status, retryable: error.retryable },
+    { code: "creator_role_required", status: 403, retryable: false },
   );
 });
 

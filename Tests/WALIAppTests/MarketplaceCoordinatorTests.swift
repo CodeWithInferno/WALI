@@ -259,6 +259,170 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         }
     }
 
+    func testAcceptingCreatorTermsCompletesWithTheConfirmedServerVersion() async throws {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let creator = ScriptedCreatorAuthorizationGateway(userID: userID)
+        let coordinator = MarketplaceCoordinator(
+            creatorAuthorizationGateway: creator,
+            authStore: auth,
+            creatorRequestTimeout: .seconds(1)
+        )
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        try await Task.sleep(for: .milliseconds(30))
+
+        XCTAssertEqual(coordinator.creatorContext.state, .ready)
+        coordinator.acceptCreatorTerms()
+        try await Task.sleep(for: .milliseconds(30))
+
+        XCTAssertEqual(coordinator.creatorContext.state, .ready)
+        let acceptedVersion = await creator.acceptedVersion()
+        XCTAssertEqual(acceptedVersion, "2026-09-01")
+    }
+
+    func testCreatorTermsTimeoutAlwaysLeavesTheLoadingState() async throws {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let creator = ScriptedCreatorAuthorizationGateway(
+            userID: userID,
+            acceptanceDelay: .seconds(5)
+        )
+        let coordinator = MarketplaceCoordinator(
+            creatorAuthorizationGateway: creator,
+            authStore: auth,
+            creatorRequestTimeout: .milliseconds(20)
+        )
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        try await Task.sleep(for: .milliseconds(30))
+
+        coordinator.acceptCreatorTerms()
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(coordinator.creatorContext.state, .failed)
+    }
+
+    func testCreatorTermsTimeoutDoesNotWaitForAnOperationThatIgnoresCancellation() async throws {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let creator = ScriptedCreatorAuthorizationGateway(
+            userID: userID,
+            acceptanceDelay: .milliseconds(250),
+            ignoresAcceptanceCancellation: true
+        )
+        let coordinator = MarketplaceCoordinator(
+            creatorAuthorizationGateway: creator,
+            authStore: auth,
+            creatorRequestTimeout: .milliseconds(20)
+        )
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        try await Task.sleep(for: .milliseconds(30))
+
+        coordinator.acceptCreatorTerms()
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(coordinator.creatorContext.state, .failed)
+    }
+
+    func testCreatorTermsRemainUnacceptedUntilTheServerConfirmsTheRequestedVersion() async throws {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let creator = ScriptedCreatorAuthorizationGateway(
+            userID: userID,
+            confirmsAcceptance: false
+        )
+        let coordinator = MarketplaceCoordinator(
+            creatorAuthorizationGateway: creator,
+            authStore: auth,
+            creatorRequestTimeout: .seconds(1)
+        )
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        try await Task.sleep(for: .milliseconds(30))
+
+        coordinator.acceptCreatorTerms()
+        try await Task.sleep(for: .milliseconds(30))
+
+        XCTAssertEqual(coordinator.creatorContext.state, .failed)
+        let acceptedVersion = await creator.acceptedVersion()
+        XCTAssertNil(acceptedVersion)
+    }
+
+    func testUnsupportedCreatorTermsVersionNeverSendsAnAcceptanceCommand() async throws {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let creator = ScriptedCreatorAuthorizationGateway(
+            userID: userID,
+            termsVersion: "2027-01-01"
+        )
+        let coordinator = MarketplaceCoordinator(
+            creatorAuthorizationGateway: creator,
+            authStore: auth,
+            creatorRequestTimeout: .seconds(1)
+        )
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        try await Task.sleep(for: .milliseconds(30))
+
+        coordinator.acceptCreatorTerms()
+        try await Task.sleep(for: .milliseconds(30))
+
+        XCTAssertEqual(coordinator.creatorContext.state, .ready)
+        let requestCount = await creator.acceptanceRequestCount()
+        XCTAssertEqual(requestCount, 0)
+    }
+
+    func testAccountSwitchCannotRedirectCreatorTermsAcceptance() async throws {
+        let firstUserID = "11111111-1111-4111-8111-111111111111"
+        let secondUserID = "22222222-2222-4222-8222-222222222222"
+        let auth = ScriptedAuthStore()
+        let creator = ScriptedCreatorAuthorizationGateway(
+            userID: firstUserID,
+            acceptanceDelay: .milliseconds(80),
+            ignoresAcceptanceCancellation: true
+        )
+        let coordinator = MarketplaceCoordinator(
+            creatorAuthorizationGateway: creator,
+            authStore: auth,
+            creatorRequestTimeout: .seconds(1)
+        )
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: firstUserID, expiresAt: .now.addingTimeInterval(60)))
+        try await Task.sleep(for: .milliseconds(30))
+
+        coordinator.acceptCreatorTerms()
+        try await Task.sleep(for: .milliseconds(10))
+        await creator.switchAuthenticatedSubject(to: secondUserID)
+        await auth.emit(CatalogAuthState(userID: secondUserID, expiresAt: .now.addingTimeInterval(60)))
+        try await Task.sleep(for: .milliseconds(120))
+
+        let expectedSubjects = await creator.acceptanceExpectedSubjects()
+        let acceptedVersion = await creator.acceptedVersion()
+        XCTAssertEqual(expectedSubjects, [firstUserID])
+        XCTAssertNil(acceptedVersion)
+        XCTAssertEqual(coordinator.model.accountState, .signedIn(userID: secondUserID))
+    }
+
+    func testMismatchedCreatorAuthorizationFailsInsteadOfRemainingLoading() async throws {
+        let signedInUserID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let creator = ScriptedCreatorAuthorizationGateway(
+            userID: "22222222-2222-4222-8222-222222222222"
+        )
+        let coordinator = MarketplaceCoordinator(
+            creatorAuthorizationGateway: creator,
+            authStore: auth,
+            creatorRequestTimeout: .seconds(1)
+        )
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: signedInUserID, expiresAt: .now.addingTimeInterval(60)))
+        try await Task.sleep(for: .milliseconds(30))
+
+        XCTAssertEqual(coordinator.creatorContext.state, .failed)
+    }
+
     private func section(id: String, title: String) -> CatalogHomeSection {
         CatalogHomeSection(id: id, title: title, kind: .editorial, cursor: nil, items: [])
     }
@@ -595,6 +759,109 @@ private actor ScriptedAccountPrivacyGateway: AccountPrivacyGateway {
             expectedProfileRevision: 4,
             confirmation: "DELETE MY WALI",
             idempotencyKey: idempotencyKey
+        )
+    }
+}
+
+private actor ScriptedCreatorAuthorizationGateway: CreatorAuthorizationGateway {
+    private var authenticatedSubjectID: String
+    private let termsVersion: String
+    private let acceptanceDelay: Duration
+    private let ignoresAcceptanceCancellation: Bool
+    private let confirmsAcceptance: Bool
+    private var accepted: String?
+    private var acceptanceRequests = 0
+    private var expectedSubjects: [String] = []
+
+    init(
+        userID: String,
+        termsVersion: String = "2026-09-01",
+        acceptanceDelay: Duration = .zero,
+        ignoresAcceptanceCancellation: Bool = false,
+        confirmsAcceptance: Bool = true
+    ) {
+        authenticatedSubjectID = userID
+        self.termsVersion = termsVersion
+        self.acceptanceDelay = acceptanceDelay
+        self.ignoresAcceptanceCancellation = ignoresAcceptanceCancellation
+        self.confirmsAcceptance = confirmsAcceptance
+    }
+
+    func authorizationSnapshot() async throws -> CreatorAuthorizationSnapshot {
+        snapshot(subjectID: authenticatedSubjectID, acceptedVersion: accepted)
+    }
+
+    func creatorMetadata() async throws -> CreatorMetadata {
+        try CreatorMetadata(
+            categories: [CreatorTaxonomyOption(id: UUID(), name: "Nature", slug: "nature")],
+            tags: [],
+            licenses: [CreatorLicenseOption(
+                id: UUID(),
+                name: "Original work",
+                code: "original",
+                requirements: CreatorRightsRequirements(
+                    requiresSourceURL: false,
+                    requiresAttribution: false,
+                    requiresProof: false
+                )
+            )],
+            currentCreatorTermsVersion: termsVersion
+        )
+    }
+
+    func acceptCreatorTerms(
+        expectedSubjectID: String,
+        version: String,
+        idempotencyKey: String
+    ) async throws -> CreatorAuthorizationSnapshot {
+        acceptanceRequests += 1
+        expectedSubjects.append(expectedSubjectID)
+        if ignoresAcceptanceCancellation {
+            await withCheckedContinuation { continuation in
+                Task {
+                    try? await Task.sleep(for: acceptanceDelay)
+                    continuation.resume()
+                }
+            }
+        } else {
+            try await Task.sleep(for: acceptanceDelay)
+        }
+        guard expectedSubjectID == authenticatedSubjectID,
+              version == termsVersion,
+              UUID(uuidString: idempotencyKey) != nil
+        else {
+            throw CatalogRequestError.invalidRequest
+        }
+        if confirmsAcceptance {
+            accepted = version
+        }
+        return snapshot(subjectID: authenticatedSubjectID, acceptedVersion: accepted)
+    }
+
+    func acceptedVersion() -> String? { accepted }
+
+    func acceptanceRequestCount() -> Int { acceptanceRequests }
+
+    func acceptanceExpectedSubjects() -> [String] { expectedSubjects }
+
+    func switchAuthenticatedSubject(to subjectID: String) {
+        authenticatedSubjectID = subjectID
+        accepted = nil
+    }
+
+    private func snapshot(
+        subjectID: String,
+        acceptedVersion: String?
+    ) -> CreatorAuthorizationSnapshot {
+        CreatorAuthorizationSnapshot(
+            subjectID: subjectID,
+            accountIsActive: true,
+            sessionExpiresAt: .now.addingTimeInterval(60),
+            creatorGrantRevision: acceptedVersion == nil ? nil : 1,
+            acceptedCreatorTermsVersion: acceptedVersion,
+            currentCreatorTermsVersion: termsVersion,
+            moderatorGrantRevision: nil,
+            assuranceLevel: .aal1
         )
     }
 }

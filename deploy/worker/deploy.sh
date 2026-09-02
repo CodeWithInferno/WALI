@@ -5,10 +5,21 @@ umask 077
 
 readonly SCRIPT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly IMAGE_PATTERN='^[a-z0-9][a-z0-9./:_-]{0,191}@sha256:[a-f0-9]{64}$'
+readonly PROJECT_REF_PATTERN='^[a-z]{20}$'
+readonly HOST_BINDING_FILE=/etc/wali-worker/HOST_IS_DEDICATED
 
 usage() {
-  echo 'usage: deploy.sh [--dry-run] --worker-binary PATH --environment-file PATH --media-sbom PATH --verifier-sbom PATH --classifier-sbom PATH --cosign-key PATH' >&2
-  echo '       deploy.sh --rollback' >&2
+  echo 'usage: deploy.sh [--dry-run] --environment staging|production --supabase-project-ref REF --worker-binary PATH --environment-file PATH --media-sbom PATH --verifier-sbom PATH [--classifier-sbom PATH] --cosign-key PATH' >&2
+  echo '       deploy.sh --rollback --environment staging|production --supabase-project-ref REF' >&2
+}
+
+read_optional_env_value() {
+  local key=$1 file=$2 count value
+  count="$(grep -c -E "^${key}=" "$file" || true)"
+  [[ "$count" == 1 ]] || return 1
+  value="$(sed -n -E "s/^${key}=//p" "$file")"
+  [[ ! "$value" =~ [[:cntrl:]] ]] || return 1
+  printf '%s' "$value"
 }
 
 read_env_value() {
@@ -38,6 +49,43 @@ validate_sbom() {
   grep -q "$digest" "$sbom" || { echo 'an SBOM does not attest its configured image digest' >&2; exit 65; }
 }
 
+validate_target_binding() {
+  local configured_environment=$1 configured_project_ref=$2 database_url=$3 storage_url=$4
+  local database_authority database_hostport
+  [[ "$configured_environment" == "$deployment_environment" ]] || { echo 'environment file does not match --environment' >&2; exit 65; }
+  [[ "$configured_project_ref" == "$supabase_project_ref" ]] || { echo 'environment file does not match --supabase-project-ref' >&2; exit 65; }
+
+  case "$database_url" in
+    postgres://*|postgresql://*) ;;
+    *) echo 'WALI_DATABASE_URL is not a PostgreSQL URL' >&2; exit 65 ;;
+  esac
+  database_authority="${database_url#*://}"
+  database_authority="${database_authority%%/*}"
+  [[ "$database_authority" == *@* ]] || { echo 'WALI_DATABASE_URL is missing its dedicated login identity' >&2; exit 65; }
+  database_hostport="${database_authority##*@}"
+  [[ "$database_hostport" == "db.$supabase_project_ref.supabase.co" || "$database_hostport" == "db.$supabase_project_ref.supabase.co:5432" ]] || {
+    echo 'WALI_DATABASE_URL host does not match the explicit Supabase project' >&2
+    exit 65
+  }
+  [[ "$storage_url" == "https://$supabase_project_ref.supabase.co" ]] || {
+    echo 'WALI_STORAGE_URL origin does not match the explicit Supabase project' >&2
+    exit 65
+  }
+}
+
+validate_host_binding() {
+  [[ -f "$HOST_BINDING_FILE" && ! -L "$HOST_BINDING_FILE" ]] || { echo 'dedicated-host binding marker is absent or unsafe; refusing mutation' >&2; exit 77; }
+  [[ "$(stat -c '%U:%G:%a' "$HOST_BINDING_FILE")" == root:root:444 ]] || { echo 'dedicated-host binding marker must be root:root 0444' >&2; exit 77; }
+  [[ "$(wc -l < "$HOST_BINDING_FILE" | tr -d ' ')" == 2 ]] || { echo 'dedicated-host binding marker has an unexpected shape' >&2; exit 65; }
+  local marker_environment marker_project_ref
+  marker_environment="$(read_env_value WALI_DEPLOY_ENVIRONMENT "$HOST_BINDING_FILE")" || { echo 'dedicated-host marker environment is missing or duplicated' >&2; exit 65; }
+  marker_project_ref="$(read_env_value WALI_SUPABASE_PROJECT_REF "$HOST_BINDING_FILE")" || { echo 'dedicated-host marker project is missing or duplicated' >&2; exit 65; }
+  [[ "$marker_environment" == "$deployment_environment" && "$marker_project_ref" == "$supabase_project_ref" ]] || {
+    echo 'dedicated-host marker does not match the requested environment and Supabase project' >&2
+    exit 77
+  }
+}
+
 rollback() {
   [[ "$(id -u)" == 0 ]] || { echo 'rollback must run as root on the worker host' >&2; exit 77; }
   [[ -L /opt/wali-worker/current && -L /opt/wali-worker/previous ]] || { echo 'both current and previous WALI releases are required' >&2; exit 69; }
@@ -55,48 +103,72 @@ rollback() {
 
 dry_run=false
 rollback_requested=false
-worker_binary= environment_file= media_sbom= verifier_sbom= classifier_sbom= cosign_key=
+deployment_environment= supabase_project_ref= worker_binary= environment_file= media_sbom= verifier_sbom= classifier_sbom= cosign_key=
 while (($#)); do
   case "$1" in
     --dry-run) dry_run=true; shift ;;
     --rollback) rollback_requested=true; shift ;;
-    --worker-binary|--environment-file|--media-sbom|--verifier-sbom|--classifier-sbom|--cosign-key)
+    --environment)
+      (($# >= 2)) || { usage; exit 64; }
+      deployment_environment=$2; shift 2 ;;
+    --supabase-project-ref|--worker-binary|--environment-file|--media-sbom|--verifier-sbom|--classifier-sbom|--cosign-key)
       (($# >= 2)) || { usage; exit 64; }
       key="${1#--}"; key="${key//-/_}"; printf -v "$key" '%s' "$2"; shift 2 ;;
     *) usage; exit 64 ;;
   esac
 done
 
+[[ "$deployment_environment" == staging || "$deployment_environment" == production ]] || { echo 'an explicit staging or production environment is required' >&2; exit 64; }
+[[ "$supabase_project_ref" =~ $PROJECT_REF_PATTERN ]] || { echo 'an exact 20-letter Supabase project ref is required' >&2; exit 64; }
+
 if $rollback_requested; then
+  validate_host_binding
   rollback
   exit
 fi
-for value in worker_binary environment_file media_sbom verifier_sbom classifier_sbom cosign_key; do
+for value in worker_binary environment_file media_sbom verifier_sbom cosign_key; do
   [[ -n "${!value}" ]] || { usage; exit 64; }
   validate_file "${!value}"
 done
 
 media_image="$(read_env_value WALI_MEDIA_IMAGE "$environment_file")" || { echo 'WALI_MEDIA_IMAGE is missing or duplicated' >&2; exit 65; }
 verifier_image="$(read_env_value WALI_VERIFIER_IMAGE "$environment_file")" || { echo 'WALI_VERIFIER_IMAGE is missing or duplicated' >&2; exit 65; }
-classifier_image="$(read_env_value WALI_CLASSIFIER_IMAGE "$environment_file")" || { echo 'WALI_CLASSIFIER_IMAGE is missing or duplicated' >&2; exit 65; }
-for image in "$media_image" "$verifier_image" "$classifier_image"; do
+classifier_image="$(read_optional_env_value WALI_CLASSIFIER_IMAGE "$environment_file")" || { echo 'WALI_CLASSIFIER_IMAGE is missing or duplicated' >&2; exit 65; }
+configured_environment="$(read_env_value WALI_DEPLOY_ENVIRONMENT "$environment_file")" || { echo 'WALI_DEPLOY_ENVIRONMENT is missing or duplicated' >&2; exit 65; }
+configured_project_ref="$(read_env_value WALI_SUPABASE_PROJECT_REF "$environment_file")" || { echo 'WALI_SUPABASE_PROJECT_REF is missing or duplicated' >&2; exit 65; }
+database_url="$(read_env_value WALI_DATABASE_URL "$environment_file")" || { echo 'WALI_DATABASE_URL is missing or duplicated' >&2; exit 65; }
+storage_url="$(read_env_value WALI_STORAGE_URL "$environment_file")" || { echo 'WALI_STORAGE_URL is missing or duplicated' >&2; exit 65; }
+validate_target_binding "$configured_environment" "$configured_project_ref" "$database_url" "$storage_url"
+for image in "$media_image" "$verifier_image"; do
   [[ "$image" =~ $IMAGE_PATTERN ]] || { echo 'all images must be immutable named sha256 references' >&2; exit 65; }
 done
 validate_sbom "$media_image" "$media_sbom"
 validate_sbom "$verifier_image" "$verifier_sbom"
-validate_sbom "$classifier_image" "$classifier_sbom"
+if [[ -n "$classifier_image" ]]; then
+  [[ "$classifier_image" =~ $IMAGE_PATTERN ]] || { echo 'the classifier image must be an immutable named sha256 reference' >&2; exit 65; }
+  [[ -n "$classifier_sbom" ]] || { echo 'a classifier SBOM is required when classification is enabled' >&2; exit 65; }
+  validate_file "$classifier_sbom"
+  validate_sbom "$classifier_image" "$classifier_sbom"
+elif [[ -n "$classifier_sbom" ]]; then
+  echo 'a classifier SBOM was provided while classification is disabled' >&2
+  exit 65
+fi
 
 release_id="$(file_digest "$worker_binary")"
 release_root="/opt/wali-worker/releases/$release_id"
 if $dry_run; then
+  printf 'would bind deployment to %s/%s\n' "$deployment_environment" "$supabase_project_ref"
   printf 'would install worker at %s/wali-media-worker\n' "$release_root"
   printf 'would install protected environment at /etc/wali-worker/worker.env\n'
-  printf 'would verify three immutable images and SBOMs with cosign\n'
+  if [[ -n "$classifier_image" ]]; then
+    printf 'would verify three immutable images and SBOMs with cosign\n'
+  else
+    printf 'would verify two immutable images and SBOMs with cosign\n'
+  fi
   printf 'would run systemctl restart wali-media-worker.service only\n'
   exit
 fi
 
-database_url="$(read_env_value WALI_DATABASE_URL "$environment_file")" || { echo 'WALI_DATABASE_URL is missing or duplicated' >&2; exit 65; }
 storage_publishable_key="$(read_env_value WALI_STORAGE_PUBLISHABLE_KEY "$environment_file")" || { echo 'WALI_STORAGE_PUBLISHABLE_KEY is missing or duplicated' >&2; exit 65; }
 storage_worker_token="$(read_env_value WALI_STORAGE_WORKER_TOKEN "$environment_file")" || { echo 'WALI_STORAGE_WORKER_TOKEN is missing or duplicated' >&2; exit 65; }
 if [[ "$database_url" =~ ^postgres(ql)?://wali_worker(:|@) ]]; then
@@ -109,7 +181,7 @@ if [[ "$database_url" == *REPLACE_* || "$storage_publishable_key" == *REPLACE_* 
 fi
 
 [[ "$(id -u)" == 0 ]] || { echo 'deployment must run as root on the worker host' >&2; exit 77; }
-test -f /etc/wali-worker/HOST_IS_DEDICATED || { echo 'dedicated-host marker is absent; refusing shared-host mutation' >&2; exit 77; }
+validate_host_binding
 id wali-worker >/dev/null 2>&1 || { echo 'pre-provisioned wali-worker identity is missing' >&2; exit 69; }
 [[ "$(id -un wali-worker)" == wali-worker && "$(id -gn wali-worker)" == wali-worker ]] || { echo 'wali-worker identity is not dedicated' >&2; exit 65; }
 if id -nG wali-worker | tr ' ' '\n' | grep -Eq '^(sudo|wheel|docker|adm)$'; then
@@ -127,20 +199,24 @@ install -d -o root -g wali-worker -m 0750 /etc/wali-worker
 install -d -o wali-worker -g wali-worker -m 0700 /var/lib/wali-worker/attempts /var/lib/wali-worker/containers /var/lib/wali-worker/volumes /run/wali-media-worker
 install -o root -g root -m 0644 "$SCRIPT_ROOT/storage.conf" /etc/wali-worker/storage.conf
 
-for image in "$media_image" "$verifier_image" "$classifier_image"; do
+images=("$media_image" "$verifier_image")
+[[ -z "$classifier_image" ]] || images+=("$classifier_image")
+for image in "${images[@]}"; do
   cosign verify --key "$cosign_key" "$image" >/dev/null
   runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman pull "$image" >/dev/null
   runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman image inspect "$image" >/dev/null
 done
-classifier_label() {
-  runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf \
-    podman image inspect --format "{{ index .Labels \"$1\" }}" "$classifier_image"
-}
-[[ "$(classifier_label com.wali.classifier.production)" == true ]] || { echo 'classifier image is not a verified production build' >&2; exit 65; }
-[[ "$(classifier_label com.wali.classifier.model-id)" == google/siglip-base-patch16-224 ]] || { echo 'classifier model ID differs from the reviewed contract' >&2; exit 65; }
-[[ "$(classifier_label com.wali.classifier.model-revision)" == 7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed ]] || { echo 'classifier model revision differs from the reviewed contract' >&2; exit 65; }
-[[ "$(classifier_label com.wali.classifier.model-digest)" == 2a86b6bf585b3b071c5ccc46a01c18abb08b018dacc868513e592da7bcc9f877 ]] || { echo 'classifier model digest differs from the reviewed contract' >&2; exit 65; }
-[[ "$(classifier_label com.wali.classifier.taxonomy-revision)" == wali-taxonomy-v1 ]] || { echo 'classifier taxonomy differs from the reviewed contract' >&2; exit 65; }
+if [[ -n "$classifier_image" ]]; then
+  classifier_label() {
+    runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf \
+      podman image inspect --format "{{ index .Labels \"$1\" }}" "$classifier_image"
+  }
+  [[ "$(classifier_label com.wali.classifier.production)" == true ]] || { echo 'classifier image is not a verified production build' >&2; exit 65; }
+  [[ "$(classifier_label com.wali.classifier.model-id)" == google/siglip-base-patch16-224 ]] || { echo 'classifier model ID differs from the reviewed contract' >&2; exit 65; }
+  [[ "$(classifier_label com.wali.classifier.model-revision)" == 7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed ]] || { echo 'classifier model revision differs from the reviewed contract' >&2; exit 65; }
+  [[ "$(classifier_label com.wali.classifier.model-digest)" == 2a86b6bf585b3b071c5ccc46a01c18abb08b018dacc868513e592da7bcc9f877 ]] || { echo 'classifier model digest differs from the reviewed contract' >&2; exit 65; }
+  [[ "$(classifier_label com.wali.classifier.taxonomy-revision)" == wali-taxonomy-v1 ]] || { echo 'classifier taxonomy differs from the reviewed contract' >&2; exit 65; }
+fi
 
 install -d -o root -g root -m 0755 /opt/wali-worker /opt/wali-worker/releases "$release_root" /usr/share/doc/wali-worker/sbom
 install -o root -g root -m 0555 "$worker_binary" "$release_root/wali-media-worker"
@@ -150,7 +226,9 @@ install -o root -g root -m 0555 "$SCRIPT_ROOT/verify.sh" /usr/local/sbin/wali-wo
 install -o root -g root -m 0444 "$cosign_key" /etc/wali-worker/cosign.pub
 install -o root -g root -m 0444 "$media_sbom" "/usr/share/doc/wali-worker/sbom/${media_image##*@sha256:}.spdx.json"
 install -o root -g root -m 0444 "$verifier_sbom" "/usr/share/doc/wali-worker/sbom/${verifier_image##*@sha256:}.spdx.json"
-install -o root -g root -m 0444 "$classifier_sbom" "/usr/share/doc/wali-worker/sbom/${classifier_image##*@sha256:}.spdx.json"
+if [[ -n "$classifier_image" ]]; then
+  install -o root -g root -m 0444 "$classifier_sbom" "/usr/share/doc/wali-worker/sbom/${classifier_image##*@sha256:}.spdx.json"
+fi
 install -o root -g root -m 0444 "$SCRIPT_ROOT/../../docs/runbooks/media-worker.md" /usr/share/doc/wali-worker/media-worker.md
 install -o root -g root -m 0444 "$SCRIPT_ROOT/../../docs/runbooks/worker-compromise.md" /usr/share/doc/wali-worker/worker-compromise.md
 

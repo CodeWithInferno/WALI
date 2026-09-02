@@ -86,7 +86,9 @@ export function mapDatabaseError(message: string): EdgeError {
     ["WALI_IDEMPOTENCY_CONFLICT", "idempotency_conflict", 409, false],
     ["WALI_REVISION_MISMATCH", "stale_revision", 409, false],
     ["WALI_AUTH_REQUIRED", "authentication_required", 401, false],
+    ["WALI_AUTH_SUBJECT_CHANGED", "authentication_required", 401, false],
     ["WALI_ACCOUNT_INACTIVE", "account_suspended", 403, false],
+    ["WALI_CREATOR_ROLE_REVOKED", "creator_role_required", 403, false],
     ["WALI_CREATOR_ROLE_REQUIRED", "creator_role_required", 403, false],
     ["WALI_CREATOR_TERMS_REQUIRED", "creator_terms_required", 403, false],
     [

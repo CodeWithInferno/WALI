@@ -56,6 +56,12 @@ crashes and timeouts remain retryable. The generated hostile corpus includes
 empty/truncated containers, spoofed scripts, symlinks, and FIFOs and is valid
 only as evidence for the exact immutable image digest tested.
 
+The offline staging helper removes allowed audio, subtitle, and data tracks by
+bounded video-only stream-copy remux. It must not scale, filter, or encode that
+intermediate; `process-media` remains the sole canonical encoder, followed by
+the independent verifier. Staged results remain `third_party_unverified` and
+must never be promoted merely because media verification passed.
+
 Classification is optional. Without reviewed weights the worker emits
 `classifier_unavailable` and no guesses. A production build must pass
 `WALI_MODEL_IMAGE=registry/repository@sha256:<64-hex-digest>`; that immutable
@@ -81,7 +87,11 @@ tokens, object URLs, creator text, filenames, or claim bodies.
 ## Rebuild
 
 1. Provision a new minimal Ubuntu 26.04 VM with rendered
-   `deploy/worker/cloud-init.yml`.
+   `deploy/worker/cloud-init.yml`. Replace the dedicated-host marker's
+   `REPLACE_ENVIRONMENT` and `REPLACE_PROJECT_REF` values before provisioning;
+   the root-owned marker, protected environment file, and every deploy or
+   rollback command must name the same environment and 20-letter Supabase
+   project ref.
    Confirm SSH keys only, root/password login disabled, security updates active,
    and `wali-worker` has subordinate UID/GID ranges but no privileged groups.
 2. Verify the host is dedicated. Inventory units, listeners, containers,
@@ -97,8 +107,11 @@ tokens, object URLs, creator text, filenames, or claim bodies.
    model revision, verify every listed byte count and digest, preserve its
    Apache-2.0 notice/model-card review, and run the source contract tests.
 4. Copy the release inputs over the management channel without logging the
-   environment file. Run `deploy/worker/deploy.sh --dry-run ...`, review its
-   WALI-only targets, then run the same command as root without `--dry-run`.
+   environment file. Run
+   `deploy/worker/deploy.sh --dry-run --environment staging --supabase-project-ref <ref> ...`,
+   review its WALI-only targets, then run the same command as root without
+   `--dry-run`. The deploy script rejects a database or Storage origin that
+   does not belong to that exact project.
 5. Run `/usr/local/sbin/wali-worker-verify`. It checks the dedicated identity,
    protected secret file, rootless runtime, immutable local images, systemd
    resource controls, absence of TCP/UDP listeners, Unix health/metrics,
@@ -120,7 +133,8 @@ isolated restore drill before passing the deployment gate.
 
 ## Rollback
 
-`sudo deploy/worker/deploy.sh --rollback` atomically swaps the WALI-owned
+`sudo deploy/worker/deploy.sh --rollback --environment staging --supabase-project-ref <ref>`
+atomically swaps the WALI-owned
 `current` and `previous` release links, restarts only
 `wali-media-worker.service`, and runs quick verification. Database migrations,
 Supabase configuration, other systemd units, host networks, and other

@@ -17,6 +17,15 @@ read_env_value() {
   printf '%s' "$value"
 }
 
+read_optional_env_value() {
+  local key=$1 count value
+  count="$(grep -c -E "^${key}=" "$ENV_FILE" || true)"
+  [[ "$count" == 1 ]] || return 1
+  value="$(sed -n -E "s/^${key}=//p" "$ENV_FILE")"
+  [[ ! "$value" =~ [[:cntrl:]] ]] || return 1
+  printf '%s' "$value"
+}
+
 fail() { echo "verification failed: $1" >&2; exit 1; }
 [[ "$(id -u)" == 0 ]] || fail 'run as root'
 id wali-worker >/dev/null 2>&1 || fail 'dedicated identity missing'
@@ -40,21 +49,25 @@ grep -q '^wali_worker_jobs_total ' <<<"$metrics" || fail 'aggregate metrics miss
 if grep -Eqi 'attempt|submission|database|token|secret|password' <<<"$metrics"; then fail 'metrics contain forbidden detail'; fi
 
 runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman info --format '{{.Host.Security.Rootless}}' | grep -qx true || fail 'Podman is not rootless'
-for key in WALI_MEDIA_IMAGE WALI_VERIFIER_IMAGE WALI_CLASSIFIER_IMAGE; do
+for key in WALI_MEDIA_IMAGE WALI_VERIFIER_IMAGE; do
   image="$(read_env_value "$key")" || fail "$key missing"
   [[ "$image" =~ $IMAGE_PATTERN ]] || fail "$key is mutable"
   runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman image inspect "$image" >/dev/null || fail "$key is not present"
 done
-classifier_image="$(read_env_value WALI_CLASSIFIER_IMAGE)"
-classifier_label() {
-  runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf \
-    podman image inspect --format "{{ index .Labels \"$1\" }}" "$classifier_image"
-}
-[[ "$(classifier_label com.wali.classifier.production)" == true ]] || fail 'classifier image is not a verified production build'
-[[ "$(classifier_label com.wali.classifier.model-id)" == google/siglip-base-patch16-224 ]] || fail 'classifier model ID differs from the reviewed contract'
-[[ "$(classifier_label com.wali.classifier.model-revision)" == 7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed ]] || fail 'classifier model revision differs from the reviewed contract'
-[[ "$(classifier_label com.wali.classifier.model-digest)" == 2a86b6bf585b3b071c5ccc46a01c18abb08b018dacc868513e592da7bcc9f877 ]] || fail 'classifier model digest differs from the reviewed contract'
-[[ "$(classifier_label com.wali.classifier.taxonomy-revision)" == wali-taxonomy-v1 ]] || fail 'classifier taxonomy differs from the reviewed contract'
+classifier_image="$(read_optional_env_value WALI_CLASSIFIER_IMAGE)" || fail 'WALI_CLASSIFIER_IMAGE missing'
+if [[ -n "$classifier_image" ]]; then
+  [[ "$classifier_image" =~ $IMAGE_PATTERN ]] || fail 'WALI_CLASSIFIER_IMAGE is mutable'
+  runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman image inspect "$classifier_image" >/dev/null || fail 'WALI_CLASSIFIER_IMAGE is not present'
+  classifier_label() {
+    runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf \
+      podman image inspect --format "{{ index .Labels \"$1\" }}" "$classifier_image"
+  }
+  [[ "$(classifier_label com.wali.classifier.production)" == true ]] || fail 'classifier image is not a verified production build'
+  [[ "$(classifier_label com.wali.classifier.model-id)" == google/siglip-base-patch16-224 ]] || fail 'classifier model ID differs from the reviewed contract'
+  [[ "$(classifier_label com.wali.classifier.model-revision)" == 7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed ]] || fail 'classifier model revision differs from the reviewed contract'
+  [[ "$(classifier_label com.wali.classifier.model-digest)" == 2a86b6bf585b3b071c5ccc46a01c18abb08b018dacc868513e592da7bcc9f877 ]] || fail 'classifier model digest differs from the reviewed contract'
+  [[ "$(classifier_label com.wali.classifier.taxonomy-revision)" == wali-taxonomy-v1 ]] || fail 'classifier taxonomy differs from the reviewed contract'
+fi
 
 if runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman ps -a --format '{{.Names}}' | grep -q '^wali-'; then
   fail 'a supposedly ephemeral WALI sandbox remains'
@@ -77,13 +90,15 @@ set -e
 unlink "$probe_root/output/failure.json" "$probe_root/input/source.bin"
 rmdir "$probe_root/output" "$probe_root/input" "$probe_root"
 
-classifier_root="$(mktemp -d /var/lib/wali-worker/classifier-verify.XXXXXX)"
-install -d -o wali-worker -g wali-worker -m 0700 "$classifier_root/input" "$classifier_root/output"
-set +e
-runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman run --rm --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --userns=keep-id --pids-limit=32 --cpus=1 --memory=1g --memory-swap=1g --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=67108864 --mount="type=bind,src=$classifier_root/input,dst=/work/input,ro=true" --mount="type=bind,src=$classifier_root/output,dst=/work/output,rw=true" "$classifier_image" >/dev/null 2>&1
-classifier_status=$?
-set -e
-[[ "$classifier_status" != 0 && "$(jq -r .safe_code "$classifier_root/output/failure.json")" == invalid_request ]] || fail 'networkless classifier containment probe failed'
-unlink "$classifier_root/output/failure.json"
-rmdir "$classifier_root/output" "$classifier_root/input" "$classifier_root"
+if [[ -n "$classifier_image" ]]; then
+  classifier_root="$(mktemp -d /var/lib/wali-worker/classifier-verify.XXXXXX)"
+  install -d -o wali-worker -g wali-worker -m 0700 "$classifier_root/input" "$classifier_root/output"
+  set +e
+  runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman run --rm --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --userns=keep-id --pids-limit=32 --cpus=1 --memory=1g --memory-swap=1g --tmpfs=/tmp:rw,noexec,nosuid,nodev,size=67108864 --mount="type=bind,src=$classifier_root/input,dst=/work/input,ro=true" --mount="type=bind,src=$classifier_root/output,dst=/work/output,rw=true" "$classifier_image" >/dev/null 2>&1
+  classifier_status=$?
+  set -e
+  [[ "$classifier_status" != 0 && "$(jq -r .safe_code "$classifier_root/output/failure.json")" == invalid_request ]] || fail 'networkless classifier containment probe failed'
+  unlink "$classifier_root/output/failure.json"
+  rmdir "$classifier_root/output" "$classifier_root/input" "$classifier_root"
+fi
 echo 'WALI worker full verification passed'

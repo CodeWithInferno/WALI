@@ -5,6 +5,68 @@ import OSLog
 import WALICatalogRuntime
 import WALIUI
 
+private actor CreatorRequestTimeoutRace<Value: Sendable> {
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var operationTask: Task<Void, Never>?
+    private var timeoutTask: Task<Void, Never>?
+    private var wasCancelledBeforeStarting = false
+
+    func run(
+        duration: Duration,
+        operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        try Task.checkCancellation()
+        return try await withCheckedThrowingContinuation { continuation in
+            guard !wasCancelledBeforeStarting else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+            self.continuation = continuation
+            operationTask = Task {
+                do {
+                    resolve(.success(try await operation()))
+                } catch {
+                    resolve(.failure(error))
+                }
+            }
+            timeoutTask = Task {
+                do {
+                    try await Task.sleep(for: duration)
+                    resolve(.failure(CatalogRemoteError(
+                        code: "request_timed_out",
+                        safeMessage: nil,
+                        retryable: true
+                    )))
+                } catch is CancellationError {
+                    return
+                } catch {
+                    resolve(.failure(error))
+                }
+            }
+        }
+    }
+
+    func cancel() {
+        guard continuation != nil else {
+            wasCancelledBeforeStarting = true
+            return
+        }
+        resolve(.failure(CancellationError()))
+    }
+
+    private func resolve(_ result: Result<Value, Error>) {
+        guard let continuation else { return }
+        self.continuation = nil
+        let operationTask = self.operationTask
+        let timeoutTask = self.timeoutTask
+        self.operationTask = nil
+        self.timeoutTask = nil
+        operationTask?.cancel()
+        timeoutTask?.cancel()
+        continuation.resume(with: result)
+    }
+}
+
 public enum MarketplaceCreatorAccessState: Sendable, Equatable {
     case idle
     case loading
@@ -134,6 +196,7 @@ public final class MarketplaceCoordinator {
     private let securityStore: CatalogSecurityStateStore?
     private let installHandler: (@MainActor (PreparedCatalogInstall) async throws -> Void)?
     private let securityHandler: (@MainActor (CatalogSecuritySnapshot) async throws -> Void)?
+    private let creatorRequestTimeout: Duration
     private var homeGeneration: UInt64 = 0
     private var browseGeneration: UInt64 = 0
     private var detailGeneration: UInt64 = 0
@@ -173,6 +236,12 @@ public final class MarketplaceCoordinator {
         case report
     }
 
+    private struct CreatorAcceptanceResult: Sendable {
+        let authorization: CreatorAuthorizationSnapshot
+        let metadata: CreatorMetadata
+        let moderationMetadata: ModerationMetadata?
+    }
+
     public init(
         model: WALIMarketplaceModel = WALIMarketplaceModel(),
         gateway: (any CatalogGateway)? = nil,
@@ -189,7 +258,8 @@ public final class MarketplaceCoordinator {
         presentationMediaCache: (any CatalogPresentationMediaCaching)? = nil,
         securityStore: CatalogSecurityStateStore? = nil,
         installHandler: (@MainActor (PreparedCatalogInstall) async throws -> Void)? = nil,
-        securityHandler: (@MainActor (CatalogSecuritySnapshot) async throws -> Void)? = nil
+        securityHandler: (@MainActor (CatalogSecuritySnapshot) async throws -> Void)? = nil,
+        creatorRequestTimeout: Duration = .seconds(15)
     ) {
         self.model = model
         self.gateway = gateway
@@ -212,6 +282,7 @@ public final class MarketplaceCoordinator {
         self.securityStore = securityStore
         self.installHandler = installHandler
         self.securityHandler = securityHandler
+        self.creatorRequestTimeout = creatorRequestTimeout
     }
 
     public static func configured(
@@ -222,7 +293,9 @@ public final class MarketplaceCoordinator {
         guard let environment = try? CatalogEnvironment.from(bundle: bundle) else {
             return MarketplaceCoordinator()
         }
-        let gateway = SupabaseCatalogGateway(environment: environment)
+        guard let gateway = try? SupabaseCatalogGateway(environment: environment) else {
+            return MarketplaceCoordinator()
+        }
         var uploadHosts = environment.approvedCDNHosts
         if let supabaseHost = environment.supabaseURL.host { uploadHosts.insert(supabaseHost) }
         let uploadTransport = try? URLSessionCreatorUploadTransport(approvedHosts: uploadHosts)
@@ -533,34 +606,50 @@ public final class MarketplaceCoordinator {
     public func acceptCreatorTerms() {
         guard case let .signedIn(userID) = model.accountState,
               let creatorAuthorizationGateway,
-              let version = creatorContext.metadata?.currentCreatorTermsVersion
+              let version = creatorContext.metadata?.currentCreatorTermsVersion,
+              CreatorTermsDocument.supported(version: version) != nil
         else { return }
         creatorTask?.cancel()
         creatorContext.beginAcceptingTerms()
+        let moderationGateway = self.moderationGateway
         creatorTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let authorization = try await creatorAuthorizationGateway.acceptCreatorTerms(
-                    version: version,
-                    idempotencyKey: UUID().uuidString.lowercased()
-                )
-                let metadata = try await creatorAuthorizationGateway.creatorMetadata()
-                let moderationMetadata: ModerationMetadata?
-                if authorization.canAccessModeration(), let moderationGateway {
-                    moderationMetadata = try await moderationGateway.moderationMetadata()
-                } else {
-                    moderationMetadata = nil
+                let result = try await Self.withTimeout(creatorRequestTimeout) {
+                    let authorization = try await creatorAuthorizationGateway.acceptCreatorTerms(
+                        expectedSubjectID: userID,
+                        version: version,
+                        idempotencyKey: UUID().uuidString.lowercased()
+                    )
+                    let metadata = try await creatorAuthorizationGateway.creatorMetadata()
+                    let moderationMetadata: ModerationMetadata?
+                    if authorization.canAccessModeration(), let moderationGateway {
+                        moderationMetadata = try await moderationGateway.moderationMetadata()
+                    } else {
+                        moderationMetadata = nil
+                    }
+                    return CreatorAcceptanceResult(
+                        authorization: authorization,
+                        metadata: metadata,
+                        moderationMetadata: moderationMetadata
+                    )
                 }
                 try Task.checkCancellation()
                 guard case let .signedIn(currentUserID) = model.accountState,
-                      currentUserID == userID,
-                      authorization.subjectID == userID,
-                      authorization.currentCreatorTermsVersion == metadata.currentCreatorTermsVersion
+                      currentUserID == userID
                 else { return }
+                guard result.authorization.subjectID == userID,
+                      result.authorization.currentCreatorTermsVersion == version,
+                      result.authorization.currentCreatorTermsVersion == result.metadata.currentCreatorTermsVersion,
+                      result.authorization.acceptedCreatorTermsVersion == version
+                else {
+                    creatorContext.fail()
+                    return
+                }
                 creatorContext.apply(
-                    authorization: authorization,
-                    metadata: metadata,
-                    moderationMetadata: moderationMetadata
+                    authorization: result.authorization,
+                    metadata: result.metadata,
+                    moderationMetadata: result.moderationMetadata
                 )
             } catch is CancellationError {
                 return
@@ -1127,27 +1216,39 @@ public final class MarketplaceCoordinator {
         }
         creatorTask?.cancel()
         creatorContext.beginLoading()
+        let moderationGateway = self.moderationGateway
         creatorTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let authorization = try await creatorAuthorizationGateway.authorizationSnapshot()
-                let metadata = try await creatorAuthorizationGateway.creatorMetadata()
-                let moderationMetadata: ModerationMetadata?
-                if authorization.canAccessModeration(), let moderationGateway {
-                    moderationMetadata = try await moderationGateway.moderationMetadata()
-                } else {
-                    moderationMetadata = nil
+                let result = try await Self.withTimeout(creatorRequestTimeout) {
+                    let authorization = try await creatorAuthorizationGateway.authorizationSnapshot()
+                    let metadata = try await creatorAuthorizationGateway.creatorMetadata()
+                    let moderationMetadata: ModerationMetadata?
+                    if authorization.canAccessModeration(), let moderationGateway {
+                        moderationMetadata = try await moderationGateway.moderationMetadata()
+                    } else {
+                        moderationMetadata = nil
+                    }
+                    return CreatorAcceptanceResult(
+                        authorization: authorization,
+                        metadata: metadata,
+                        moderationMetadata: moderationMetadata
+                    )
                 }
                 try Task.checkCancellation()
                 guard case let .signedIn(currentUserID) = model.accountState,
-                      currentUserID == expectedUserID,
-                      authorization.subjectID == expectedUserID,
-                      authorization.currentCreatorTermsVersion == metadata.currentCreatorTermsVersion
+                      currentUserID == expectedUserID
                 else { return }
+                guard result.authorization.subjectID == expectedUserID,
+                      result.authorization.currentCreatorTermsVersion == result.metadata.currentCreatorTermsVersion
+                else {
+                    creatorContext.fail()
+                    return
+                }
                 creatorContext.apply(
-                    authorization: authorization,
-                    metadata: metadata,
-                    moderationMetadata: moderationMetadata
+                    authorization: result.authorization,
+                    metadata: result.metadata,
+                    moderationMetadata: result.moderationMetadata
                 )
             } catch is CancellationError {
                 return
@@ -1393,6 +1494,18 @@ public final class MarketplaceCoordinator {
         if let download = error as? CatalogDownloadError { return download.rawValue }
         if let media = error as? CatalogPresentationMediaCacheError { return media.rawValue }
         return "internal_error"
+    }
+
+    private nonisolated static func withTimeout<Value: Sendable>(
+        _ duration: Duration,
+        operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let race = CreatorRequestTimeoutRace<Value>()
+        return try await withTaskCancellationHandler {
+            try await race.run(duration: duration, operation: operation)
+        } onCancel: {
+            Task { await race.cancel() }
+        }
     }
 
     static func recordInstallWithRetry(

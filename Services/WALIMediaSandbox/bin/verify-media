@@ -64,7 +64,7 @@ jq -e '
 
 verify_artifact() {
   local role=$1 relative_path=$2 expected_type=$3 expected_codec=$4
-  local file="$INPUT/$relative_path" count expected_digest expected_bytes expected_width expected_height expected_duration expected_numerator expected_denominator expected_pixel expected_color probe
+  local file="$INPUT/$relative_path" count expected_digest expected_bytes expected_width expected_height expected_duration expected_numerator expected_denominator expected_pixel expected_color probe observed_numerator observed_denominator
   count="$(jq --arg role "$role" '[.artifacts[] | select(.role == $role)] | length' "$MEDIA_CLAIM")"
   [[ "$count" -eq 1 ]] || emit_failure artifact_missing
   [[ "$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .relative_path' "$MEDIA_CLAIM")" == "$relative_path" ]] || emit_failure artifact_mismatch
@@ -91,8 +91,14 @@ verify_artifact() {
   [[ "$(jq -r --arg role "$role" '.artifacts[] | select(.role == $role) | .has_audio' "$MEDIA_CLAIM")" == false ]] || emit_failure unsafe_track_layout
   if [[ "$expected_type" == video/mp4 ]]; then
     [[ "$(jq -r '((.format.duration | tonumber) * 1000 | floor)' "$probe")" == "$expected_duration" ]] || emit_failure artifact_mismatch
-    [[ "$(jq -r '.streams[0].avg_frame_rate | split("/")[0] | tonumber' "$probe")" == "$expected_numerator" ]] || emit_failure artifact_mismatch
-    [[ "$(jq -r '.streams[0].avg_frame_rate | split("/")[1] | tonumber' "$probe")" == "$expected_denominator" ]] || emit_failure artifact_mismatch
+    observed_numerator="$(jq -r '.streams[0].avg_frame_rate | split("/")[0] | tonumber' "$probe")"
+    observed_denominator="$(jq -r '.streams[0].avg_frame_rate | split("/")[1] | tonumber' "$probe")"
+    if (( observed_numerator > 120000 || observed_denominator > 1001 )); then
+      observed_numerator="$(awk -v n="$observed_numerator" -v d="$observed_denominator" 'BEGIN { printf "%d", (n / d) + 0.5 }')"
+      observed_denominator=1
+    fi
+    [[ "$observed_numerator" == "$expected_numerator" ]] || emit_failure artifact_mismatch
+    [[ "$observed_denominator" == "$expected_denominator" ]] || emit_failure artifact_mismatch
     [[ "$expected_pixel" == yuv420p && "$expected_color" == bt709 ]] || emit_failure unsafe_track_layout
   else
     [[ "$expected_duration" == 0 && "$expected_numerator" == 0 && "$expected_denominator" == 1 ]] || emit_failure artifact_mismatch

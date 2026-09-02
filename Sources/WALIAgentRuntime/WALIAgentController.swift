@@ -150,7 +150,13 @@ public final class WALIAgentController: WALIUIActionHandling {
                     idempotencyKey: idempotencyKey,
                     acceptedRevision: revision
                 )
-                await self?.updateStorageUsage()
+                // The catalog handler runs while AgentCommandRouter owns its
+                // transaction gate. Updating storage usage synchronously here
+                // would re-enter the router and wait forever on that same gate.
+                // Defer accounting until the install transaction has committed.
+                Task { @MainActor [weak self] in
+                    await self?.updateStorageUsage()
+                }
                 return item
             },
             catalogRevocationHandler: { [weak self] update in
