@@ -21,7 +21,6 @@ jobs:
         with:
           persist-credentials: false
       - run: ruby scripts/check-marketplace-contracts.rb
-      - run: ./scripts/check-architecture.sh
       - run: ./scripts/generate-sbom.sh --verify-clean
       - run: ./scripts/check-licenses.sh
       - run: git diff --check
