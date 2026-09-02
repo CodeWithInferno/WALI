@@ -2,7 +2,7 @@
 
 ARG WALI_MODEL_IMAGE=empty-model
 
-FROM --platform=linux/amd64 ghcr.io/astral-sh/uv@sha256:db99140470350437166de1fc646323ecb59e4d99d7857d0baf429a7b4a9523f3 AS uv
+FROM --platform=linux/amd64 ghcr.io/astral-sh/uv@sha256:8b940d3a9d65bed080436972241af2e21c84b5e8c9193f7014ed71479ee795ff AS uv
 
 FROM --platform=linux/amd64 python:3.12.11-slim-bookworm@sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49 AS dependencies
 COPY --from=uv /uv /usr/local/bin/uv
