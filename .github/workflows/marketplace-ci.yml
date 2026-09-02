@@ -26,12 +26,16 @@ jobs:
       - run: git diff --check
 
   swift:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Select the verified Xcode toolchain
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.2.app
+          xcrun swift --version | grep -E 'Swift version 6\.2([. ]|$)'
       - name: Install pinned XcodeGen
         env:
           XCODEGEN_URL: https://github.com/yonaskolb/XcodeGen/releases/download/2.44.1/xcodegen.zip
