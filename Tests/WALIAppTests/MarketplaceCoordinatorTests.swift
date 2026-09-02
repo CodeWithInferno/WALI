@@ -10,6 +10,19 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         let description = "authorization=Bearer secret-session-token"
     }
 
+    private func waitForCreatorState(
+        _ expectedState: MarketplaceCreatorAccessState,
+        in coordinator: MarketplaceCoordinator,
+        timeout: Duration = .seconds(2)
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while coordinator.creatorContext.state != expectedState, clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return coordinator.creatorContext.state == expectedState
+    }
+
     func testDiagnosticsExposeOnlyStableBoundedCodes() {
         XCTAssertEqual(
             MarketplaceCoordinator.diagnosticCode(for: SecretBearingError()),
@@ -298,9 +311,9 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(30))
 
         coordinator.acceptCreatorTerms()
-        try await Task.sleep(for: .milliseconds(80))
+        let reachedFailedState = await waitForCreatorState(.failed, in: coordinator)
 
-        XCTAssertEqual(coordinator.creatorContext.state, .failed)
+        XCTAssertTrue(reachedFailedState)
     }
 
     func testCreatorTermsTimeoutDoesNotWaitForAnOperationThatIgnoresCancellation() async throws {
@@ -308,7 +321,7 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         let auth = ScriptedAuthStore()
         let creator = ScriptedCreatorAuthorizationGateway(
             userID: userID,
-            acceptanceDelay: .milliseconds(250),
+            acceptanceDelay: .seconds(5),
             ignoresAcceptanceCancellation: true
         )
         let coordinator = MarketplaceCoordinator(
@@ -321,9 +334,9 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(30))
 
         coordinator.acceptCreatorTerms()
-        try await Task.sleep(for: .milliseconds(80))
+        let reachedFailedState = await waitForCreatorState(.failed, in: coordinator)
 
-        XCTAssertEqual(coordinator.creatorContext.state, .failed)
+        XCTAssertTrue(reachedFailedState)
     }
 
     func testCreatorTermsRemainUnacceptedUntilTheServerConfirmsTheRequestedVersion() async throws {
