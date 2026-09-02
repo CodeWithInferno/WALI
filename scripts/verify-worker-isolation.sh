@@ -20,10 +20,18 @@ grep -q 'com.wali.classifier.model-digest' "$DEPLOY_ROOT/deploy.sh"
 grep -q 'com.wali.classifier.model-digest' "$DEPLOY_ROOT/verify.sh"
 
 readonly CONTRACT_ROOT="$(mktemp -d)"
+readonly TEST_PROJECT_REF=abcdefghijklmnopqrst
+readonly TEST_CLASSIFIER_DIGEST="$(printf 'c%.0s' {1..64})"
 trap 'chmod -R u+rwX -- "$CONTRACT_ROOT" 2>/dev/null || true' EXIT
 printf '#!/bin/sh\nexit 0\n' >"$CONTRACT_ROOT/wali-media-worker"
 chmod 0555 "$CONTRACT_ROOT/wali-media-worker"
 cp "$DEPLOY_ROOT/worker.env.example" "$CONTRACT_ROOT/worker.env"
+sed -i.bak \
+  -e "s/REPLACE_PROJECT_REF/$TEST_PROJECT_REF/g" \
+  -e 's/^WALI_DEPLOY_ENVIRONMENT=.*/WALI_DEPLOY_ENVIRONMENT=staging/' \
+  -e "s|^WALI_CLASSIFIER_IMAGE=.*|WALI_CLASSIFIER_IMAGE=registry.example.invalid/wali/classifier@sha256:$TEST_CLASSIFIER_DIGEST|" \
+  "$CONTRACT_ROOT/worker.env"
+unlink "$CONTRACT_ROOT/worker.env.bak"
 chmod 0600 "$CONTRACT_ROOT/worker.env"
 for item in media:a verifier:b classifier:c; do
   name="${item%%:*}"; character="${item##*:}"
@@ -31,6 +39,7 @@ for item in media:a verifier:b classifier:c; do
 done
 printf 'test public key\n' >"$CONTRACT_ROOT/cosign.pub"
 deploy_output="$($DEPLOY_ROOT/deploy.sh --dry-run \
+  --environment staging --supabase-project-ref "$TEST_PROJECT_REF" \
   --worker-binary "$CONTRACT_ROOT/wali-media-worker" --environment-file "$CONTRACT_ROOT/worker.env" \
   --media-sbom "$CONTRACT_ROOT/media.spdx.json" --verifier-sbom "$CONTRACT_ROOT/verifier.spdx.json" \
   --classifier-sbom "$CONTRACT_ROOT/classifier.spdx.json" --cosign-key "$CONTRACT_ROOT/cosign.pub")"
@@ -43,7 +52,8 @@ if grep -q 'REPLACE_WITH_' <<<"$deploy_output"; then
 fi
 sed 's#@sha256:[a-f0-9]\{64\}#:latest#' "$CONTRACT_ROOT/worker.env" >"$CONTRACT_ROOT/mutable.env"
 chmod 0600 "$CONTRACT_ROOT/mutable.env"
-if "$DEPLOY_ROOT/deploy.sh" --dry-run --worker-binary "$CONTRACT_ROOT/wali-media-worker" \
+if "$DEPLOY_ROOT/deploy.sh" --dry-run --environment staging --supabase-project-ref "$TEST_PROJECT_REF" \
+  --worker-binary "$CONTRACT_ROOT/wali-media-worker" \
   --environment-file "$CONTRACT_ROOT/mutable.env" --media-sbom "$CONTRACT_ROOT/media.spdx.json" \
   --verifier-sbom "$CONTRACT_ROOT/verifier.spdx.json" --classifier-sbom "$CONTRACT_ROOT/classifier.spdx.json" \
   --cosign-key "$CONTRACT_ROOT/cosign.pub" >/dev/null 2>&1; then

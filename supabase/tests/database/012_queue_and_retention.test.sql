@@ -86,7 +86,11 @@ select lives_ok(
 );
 
 select results_eq(
-  $$select count(*)::bigint from pgmq.q_wali_backup_verification$$,
+  $$select count(*)::bigint from pgmq.q_wali_backup_verification message
+     where message.message ->> 'run_id' = (
+       select run.id::text from wali.backup_verification_runs run
+        where run.scheduled_for = '2026-09-03T00:00:00Z'::timestamptz
+     )$$,
   array[1::bigint],
   'backup verification queue receives one deterministic local job'
 );

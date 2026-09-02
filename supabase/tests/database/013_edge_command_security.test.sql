@@ -1,6 +1,6 @@
 begin;
 
-select plan(61);
+select plan(67);
 
 select has_function(
   'public', 'record_install_v1',
@@ -47,6 +47,77 @@ select results_eq(
 );
 
 select set_config('request.jwt.claim.role', 'service_role', true);
+
+select has_function(
+  'public', 'wali_edge_accept_creator_terms_v1',
+  array['uuid', 'uuid', 'uuid', 'text', 'text'],
+  'creator terms acceptance requires the initiating subject'
+);
+
+select throws_ok(
+  $$select public.wali_edge_accept_creator_terms_v1(
+      '00000000-0000-4000-8000-000000000003',
+      '00000000-0000-4000-8000-000000000002',
+      '93000000-0000-4000-8000-000000000001',
+      'accept_creator_terms_subject_change_01',
+      '2026-09-01'
+    )$$,
+  'P0001',
+  'WALI_AUTH_SUBJECT_CHANGED',
+  'creator terms acceptance rejects an authenticated account switch'
+);
+
+select is(
+  (select count(*) from wali.terms_acceptances
+    where user_id = '00000000-0000-4000-8000-000000000003'
+      and document_kind = 'creator_terms'
+      and document_version = '2026-09-01'),
+  0::bigint,
+  'rejected account switch does not record creator terms acceptance'
+);
+
+insert into wali.role_grants (
+  user_id, role, granted_by, revoked_by, revoked_at, reason, revision
+) values (
+  '00000000-0000-0000-0000-000000000003',
+  'creator',
+  '00000000-0000-0000-0000-000000000001',
+  '00000000-0000-0000-0000-000000000001',
+  '2026-09-01T00:00:00Z',
+  'revoked creator regression fixture',
+  1
+);
+
+select throws_ok(
+  $$select public.wali_edge_accept_creator_terms_v1(
+      '00000000-0000-0000-0000-000000000003',
+      '00000000-0000-0000-0000-000000000003',
+      '93000000-0000-4000-8000-000000000002',
+      'accept_creator_terms_revoked_role_01',
+      '2026-09-01'
+    )$$,
+  'P0001',
+  'WALI_CREATOR_ROLE_REVOKED',
+  'accepting terms cannot restore a historically revoked creator role'
+);
+
+select is(
+  (select count(*) from wali.role_grants
+    where user_id = '00000000-0000-0000-0000-000000000003'
+      and role = 'creator'
+      and revoked_at is null),
+  0::bigint,
+  'rejected creator self-restoration leaves no active grant'
+);
+
+select is(
+  (select count(*) from wali.terms_acceptances
+    where user_id = '00000000-0000-0000-0000-000000000003'
+      and document_kind = 'creator_terms'
+      and document_version = '2026-09-01'),
+  0::bigint,
+  'rejected creator self-restoration does not record terms acceptance'
+);
 
 savepoint revocation_document_publication_regression;
 

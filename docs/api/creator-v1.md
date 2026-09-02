@@ -17,6 +17,35 @@ Every operation requires an authenticated active account, a current unrevoked
 authorization. An Apple/JWT claim may affect UI presentation but cannot replace
 the database checks.
 
+### Accepting Creator Terms
+
+`creator-command` accepts the current Creator Terms only through this exact
+request shape:
+
+```json
+{"api_version":"creator.v1","request_id":"uuid","idempotency_key":"16-to-64-chars","action":"accept_terms","payload":{"expected_subject_id":"uuid","creator_terms_version":"2026-09-01"}}
+```
+
+`expected_subject_id` is mandatory and is the canonical UUID of the account
+that initiated the review-and-consent flow. It is a binding assertion, not an
+authority claim: the Edge Function independently authenticates the request and
+rejects it unless the authenticated actor is exactly the expected subject. The
+service-only database command repeats the same comparison before recording an
+acceptance or granting creator access. The terms version must exactly match the
+server-advertised current version, and the client unlocks Creator Studio only
+after the server confirms that same subject and version.
+
+Accepting terms never overrides a creator-role revocation. When the latest
+creator grant is revoked, self-enrollment fails closed without recording terms
+or creating a replacement grant. Restoring access requires a separate,
+explicit administrator role-grant action with AAL2 authorization.
+
+This is an intentionally incompatible tightening of the earlier acceptance
+payload. The database migration, Edge Function, and native app require a
+coordinated rollout. Keep creator enrollment and production uploads disabled
+during rollout; apply the database migration, deploy and verify the Edge
+Function, then distribute the matching app before enabling the feature.
+
 Submission transitions are:
 
 ```text

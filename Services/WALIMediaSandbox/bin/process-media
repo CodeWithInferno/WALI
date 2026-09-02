@@ -144,6 +144,14 @@ write_artifact_record() {
     duration="$(jq -r '((.format.duration | tonumber) * 1000 | floor)' "$probe")"
     numerator="$(jq -r '.streams[0].avg_frame_rate | split("/")[0] | tonumber' "$probe")"
     denominator="$(jq -r '.streams[0].avg_frame_rate | split("/")[1] | tonumber' "$probe")"
+    # Some MP4 muxers expose an equivalent average rate using a very large
+    # time-base fraction (for example 2700000/89999 for roughly 30 fps).
+    # Catalog storage deliberately bounds the rational representation, so use
+    # an integral equivalent when the probed fraction exceeds those bounds.
+    if (( numerator > 120000 || denominator > 1001 )); then
+      numerator="$(awk -v n="$numerator" -v d="$denominator" 'BEGIN { printf "%d", (n / d) + 0.5 }')"
+      denominator=1
+    fi
   else
     duration=0 numerator=0 denominator=1
   fi

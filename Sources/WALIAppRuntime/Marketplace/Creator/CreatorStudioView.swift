@@ -13,6 +13,7 @@ public struct CreatorStudioView: View {
     private let editor: (CreatorSubmission) -> AnyView
 
     @State private var isImporting = false
+    @State private var isReviewingTerms = false
 
     public init(
         model: CreatorStudioModel,
@@ -59,7 +60,24 @@ public struct CreatorStudioView: View {
             guard case let .success(urls) = result, let url = urls.first else { return }
             beginUpload(url)
         }
-        .task { await model.loadSubmissions() }
+        .sheet(isPresented: $isReviewingTerms) {
+            if let document = supportedTermsDocument {
+                CreatorTermsReviewView(
+                    document: document,
+                    accessState: accessState,
+                    onAccept: onAcceptTerms,
+                    onCancel: { isReviewingTerms = false }
+                )
+            }
+        }
+        .onChange(of: accessState) { _, newState in
+            if newState == .ready, model.canUseCreatorStudio {
+                isReviewingTerms = false
+            }
+        }
+        .task(id: model.canUseCreatorStudio) {
+            await model.loadSubmissions()
+        }
     }
 
     private var creatorAccess: some View {
@@ -68,14 +86,18 @@ public struct CreatorStudioView: View {
         } description: {
             if accessState == .failed {
                 Text("Creator access could not be loaded. Refresh your account and try again.")
-            } else if canAcceptTerms {
+            } else if canReviewTerms {
                 Text("Review and accept the current Creator Terms to enable publishing for this account.")
+            } else if canAcceptTerms {
+                Text("This version of WALI cannot display the current Creator Terms. Update WALI before enabling Creator Studio.")
             } else {
                 Text("This account does not currently have an active creator grant.")
             }
         } actions: {
-            if canAcceptTerms {
-                Button("Accept Creator Terms & Enable Studio", action: onAcceptTerms)
+            if canReviewTerms {
+                Button("Review Creator Terms") {
+                    isReviewingTerms = true
+                }
                     .buttonStyle(.borderedProminent)
                     .disabled(accessState == .acceptingTerms)
             }
@@ -90,6 +112,14 @@ public struct CreatorStudioView: View {
         return authorization.accountIsActive
             && !authorization.currentCreatorTermsVersion.isEmpty
             && authorization.acceptedCreatorTermsVersion != authorization.currentCreatorTermsVersion
+    }
+
+    private var canReviewTerms: Bool {
+        canAcceptTerms && supportedTermsDocument != nil
+    }
+
+    private var supportedTermsDocument: CreatorTermsDocument? {
+        CreatorTermsDocument.supported(version: model.authorization.currentCreatorTermsVersion)
     }
 
     private var content: some View {

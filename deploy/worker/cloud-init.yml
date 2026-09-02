@@ -42,7 +42,8 @@ write_files:
     owner: root:root
     permissions: '0444'
     content: |
-      Provisioned exclusively for the WALI marketplace worker.
+      WALI_DEPLOY_ENVIRONMENT=REPLACE_ENVIRONMENT
+      WALI_SUPABASE_PROJECT_REF=REPLACE_PROJECT_REF
 
 runcmd:
   - [sysctl, --system]

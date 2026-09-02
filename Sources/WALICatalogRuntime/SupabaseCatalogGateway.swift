@@ -15,11 +15,17 @@ public actor SupabaseCatalogGateway:
     private let remoteURLPolicy: CatalogRemoteURLPolicy
     private let accountExportDownloader: AccountExportDownloader
 
-    public init(environment: CatalogEnvironment) {
+    public init(environment: CatalogEnvironment) throws {
         let session = CatalogURLSessionFactory.redirectRejecting()
+        let keychainService = try CatalogAuthKeychainNamespace.service(
+            bundleIdentifier: Bundle.main.bundleIdentifier,
+            supabaseURL: environment.supabaseURL
+        )
         let options = SupabaseClientOptions(
             auth: .init(
-                storage: KeychainLocalStorage(service: "com.wali.marketplace.auth"),
+                storage: KeychainLocalStorage(
+                    service: keychainService
+                ),
                 storageKey: "wali.marketplace.session",
                 autoRefreshToken: true,
                 emitLocalSessionAsInitialSession: true
@@ -31,7 +37,7 @@ public actor SupabaseCatalogGateway:
             supabaseKey: environment.publishableKey,
             options: options
         )
-        let remoteURLPolicy = try! CatalogRemoteURLPolicy(
+        let remoteURLPolicy = try CatalogRemoteURLPolicy(
             supabaseURL: environment.supabaseURL,
             approvedCDNHosts: environment.approvedCDNHosts
         )
@@ -418,10 +424,13 @@ public actor SupabaseCatalogGateway:
     }
 
     public func acceptCreatorTerms(
+        expectedSubjectID: String,
         version: String,
         idempotencyKey: String
     ) async throws -> CreatorAuthorizationSnapshot {
-        guard isBoundedCreatorToken(version, maximum: 64) else {
+        guard canonicalUUID(expectedSubjectID) != nil,
+              isBoundedCreatorToken(version, maximum: 64)
+        else {
             throw CreatorContractError.invalidRequest
         }
         try validateIdempotencyKey(idempotencyKey)
@@ -431,9 +440,16 @@ public actor SupabaseCatalogGateway:
             requestID: requestID,
             idempotencyKey: idempotencyKey,
             action: "accept_terms",
-            payload: .acceptTerms(version: version)
+            payload: .acceptTerms(
+                expectedSubjectID: expectedSubjectID,
+                version: version
+            )
         )
         try await safely {
+            let sessionBefore = try await client.auth.session
+            guard sessionBefore.user.id.uuidString.lowercased() == expectedSubjectID,
+                  sessionBefore.expiresAt > Date.now.timeIntervalSince1970
+            else { throw CatalogMappingError.invalidResponse }
             let envelope: CatalogFunctionEnvelope<CreatorEnrollmentResponseDTO> = try await client.functions.invoke(
                 "creator-command",
                 options: FunctionInvokeOptions(body: body)
@@ -1844,12 +1860,13 @@ private struct CreatorCommandRequestDTO: Encodable, Sendable {
 }
 
 private enum CreatorCommandPayloadDTO: Encodable, Sendable {
-    case acceptTerms(version: String)
+    case acceptTerms(expectedSubjectID: String, version: String)
     case saveDraft(CreatorSaveDraftRequest)
     case withdraw(CreatorWithdrawRequest)
 
     enum CodingKeys: String, CodingKey {
         case title, description
+        case expectedSubjectID = "expected_subject_id"
         case creatorTermsVersion = "creator_terms_version"
         case submissionID = "submission_id"
         case expectedRevision = "expected_revision"
@@ -1868,7 +1885,8 @@ private enum CreatorCommandPayloadDTO: Encodable, Sendable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .acceptTerms(version):
+        case let .acceptTerms(expectedSubjectID, version):
+            try container.encode(expectedSubjectID, forKey: .expectedSubjectID)
             try container.encode(version, forKey: .creatorTermsVersion)
         case let .withdraw(request):
             try container.encode(request.submissionID.uuidString.lowercased(), forKey: .submissionID)
