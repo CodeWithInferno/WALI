@@ -28,6 +28,7 @@ public actor RuntimeStore {
                 throw StorageError.corruptState(error.localizedDescription)
             }
             try validateLoadedState()
+            try migrateLoadedStateIfNeeded()
         } else {
             state = RuntimeSnapshot()
             try persist()
@@ -40,8 +41,74 @@ public actor RuntimeStore {
         return state
     }
 
+    public func installedCatalogRecord(
+        releaseID: String,
+        manifestDigest: ContentDigest
+    ) throws -> CommittedLibraryRecord? {
+        guard let record = try snapshot().library.first(where: {
+            $0.item.origin == .catalog && $0.item.catalogOrigin?.releaseID == releaseID
+        }) else { return nil }
+        guard record.item.catalogOrigin?.manifestDigest == manifestDigest else {
+            throw StorageError.catalogInstallConflict
+        }
+        for artifact in record.artifacts {
+            let expected = try paths.objectURL(
+                forSHA256: artifact.digest.value,
+                mediaKind: artifact.mediaKind
+            )
+            guard expected.standardizedFileURL == artifact.objectURL.standardizedFileURL else {
+                throw StorageError.missingPublishedArtifact
+            }
+            try ContentStorage.requireContainedRegularFile(expected, under: paths.objects)
+            guard try ContentStorage.sha256(of: expected) == artifact.digest else {
+                throw StorageError.digestMismatch
+            }
+        }
+        return record
+    }
+
     public func updatePreferences(_ preferences: RuntimePreferences) throws {
         try mutate { state in state.preferences = preferences }
+    }
+
+    public func adoptCatalogQuarantine(
+        _ sourceURL: URL,
+        under quarantineRoot: URL,
+        expectedDigest: ContentDigest,
+        expectedByteCount: UInt64
+    ) throws -> URL {
+        guard state != nil else { throw StorageError.stateNotOpened }
+        let directoryName = "catalog-source-\(UUID().uuidString.lowercased())"
+        let directory = paths.staging.appendingPathComponent(directoryName, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        do {
+            return try ContentStorage.adoptCatalogQuarantine(
+                sourceURL,
+                under: quarantineRoot,
+                into: directory,
+                expectedDigest: expectedDigest,
+                expectedByteCount: expectedByteCount
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        }
+    }
+
+    public func removeAdoptedCatalogSource(_ sourceURL: URL) throws {
+        let directory = sourceURL.standardizedFileURL.deletingLastPathComponent()
+        guard directory.deletingLastPathComponent() == paths.staging.standardizedFileURL,
+              directory.lastPathComponent.hasPrefix("catalog-source-"),
+              sourceURL.lastPathComponent == "catalog-source.mp4"
+        else { throw StorageError.pathEscapesStore }
+        if FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+            try ContentStorage.syncDirectory(paths.staging)
+        }
     }
 
     public func replaceAssignments(_ assignments: [DeviceLocalPresentationAssignment]) throws {
@@ -593,7 +660,8 @@ public actor RuntimeStore {
     private func validateLoadedState() throws {
         guard let state else { throw StorageError.stateNotOpened }
         guard state.schemaEpoch == RuntimeSnapshot.schemaEpoch,
-              state.schemaRevision == RuntimeSnapshot.schemaRevision
+              state.schemaRevision >= RuntimeSnapshot.minimumReadableSchemaRevision,
+              state.schemaRevision <= RuntimeSnapshot.schemaRevision
         else {
             throw StorageError.unsupportedSchema(
                 epoch: state.schemaEpoch,
@@ -604,6 +672,14 @@ public actor RuntimeStore {
         guard Set(libraryIDs).count == libraryIDs.count else {
             throw StorageError.corruptState("duplicate library item identity")
         }
+    }
+
+    private func migrateLoadedStateIfNeeded() throws {
+        guard var current = state,
+              current.schemaRevision < RuntimeSnapshot.schemaRevision else { return }
+        current.schemaRevision = RuntimeSnapshot.schemaRevision
+        state = current
+        try persist()
     }
 
     private func requireInstallableJob(_ candidate: StagedArtifactCandidate) throws {

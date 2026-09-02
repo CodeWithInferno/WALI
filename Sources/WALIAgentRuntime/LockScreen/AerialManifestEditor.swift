@@ -29,7 +29,7 @@ public enum LockScreenCompatibilityError: LocalizedError, Sendable {
         case let .assetRejected(detail):
             "The wallpaper could not be prepared for the Lock Screen. \(detail)"
         case .permissionDenied:
-            "Lock Screen continuity needs Full Disk Access for WALI Agent. Open System Settings > Privacy & Security > Full Disk Access, enable WALI Agent, then try again."
+            "Lock Screen continuity needs Full Disk Access for WALI Lock Screen Helper. Open System Settings > Privacy & Security > Full Disk Access and enable the helper; WALI Agent does not need that permission."
         }
     }
 }

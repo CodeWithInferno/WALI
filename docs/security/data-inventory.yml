@@ -1,0 +1,691 @@
+schema_version: 1
+policy_id: wali-marketplace-data-v1
+status: accepted
+implementation_status: policy_contract_not_deployment_evidence
+owner_role: security_responder
+accepted_by: project_owner
+approval_reference: project-owner AFK marketplace implementation directive 2026-09-01
+
+defaults:
+  encryption_in_transit: required
+  encryption_at_rest: required
+  raw_ip_storage: forbidden
+  secret_or_token_logging: forbidden
+  private_data_public_cache: forbidden
+  deletion_mode: tombstone_then_bounded_cleanup
+  backup_restore_test: required
+
+stores:
+  - id: auth.users
+    category: account_identity
+    purpose: authentication_and_session_lifecycle
+    subjects: [account_holder]
+    read_roles: [account_owner, auth_service]
+    write_roles: [auth_service]
+    classification: confidential
+    retention: until_account_deletion_plus_required_security_window
+    deletion: revoke_sessions_then_provider_deletion_workflow
+    backup: encrypted_database_pitr
+  - id: wali.profiles
+    category: account_profile
+    purpose: public_identity_and_account_status
+    subjects: [account_holder]
+    read_roles: [public_safe_projection, account_owner, moderator, admin]
+    write_roles: [account_owner_safe_fields, admin_enforcement]
+    classification: mixed_public_confidential
+    retention: account_lifetime_plus_audit_references
+    deletion: anonymize_public_fields_and_tombstone
+    backup: encrypted_database_pitr
+  - id: wali.role_grants
+    category: authorization
+    purpose: current_elevated_roles_and_revocation
+    subjects: [creator, moderator, admin]
+    read_roles: [subject_safe_projection, admin, authorization_service]
+    write_roles: [admin_aal2]
+    classification: confidential
+    retention: seven_years_after_revoke
+    deletion: retain_redacted_security_audit
+    backup: encrypted_database_pitr
+  - id: wali.creator_profiles
+    category: creator_profile
+    purpose: public_creator_identity
+    subjects: [creator]
+    read_roles: [public_safe_projection, creator_owner, moderator, admin]
+    write_roles: [creator_owner_safe_fields, moderator_verification]
+    classification: mixed_public_confidential
+    retention: account_lifetime_plus_published_attribution
+    deletion: anonymize_nonrequired_fields_preserve_release_attribution
+    backup: encrypted_database_pitr
+  - id: wali.terms_acceptances
+    category: legal_acceptance
+    purpose: prove_versioned_terms_acceptance
+    subjects: [account_holder]
+    read_roles: [account_owner_status, admin, legal_operator]
+    write_roles: [acceptance_service]
+    classification: confidential
+    retention: seven_years_or_governing_legal_period
+    deletion: retain_minimum_legal_fact
+    backup: encrypted_database_pitr
+  - id: wali.user_preferences
+    category: preferences
+    purpose: rating_locale_and_privacy_choices
+    subjects: [account_holder]
+    read_roles: [account_owner]
+    write_roles: [account_owner]
+    classification: confidential
+    retention: account_lifetime
+    deletion: delete_with_account
+    backup: encrypted_database_pitr
+  - id: wali.licenses
+    category: catalog_policy
+    purpose: versioned_content_license_rules
+    subjects: []
+    read_roles: [public]
+    write_roles: [admin]
+    classification: public
+    retention: permanent_while_referenced
+    deletion: deactivate_never_rewrite_referenced_revision
+    backup: encrypted_database_pitr_and_configuration_export
+  - id: wali.categories
+    category: taxonomy
+    purpose: controlled_catalog_navigation
+    subjects: []
+    read_roles: [public]
+    write_roles: [admin_editorial]
+    classification: public
+    retention: permanent_while_referenced
+    deletion: deactivate
+    backup: encrypted_database_pitr_and_configuration_export
+  - id: wali.tags
+    category: taxonomy
+    purpose: controlled_search_and_related_facets
+    subjects: []
+    read_roles: [public_approved_projection]
+    write_roles: [admin_editorial]
+    classification: public
+    retention: permanent_while_referenced
+    deletion: deactivate
+    backup: encrypted_database_pitr_and_configuration_export
+  - id: wali.wallpapers
+    category: public_catalog
+    purpose: stable_logical_wallpaper_page
+    subjects: [creator]
+    read_roles: [public_published_projection, creator_owner, moderator, admin]
+    write_roles: [publication_service, moderator_enforcement]
+    classification: mixed_public_confidential
+    retention: permanent_release_history
+    deletion: delist_or_anonymize_never_destroy_audit
+    backup: encrypted_database_pitr
+  - id: wali.wallpaper_releases
+    category: public_catalog_release
+    purpose: immutable_published_edition_and_manifest
+    subjects: [creator]
+    read_roles: [public_published_projection, creator_owner, moderator, admin]
+    write_roles: [publication_service]
+    classification: mixed_public_confidential
+    retention: permanent_while_referenced_or_legally_required
+    deletion: revoke_or_delist_no_in_place_mutation
+    backup: encrypted_database_pitr_and_object_backup
+  - id: wali.artifacts
+    category: media_identity
+    purpose: immutable_verified_content_facts
+    subjects: [creator]
+    read_roles: [public_published_projection, worker, moderator, admin]
+    write_roles: [worker_claim_service, publication_service]
+    classification: mixed_public_confidential
+    retention: while_referenced_plus_gc_safety_window
+    deletion: digest_verified_unreferenced_gc
+    backup: database_pitr_and_digest_verified_object_backup
+  - id: wali.release_artifacts
+    category: release_manifest
+    purpose: bind_roles_to_immutable_artifacts
+    subjects: [creator]
+    read_roles: [public_published_projection, worker, moderator, admin]
+    write_roles: [publication_service]
+    classification: mixed_public_confidential
+    retention: release_lifetime
+    deletion: never_mutate_published_binding
+    backup: encrypted_database_pitr
+  - id: wali.wallpaper_categories
+    category: taxonomy_assignment
+    purpose: category_facets_with_provenance
+    subjects: [creator]
+    read_roles: [public_approved_projection, creator_owner, moderator, admin]
+    write_roles: [creator_proposal, classifier_service, moderator, editorial]
+    classification: mixed_public_confidential
+    retention: wallpaper_lifetime
+    deletion: remove_unpublished_suggestion_or_deactivate_reference
+    backup: encrypted_database_pitr
+  - id: wali.wallpaper_tags
+    category: taxonomy_assignment
+    purpose: tag_facets_with_provenance_and_decision
+    subjects: [creator]
+    read_roles: [public_approved_projection, creator_owner, moderator, admin]
+    write_roles: [creator_proposal, classifier_service, moderator, editorial]
+    classification: mixed_public_confidential
+    retention: wallpaper_lifetime
+    deletion: remove_unpublished_suggestion_or_deactivate_reference
+    backup: encrypted_database_pitr
+  - id: wali.wallpaper_embeddings
+    category: derived_catalog_feature
+    purpose: semantic_search_related_and_personalization
+    subjects: [creator]
+    read_roles: [ranking_service]
+    write_roles: [classifier_service]
+    classification: internal
+    retention: active_model_lifetime_plus_rebuild_window
+    deletion: delete_when_source_removed_or_model_retired
+    backup: rebuildable_optional_backup
+  - id: wali.collections
+    category: editorial_catalog
+    purpose: curated_and_system_catalog_sections
+    subjects: []
+    read_roles: [public_active_projection]
+    write_roles: [admin_editorial]
+    classification: mixed_public_internal
+    retention: permanent_revision_history
+    deletion: deactivate
+    backup: encrypted_database_pitr
+  - id: wali.collection_items
+    category: editorial_catalog
+    purpose: deterministic_collection_membership
+    subjects: [creator]
+    read_roles: [public_active_projection]
+    write_roles: [admin_editorial]
+    classification: mixed_public_internal
+    retention: collection_revision_lifetime
+    deletion: remove_from_future_revision
+    backup: encrypted_database_pitr
+  - id: wali.upload_sessions
+    category: private_creator_upload
+    purpose: resumable_upload_authorization_and_binding
+    subjects: [creator]
+    read_roles: [creator_owner_safe_projection, worker, service]
+    write_roles: [creator_scoped_upload, upload_service]
+    classification: restricted
+    retention: abandoned_24_hours_terminal_30_days
+    deletion: object_then_row_tombstone_with_legal_hold_override
+    backup: active_or_legal_hold_objects_only
+  - id: wali.submissions
+    category: private_creator_submission
+    purpose: revisioned_review_snapshot_and_state
+    subjects: [creator]
+    read_roles: [creator_owner, moderator, admin, processing_service]
+    write_roles: [creator_by_state, processing_service, moderator]
+    classification: confidential
+    retention: seven_years_after_terminal_or_policy_revision
+    deletion: anonymize_creator_on_account_deletion_preserve_moderation_fact
+    backup: encrypted_database_pitr
+  - id: wali.rights_declarations
+    category: rights_and_attribution
+    purpose: prove_hosting_and_distribution_basis
+    subjects: [creator, rights_holder]
+    read_roles: [creator_owner_safe_projection, moderator, admin, legal_operator]
+    write_roles: [creator_owner_by_state, moderator]
+    classification: restricted
+    retention: release_lifetime_plus_seven_years_or_legal_hold
+    deletion: preserve_minimum_legal_fact_anonymize_when_permitted
+    backup: encrypted_database_pitr_and_protected_object_backup
+  - id: wali.processing_attempts
+    category: media_operations
+    purpose: lease_generation_and_reproducible_processing
+    subjects: [creator]
+    read_roles: [creator_safe_projection, worker, moderator, admin]
+    write_roles: [processing_service]
+    classification: internal
+    retention: one_year_after_terminal
+    deletion: aggregate_then_delete_unheld_diagnostics
+    backup: encrypted_database_pitr
+  - id: wali.classification_runs
+    category: model_operations
+    purpose: reproducible_taxonomy_suggestions
+    subjects: [creator]
+    read_roles: [moderator, admin, classifier_service]
+    write_roles: [classifier_service]
+    classification: internal
+    retention: active_release_and_model_audit_lifetime
+    deletion: delete_raw_result_after_one_year_keep_normalized_decision
+    backup: encrypted_database_pitr
+  - id: wali.moderation_reviews
+    category: moderation
+    purpose: immutable_submission_decision
+    subjects: [creator, moderator]
+    read_roles: [creator_safe_projection, moderator, admin]
+    write_roles: [moderator_aal2]
+    classification: confidential
+    retention: seven_years_or_legal_hold
+    deletion: anonymize_actor_when_permitted_preserve_decision
+    backup: encrypted_database_pitr
+  - id: wali.moderation_actions
+    category: security_audit
+    purpose: append_only_enforcement_history
+    subjects: [creator, reporter, moderator]
+    read_roles: [moderator, admin, security_responder]
+    write_roles: [moderation_service]
+    classification: restricted
+    retention: seven_years_or_legal_hold
+    deletion: append_only_redaction_event_only
+    backup: encrypted_database_pitr
+  - id: wali.reports
+    category: user_safety_report
+    purpose: triage_catalog_concerns
+    subjects: [reporter, creator]
+    read_roles: [reporter_own_status, moderator, admin]
+    write_roles: [report_service, moderator]
+    classification: confidential
+    retention: two_years_after_close_or_legal_hold
+    deletion: anonymize_reporter_when_permitted
+    backup: encrypted_database_pitr
+  - id: wali.copyright_cases
+    category: legal_case
+    purpose: notice_counter_notice_and_case_deadlines
+    subjects: [claimant, creator, reporter]
+    read_roles: [assigned_legal_operator, admin]
+    write_roles: [legal_case_service]
+    classification: highly_restricted
+    retention: governing_legal_period_or_hold
+    deletion: legal_review_required
+    backup: encrypted_database_pitr_and_protected_object_backup
+  - id: wali.catalog_revocations
+    category: security_control
+    purpose: signed_critical_release_block
+    subjects: [creator]
+    read_roles: [public_signed_projection, security_responder, admin]
+    write_roles: [security_revocation_service]
+    classification: public_after_issue
+    retention: permanent_trust_history
+    deletion: append_new_revision_never_remove_history
+    backup: encrypted_database_pitr_and_configuration_export
+  - id: wali.favorites
+    category: explicit_interaction
+    purpose: user_favorite_list_and_bounded_ranking_signal
+    subjects: [account_holder, creator]
+    read_roles: [account_owner, aggregation_service]
+    write_roles: [account_owner_rpc]
+    classification: confidential
+    retention: until_removed_or_account_deleted
+    deletion: immediate_logical_delete_and_bounded_event_retention
+    backup: encrypted_database_pitr
+  - id: wali.saved_wallpapers
+    category: explicit_interaction
+    purpose: user_saved_list_and_bounded_ranking_signal
+    subjects: [account_holder, creator]
+    read_roles: [account_owner, aggregation_service]
+    write_roles: [account_owner_rpc]
+    classification: confidential
+    retention: until_removed_or_account_deleted
+    deletion: immediate_logical_delete_and_bounded_event_retention
+    backup: encrypted_database_pitr
+  - id: wali.creator_follows
+    category: explicit_interaction
+    purpose: user_creator_follow_list
+    subjects: [account_holder, creator]
+    read_roles: [account_owner, aggregation_service]
+    write_roles: [account_owner_rpc]
+    classification: confidential
+    retention: until_removed_or_account_deleted
+    deletion: immediate_logical_delete
+    backup: encrypted_database_pitr
+  - id: wali.engagement_events
+    category: explicit_interaction_event
+    purpose: idempotency_abuse_control_and_versioned_ranking_inputs
+    subjects: [account_holder, creator]
+    read_roles: [aggregation_service, security_responder]
+    write_roles: [interaction_service]
+    classification: confidential
+    retention: thirteen_months
+    deletion: delete_or_anonymize_on_account_deletion_subject_to_security_hold
+    backup: encrypted_database_pitr
+  - id: wali.install_receipts
+    category: install_authorization
+    purpose: one_use_release_install_authorization_and_success_deduplication
+    subjects: [account_holder, creator]
+    read_roles: [account_owner_safe_status, install_service, aggregation_service]
+    write_roles: [install_service]
+    classification: confidential
+    retention: thirty_days_after_expiry_unless_security_hold
+    deletion: consume_or_expire_then_scheduled_delete_with_account_anonymization
+    backup: database_pitr_short_window
+  - id: wali.wallpaper_stats_hourly
+    category: aggregate_metric
+    purpose: operational_and_ranking_aggregation
+    subjects: [creator]
+    read_roles: [aggregation_service]
+    write_roles: [aggregation_service]
+    classification: internal
+    retention: ninety_days
+    deletion: scheduled_expiry
+    backup: rebuildable_optional_backup
+  - id: wali.wallpaper_stats_daily
+    category: aggregate_metric
+    purpose: public_counts_and_ranking_history
+    subjects: [creator]
+    read_roles: [public_bounded_projection, aggregation_service]
+    write_roles: [aggregation_service]
+    classification: mixed_public_internal
+    retention: three_years
+    deletion: scheduled_expiry_or_anonymized_archive
+    backup: encrypted_database_pitr
+  - id: wali.ranking_snapshots
+    category: derived_ranking
+    purpose: reproducible_surface_order
+    subjects: [creator]
+    read_roles: [public_order_projection, ranking_service]
+    write_roles: [ranking_service]
+    classification: internal
+    retention: ninety_days
+    deletion: scheduled_expiry
+    backup: rebuildable_optional_backup
+  - id: wali.quality_assessments
+    category: derived_quality
+    purpose: immutable_explainable_quality_component
+    subjects: [creator]
+    read_roles: [ranking_service, moderator]
+    write_roles: [quality_service]
+    classification: internal
+    retention: release_lifetime_plus_one_year
+    deletion: retain_published_input_digest_delete_unheld_detail
+    backup: encrypted_database_pitr
+  - id: wali.user_interest_profiles
+    category: derived_personalization
+    purpose: optional_expiring_user_preference_vector
+    subjects: [account_holder]
+    read_roles: [ranking_service]
+    write_roles: [ranking_service]
+    classification: confidential
+    retention: maximum_thirty_days_without_refresh
+    deletion: immediate_on_opt_out_or_account_deletion
+    backup: no_backup_rebuildable
+  - id: wali.command_idempotency
+    category: operational_integrity
+    purpose: safe_command_retry_and_conflict_detection
+    subjects: [account_holder]
+    read_roles: [command_service]
+    write_roles: [command_service]
+    classification: internal
+    retention: thirty_days_unless_command_policy_shorter
+    deletion: scheduled_expiry
+    backup: database_pitr_short_window
+  - id: wali.rate_limit_buckets
+    category: abuse_prevention
+    purpose: bounded_server_derived_operation_limits
+    subjects: [account_holder_or_pseudonymous_requester]
+    read_roles: [rate_limit_service, security_responder]
+    write_roles: [rate_limit_service]
+    classification: confidential
+    retention: maximum_thirty_days
+    deletion: scheduled_expiry
+    backup: no_backup
+  - id: wali.audit_events
+    category: security_audit
+    purpose: append_only_privileged_action_history
+    subjects: [account_holder, moderator, admin]
+    read_roles: [admin, security_responder, legal_operator]
+    write_roles: [privileged_command_services]
+    classification: restricted
+    retention: seven_years_or_legal_hold
+    deletion: append_only_redaction_event_only
+    backup: encrypted_database_pitr
+  - id: wali.catalog_signing_keys
+    category: public_key_registry
+    purpose: manifest_trust_and_rotation_history
+    subjects: []
+    read_roles: [public_signed_projection, publication_service]
+    write_roles: [key_rotation_service]
+    classification: public_except_operator_metadata
+    retention: permanent_trust_history
+    deletion: mark_retired_or_compromised_never_erase
+    backup: encrypted_database_pitr_and_offline_configuration_export
+  - id: wali.model_registry
+    category: model_provenance
+    purpose: approved_model_weight_license_and_taxonomy_facts
+    subjects: []
+    read_roles: [moderator, admin, classifier_service, compliance_operator]
+    write_roles: [admin_model_approval]
+    classification: internal
+    retention: permanent_while_outputs_exist
+    deletion: retire_never_erase_referenced_revision
+    backup: encrypted_database_pitr_and_configuration_export
+  - id: wali.account_exports
+    category: account_data_export
+    purpose: bounded_owner_export_job_state_and_private_object_reference
+    subjects: [account_holder]
+    read_roles: [account_owner, export_service, support_operator]
+    write_roles: [export_service]
+    classification: highly_restricted
+    retention: seven_days_after_ready_or_thirty_days_after_terminal_failure
+    deletion: delete_private_object_then_row_on_expiry_or_account_deletion
+    backup: no_object_backup_database_pitr_short_window
+  - id: wali.queue_policies
+    category: operations_configuration
+    purpose: versioned_queue_lease_retry_and_dead_letter_limits
+    subjects: []
+    read_roles: [worker, operator, security_responder]
+    write_roles: [deployment_service]
+    classification: internal
+    retention: permanent_configuration_history_while_referenced
+    deletion: replace_by_revision_never_rewrite_operational_history
+    backup: encrypted_database_pitr_and_configuration_export
+  - id: wali.backup_verification_runs
+    category: recovery_evidence
+    purpose: scheduled_live_catalog_object_integrity_verification_results
+    subjects: []
+    read_roles: [operator, security_responder, compliance_operator]
+    write_roles: [backup_verification_service]
+    classification: internal
+    retention: two_years
+    deletion: scheduled_expiry_after_evidence_window
+    backup: encrypted_database_pitr_and_independent_evidence_export
+  - id: wali.orphan_object_observations
+    category: storage_integrity
+    purpose: multi_pass_digest_safe_detection_before_unreferenced_object_cleanup
+    subjects: [creator]
+    read_roles: [storage_maintenance_service, operator, security_responder]
+    write_roles: [storage_maintenance_service]
+    classification: internal
+    retention: until_resolved_plus_ninety_days
+    deletion: scheduled_expiry_after_resolution_or_preserve_under_hold
+    backup: no_backup_rebuildable
+  - id: storage.uploads-private
+    category: raw_creator_media
+    purpose: resumable_source_for_canonical_processing
+    subjects: [creator]
+    read_roles: [time_limited_worker, creator_status_only]
+    write_roles: [creator_scoped_upload]
+    classification: highly_restricted
+    retention: abandoned_24_hours_terminal_30_days
+    deletion: object_delete_with_audited_legal_hold_override
+    backup: active_or_legal_hold_objects_only
+  - id: storage.moderation-private
+    category: rights_and_legal_evidence
+    purpose: rights_proof_notices_and_counter_notices
+    subjects: [creator, claimant]
+    read_roles: [creator_own_status, assigned_moderator, legal_operator]
+    write_roles: [scoped_evidence_upload, legal_service]
+    classification: highly_restricted
+    retention: policy_or_governing_legal_period
+    deletion: legal_review_required
+    backup: encrypted_protected_object_backup
+  - id: storage.catalog-public
+    category: public_canonical_media
+    purpose: immutable_catalog_delivery
+    subjects: [creator]
+    read_roles: [public]
+    write_roles: [publication_service]
+    classification: public
+    retention: while_referenced_plus_restore_window
+    deletion: digest_verified_unreferenced_gc_after_delist_policy
+    backup: digest_verified_independent_object_backup
+  - id: storage.exports-private
+    category: account_export
+    purpose: owner_downloadable_data_export
+    subjects: [account_holder]
+    read_roles: [account_owner_short_lived_grant]
+    write_roles: [export_service]
+    classification: highly_restricted
+    retention: seven_days
+    deletion: automatic_expiry_and_object_delete
+    backup: no_backup
+  - id: logs.edge-functions
+    category: operational_log
+    purpose: request_health_rate_limit_and_safe_failure_diagnosis
+    subjects: [pseudonymous_requester]
+    read_roles: [operator, security_responder]
+    write_roles: [platform]
+    classification: confidential
+    retention: thirty_days
+    deletion: scheduled_expiry
+    backup: no_backup
+  - id: logs.media-worker
+    category: operational_log
+    purpose: lease_sandbox_and_processing_health
+    subjects: [creator_pseudonymous]
+    read_roles: [operator, security_responder]
+    write_roles: [worker]
+    classification: confidential
+    retention: thirty_days
+    deletion: scheduled_expiry
+    backup: no_backup
+  - id: logs.client-diagnostics
+    category: opt_in_diagnostic
+    purpose: bounded_crash_and_contract_failure_diagnosis
+    subjects: [account_holder]
+    read_roles: [support_operator, security_responder]
+    write_roles: [opt_in_client]
+    classification: confidential
+    retention: thirty_days
+    deletion: user_request_or_scheduled_expiry
+    backup: no_backup
+  - id: wali.account_deletion_requests
+    category: account_lifecycle
+    purpose: revision_bound_deletion_request_state
+    subjects: [account_holder]
+    read_roles: [account_owner_status, deletion_service]
+    write_roles: [deletion_service]
+    classification: confidential
+    retention: seven_years_after_completion
+    deletion: retain_minimum_audit_fact
+    backup: encrypted_database_pitr
+  - id: wali.runtime_configuration
+    category: public_runtime_configuration
+    purpose: bind_cdn_terms_and_media_policy_revisions
+    subjects: []
+    read_roles: [public_safe_projection, service]
+    write_roles: [deployment_operator]
+    classification: internal
+    retention: permanent_revision_history
+    deletion: supersede_never_silently_rewrite
+    backup: encrypted_database_pitr_and_configuration_export
+  - id: wali.catalog_signed_documents
+    category: public_trust_state
+    purpose: immutable_monotonic_trust_and_revocation_batches
+    subjects: [creator]
+    read_roles: [public_signed_projection]
+    write_roles: [offline_signing_operator_aal2]
+    classification: public
+    retention: permanent
+    deletion: append_only
+    backup: encrypted_database_pitr_and_independent_export
+  - id: wali.security_response_grants
+    category: critical_authorization
+    purpose: separate_admin_from_emergency_catalog_revocation_authority
+    subjects: [security_responder]
+    read_roles: [security_response_service]
+    write_roles: [offline_operator]
+    classification: confidential
+    retention: seven_years_after_revocation
+    deletion: retain_redacted_authorization_audit
+    backup: encrypted_database_pitr
+  - id: wali.publication_intents
+    category: publication_control
+    purpose: short_lived_frozen_signing_snapshot_and_cas
+    subjects: [creator, moderator]
+    read_roles: [publication_service]
+    write_roles: [publication_service]
+    classification: confidential
+    retention: completed_seven_days_expired_one_day
+    deletion: scheduled_expiry_after_audit_link
+    backup: encrypted_database_pitr
+  - id: wali.submission_tag_suggestions
+    category: private_taxonomy_proposal
+    purpose: separate_creator_and_model_tag_suggestions
+    subjects: [creator]
+    read_roles: [creator_owner, moderator, processing_service]
+    write_roles: [creator_command, classifier_service]
+    classification: confidential
+    retention: submission_lifetime
+    deletion: delete_with_unpublished_submission
+    backup: encrypted_database_pitr
+  - id: wali.staged_artifacts
+    category: private_canonical_media
+    purpose: verified_outputs_awaiting_human_approval_and_promotion
+    subjects: [creator]
+    read_roles: [worker, moderator_canonical_preview]
+    write_roles: [worker_claim_service]
+    classification: restricted
+    retention: terminal_submission_plus_thirty_days_or_legal_hold
+    deletion: digest_verified_unreferenced_gc
+    backup: digest_verified_private_object_backup
+  - id: wali.staged_upload_intents
+    category: processing_access_control
+    purpose: short_lived_exact_object_authorization_bound_to_worker_lease
+    subjects: [creator]
+    read_roles: [processing_service]
+    write_roles: [worker_claim_service]
+    classification: highly_restricted
+    retention: consumed_or_expired_one_day
+    deletion: scheduled_expiry
+    backup: no_backup
+  - id: wali.cleanup_object_intents
+    category: private_object_cleanup_control
+    purpose: exact_path_deletion_authorization_bound_to_a_short_worker_lease
+    subjects: [account_holder, creator]
+    read_roles: [cleanup_service]
+    write_roles: [retention_service, cleanup_worker]
+    classification: highly_restricted
+    retention: completed_seven_days_failed_thirty_days
+    deletion: scheduled_control_record_cleanup_after_audit_window
+    backup: encrypted_database_pitr
+  - id: wali.release_staged_artifacts
+    category: private_release_manifest
+    purpose: bind_reviewed_release_roles_to_private_canonical_outputs
+    subjects: [creator]
+    read_roles: [worker, moderator]
+    write_roles: [worker_claim_service]
+    classification: confidential
+    retention: release_lifetime_plus_audit_window
+    deletion: after_public_promotion_and_retention_window
+    backup: encrypted_database_pitr
+  - id: wali.artifact_promotions
+    category: publication_control
+    purpose: lease_and_audit_private_to_public_digest_verified_promotion
+    subjects: [creator]
+    read_roles: [worker, publication_service]
+    write_roles: [worker, publication_service]
+    classification: confidential
+    retention: seven_years
+    deletion: retain_redacted_promotion_audit
+    backup: encrypted_database_pitr
+  - id: storage.processing-private
+    category: private_canonical_media
+    purpose: human_reviewable_canonical_outputs_before_publication
+    subjects: [creator]
+    read_roles: [worker, moderator_short_lived_grant]
+    write_roles: [worker_create_only]
+    classification: highly_restricted
+    retention: terminal_submission_plus_thirty_days_or_legal_hold
+    deletion: digest_verified_unreferenced_gc
+    backup: digest_verified_private_object_backup
+
+prohibited_collection:
+  - raw_ip_address
+  - local_source_filename
+  - local_media_library
+  - display_geometry
+  - display_assignment
+  - playback_timeline_or_history
+  - foreground_application
+  - window_title
+  - sleep_or_lock_history
+  - filevault_state
+  - unrelated_disk_content

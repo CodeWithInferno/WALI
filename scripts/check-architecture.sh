@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 RUBY_BIN="/usr/bin/ruby"
 CHECKER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-architecture.rb"
+MARKETPLACE_CHECKER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-marketplace-contracts.rb"
 
 if [[ ! -x "${RUBY_BIN}" ]]; then
     printf 'Architecture checker requires executable %s\n' "${RUBY_BIN}" >&2
@@ -25,4 +26,8 @@ if ! command -v xcrun >/dev/null 2>&1 || ! xcrun --find swiftc >/dev/null 2>&1; 
     exit 2
 fi
 
-exec "${RUBY_BIN}" "${CHECKER}" "${ROOT_DIR}"
+"${RUBY_BIN}" "${CHECKER}" "${ROOT_DIR}"
+
+if [[ -f "${MARKETPLACE_CHECKER}" ]]; then
+    "${RUBY_BIN}" "${MARKETPLACE_CHECKER}" "${ROOT_DIR}"
+fi

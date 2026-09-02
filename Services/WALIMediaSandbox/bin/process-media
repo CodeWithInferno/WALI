@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
+
+readonly INPUT=/work/input/source.bin
+readonly OUTPUT=/work/output
+readonly POLICY=/opt/wali/policy/ffmpeg-policy.json
+readonly CLAIM="$OUTPUT/media-claim.json"
+readonly FAILURE="$OUTPUT/failure.json"
+
+emit_failure() {
+  local code="${1:-internal_error}"
+  local status="${2:-64}"
+  case "$code" in
+    invalid_contract|policy_mismatch|credential_exposed|invalid_input_type|input_too_large|input_digest_mismatch|invalid_container|unsupported_codec|media_limits_exceeded|canonicalization_failed|output_quota_exceeded|internal_error) ;;
+    *) code=internal_error ;;
+  esac
+  if [[ -d "$OUTPUT" && ! -L "$OUTPUT" ]]; then
+    jq -n \
+      --argjson schema_version 1 \
+      --arg attempt_id "${WALI_ATTEMPT_ID:-unknown}" \
+      --arg submission_id "${WALI_SUBMISSION_ID:-unknown}" \
+      --argjson generation "${WALI_GENERATION:-0}" \
+      --arg safe_code "$code" \
+      '{schema_version:$schema_version,attempt_id:$attempt_id,submission_id:$submission_id,generation:$generation,safe_code:$safe_code}' \
+      >"$OUTPUT/.failure.json.tmp" 2>/dev/null || true
+    mv -f -- "$OUTPUT/.failure.json.tmp" "$FAILURE" 2>/dev/null || true
+  fi
+  exit "$status"
+}
+
+on_error() {
+  local status=$?
+  trap - ERR
+  emit_failure internal_error "$status"
+}
+trap on_error ERR
+
+for required in WALI_POLICY_DIGEST WALI_ATTEMPT_ID WALI_SUBMISSION_ID WALI_GENERATION WALI_INPUT_DIGEST; do
+  [[ -n "${!required:-}" ]] || emit_failure invalid_contract
+done
+[[ "$WALI_POLICY_DIGEST" =~ ^[a-f0-9]{64}$ ]] || emit_failure invalid_contract
+[[ "$WALI_INPUT_DIGEST" =~ ^[a-f0-9]{64}$ ]] || emit_failure invalid_contract
+[[ "$WALI_ATTEMPT_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || emit_failure invalid_contract
+[[ "$WALI_SUBMISSION_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || emit_failure invalid_contract
+[[ "$WALI_GENERATION" =~ ^[1-9][0-9]{0,9}$ ]] || emit_failure invalid_contract
+
+for secret in AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN SUPABASE_SERVICE_ROLE_KEY WALI_STORAGE_SECRET_KEY DATABASE_URL; do
+  [[ -z "${!secret:-}" ]] || emit_failure credential_exposed
+done
+
+[[ -f "$POLICY" && ! -L "$POLICY" ]] || emit_failure policy_mismatch
+[[ "$(sha256sum "$POLICY" | cut -d' ' -f1)" == "$WALI_POLICY_DIGEST" ]] || emit_failure policy_mismatch
+[[ -d "$OUTPUT" && ! -L "$OUTPUT" ]] || emit_failure invalid_contract
+[[ -f "$INPUT" && ! -L "$INPUT" ]] || emit_failure invalid_input_type
+
+readonly INPUT_BYTES="$(stat -c '%s' "$INPUT")"
+readonly MAX_INPUT_BYTES="$(jq -er '.limits.input_bytes' "$POLICY")"
+(( INPUT_BYTES > 0 && INPUT_BYTES <= MAX_INPUT_BYTES )) || emit_failure input_too_large
+[[ "$(sha256sum "$INPUT" | cut -d' ' -f1)" == "$WALI_INPUT_DIGEST" ]] || emit_failure input_digest_mismatch
+
+if ! ffprobe -v error -show_format -show_streams -of json "$INPUT" > /tmp/input-probe.json; then
+  emit_failure invalid_container
+fi
+
+if ! jq -e --argjson max_tracks "$(jq '.limits.input_tracks' "$POLICY")" \
+  --argjson max_width "$(jq '.limits.width' "$POLICY")" \
+  --argjson max_height "$(jq '.limits.height' "$POLICY")" \
+  --argjson max_duration_ms "$(jq '.limits.duration_ms' "$POLICY")" \
+  --argjson max_fps "$(jq '.limits.frames_per_second' "$POLICY")" '
+    (.streams | length) >= 1 and (.streams | length) <= $max_tracks and
+    ([.streams[] | select(.codec_type == "video")] | length) == 1 and
+    ([.streams[] | select(.codec_type != "video" and .codec_type != "audio")] | length) == 0 and
+    ([.streams[] | select(.codec_type == "audio")] | length) <= 1 and
+    ([.streams[] | select(.codec_type == "video")][0]) as $v |
+    ($v.codec_name == "h264" or $v.codec_name == "hevc") and
+    ($v.width > 0 and $v.width <= $max_width) and
+    ($v.height > 0 and $v.height <= $max_height) and
+    ((.format.duration | tonumber) * 1000 > 0) and
+    ((.format.duration | tonumber) * 1000 <= $max_duration_ms) and
+    (($v.avg_frame_rate | split("/") | .[0] | tonumber) <=
+      (($v.avg_frame_rate | split("/") | .[1] | tonumber) * $max_fps))
+  ' /tmp/input-probe.json >/dev/null; then
+  emit_failure media_limits_exceeded
+fi
+
+readonly INPUT_CODEC="$(jq -r '[.streams[] | select(.codec_type == "video")][0].codec_name' /tmp/input-probe.json)"
+[[ "$INPUT_CODEC" == h264 || "$INPUT_CODEC" == hevc ]] || emit_failure unsupported_codec
+readonly DURATION_MS="$(jq -r '((.format.duration | tonumber) * 1000 | floor)' /tmp/input-probe.json)"
+[[ "$DURATION_MS" =~ ^[1-9][0-9]*$ ]] || emit_failure media_limits_exceeded
+
+mkdir -p -- "$OUTPUT/artifacts" "$OUTPUT/frames"
+
+readonly VIDEO_FILTER="scale=min(1920\\,iw):-2:force_original_aspect_ratio=decrease,format=yuv420p"
+readonly PREVIEW_FILTER="scale=min(1280\\,iw):-2:force_original_aspect_ratio=decrease,format=yuv420p"
+readonly POSTER_FILTER="thumbnail=100,scale=min(1920\\,iw):-2:force_original_aspect_ratio=decrease"
+readonly THUMBNAIL_FILTER="thumbnail=100,scale=512:512:force_original_aspect_ratio=increase,crop=512:512"
+readonly FRAME_FILTER="fps=7000/${DURATION_MS},scale=384:224:force_original_aspect_ratio=decrease,pad=384:224:(ow-iw)/2:(oh-ih)/2"
+
+if ! ffmpeg -nostdin -hide_banner -loglevel error -i "$INPUT" -map 0:v:0 -an -sn -dn \
+  -map_metadata -1 -map_chapters -1 -vf "$VIDEO_FILTER" -c:v libopenh264 -b:v 8000k \
+  -colorspace bt709 -color_primaries bt709 -color_trc bt709 \
+  -movflags +faststart -y "$OUTPUT/artifacts/video-default.mp4"; then
+  emit_failure canonicalization_failed
+fi
+if ! ffmpeg -nostdin -hide_banner -loglevel error -i "$INPUT" -map 0:v:0 -an -sn -dn \
+  -map_metadata -1 -map_chapters -1 -t 30 -vf "$PREVIEW_FILTER" -c:v libopenh264 -b:v 2500k \
+  -colorspace bt709 -color_primaries bt709 -color_trc bt709 \
+  -movflags +faststart -y "$OUTPUT/artifacts/preview.mp4"; then
+  emit_failure canonicalization_failed
+fi
+ffmpeg -nostdin -hide_banner -loglevel error -i "$INPUT" -map 0:v:0 -an -sn -dn \
+  -map_metadata -1 -map_chapters -1 -vf "$POSTER_FILTER" -frames:v 1 -q:v 2 -y "$OUTPUT/artifacts/poster.jpg" \
+  || emit_failure canonicalization_failed
+ffmpeg -nostdin -hide_banner -loglevel error -i "$INPUT" -map 0:v:0 -an -sn -dn \
+  -map_metadata -1 -map_chapters -1 -vf "$THUMBNAIL_FILTER" -frames:v 1 -q:v 3 -y "$OUTPUT/artifacts/thumbnail.jpg" \
+  || emit_failure canonicalization_failed
+ffmpeg -nostdin -hide_banner -loglevel error -i "$INPUT" -map 0:v:0 -an -sn -dn \
+  -map_metadata -1 -map_chapters -1 -vf "$FRAME_FILTER" -frames:v 7 -q:v 4 -y "$OUTPUT/frames/frame-%03d.jpg" \
+  || emit_failure canonicalization_failed
+
+[[ "$(find "$OUTPUT/frames" -maxdepth 1 -type f -name 'frame-*.jpg' | wc -l | tr -d ' ')" -eq 7 ]] \
+  || emit_failure canonicalization_failed
+
+readonly OUTPUT_BYTES="$(find "$OUTPUT/artifacts" "$OUTPUT/frames" -type f -exec stat -c '%s' {} + | awk '{sum += $1} END {print sum + 0}')"
+readonly MAX_OUTPUT_BYTES="$(jq -er '.limits.output_bytes' "$POLICY")"
+(( OUTPUT_BYTES > 0 && OUTPUT_BYTES <= MAX_OUTPUT_BYTES )) || emit_failure output_quota_exceeded
+
+write_artifact_record() {
+  local role=$1 relative_path=$2 media_type=$3
+  local file="$OUTPUT/$relative_path" probe digest bytes width height duration numerator denominator codec pixel color
+  [[ -f "$file" && ! -L "$file" ]] || emit_failure canonicalization_failed
+  ffprobe -v error -show_streams -show_format -of json "$file" >"/tmp/${role}-probe.json"
+  probe="/tmp/${role}-probe.json"
+  digest="$(sha256sum "$file" | cut -d' ' -f1)"
+  bytes="$(stat -c '%s' "$file")"
+  width="$(jq -er '.streams[0].width' "$probe")"
+  height="$(jq -er '.streams[0].height' "$probe")"
+  codec="$(jq -er '.streams[0].codec_name' "$probe")"
+  pixel="$(jq -r '.streams[0].pix_fmt // "unknown"' "$probe")"
+  color="$(jq -r '.streams[0].color_space // "unknown"' "$probe")"
+  if [[ "$media_type" == video/mp4 ]]; then
+    duration="$(jq -r '((.format.duration | tonumber) * 1000 | floor)' "$probe")"
+    numerator="$(jq -r '.streams[0].avg_frame_rate | split("/")[0] | tonumber' "$probe")"
+    denominator="$(jq -r '.streams[0].avg_frame_rate | split("/")[1] | tonumber' "$probe")"
+  else
+    duration=0 numerator=0 denominator=1
+  fi
+  jq -n --arg role "$role" --arg relative_path "$relative_path" --arg digest "$digest" \
+    --argjson byte_count "$bytes" --arg media_type "$media_type" --argjson width "$width" \
+    --argjson height "$height" --argjson duration_ms "$duration" --argjson frame_rate_numerator "$numerator" \
+    --argjson frame_rate_denominator "$denominator" --arg codec "$codec" --arg pixel_format "$pixel" \
+    --arg color_space "$color" \
+    '{role:$role,relative_path:$relative_path,digest:$digest,byte_count:$byte_count,media_type:$media_type,width:$width,height:$height,duration_ms:$duration_ms,frame_rate_numerator:$frame_rate_numerator,frame_rate_denominator:$frame_rate_denominator,codec:$codec,pixel_format:$pixel_format,color_space:$color_space,has_audio:false}'
+}
+
+write_artifact_record thumbnail artifacts/thumbnail.jpg image/jpeg >/tmp/artifact-1.json
+write_artifact_record poster artifacts/poster.jpg image/jpeg >/tmp/artifact-2.json
+write_artifact_record preview artifacts/preview.mp4 video/mp4 >/tmp/artifact-3.json
+write_artifact_record video_default artifacts/video-default.mp4 video/mp4 >/tmp/artifact-4.json
+jq -s '.' /tmp/artifact-{1,2,3,4}.json >/tmp/artifacts.json
+
+for ordinal in 1 2 3 4 5 6 7; do
+  frame="$(printf 'frame-%03d.jpg' "$ordinal")"
+  frame_path="$OUTPUT/frames/$frame"
+  frame_probe="/tmp/frame-${ordinal}-probe.json"
+  ffprobe -v error -show_streams -of json "$frame_path" >"$frame_probe"
+  jq -n --argjson ordinal "$ordinal" --arg relative_path "frames/$frame" \
+    --arg digest "$(sha256sum "$frame_path" | cut -d' ' -f1)" --argjson byte_count "$(stat -c '%s' "$frame_path")" \
+    --argjson width "$(jq -er '.streams[0].width' "$frame_probe")" --argjson height "$(jq -er '.streams[0].height' "$frame_probe")" \
+    '{ordinal:$ordinal,relative_path:$relative_path,digest:$digest,byte_count:$byte_count,width:$width,height:$height}' \
+    >"/tmp/frame-${ordinal}.json"
+done
+jq -s '.' /tmp/frame-{1,2,3,4,5,6,7}.json >/tmp/frames.json
+
+jq -n --argjson schema_version 1 --arg kind media --arg attempt_id "$WALI_ATTEMPT_ID" \
+  --arg submission_id "$WALI_SUBMISSION_ID" --argjson generation "$WALI_GENERATION" \
+  --arg policy_digest "$WALI_POLICY_DIGEST" --arg input_digest "$WALI_INPUT_DIGEST" \
+  --slurpfile artifacts /tmp/artifacts.json --slurpfile sample_frames /tmp/frames.json \
+  --arg encoder_build "ffmpeg-7.1.2-openh264-2.6.0" --arg safe_code ok \
+  '{schema_version:$schema_version,kind:$kind,attempt_id:$attempt_id,submission_id:$submission_id,generation:$generation,policy_digest:$policy_digest,input_digest:$input_digest,artifacts:$artifacts[0],sample_frames:$sample_frames[0],encoder_build:$encoder_build,safe_code:$safe_code}' \
+  >"$OUTPUT/.media-claim.json.tmp"
+mv -- "$OUTPUT/.media-claim.json.tmp" "$CLAIM"
+trap - ERR

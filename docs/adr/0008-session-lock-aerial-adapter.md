@@ -1,10 +1,17 @@
 # 0008: Use a version-gated Aerial adapter for session Lock Screen continuity
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-08-31
 - owner_role: compatibility_maintainer
 - accepted_by: project_owner
 - approval_reference: user-directed autonomous implementation mandate 2026-08-31
+- superseded_by: 0013
+- superseded_scope: 0013=lock_screen_privileged_process_ownership
+
+ADR 0013 supersedes only the clause assigning private Apple-store access and
+Full Disk Access to `WALIAgent`. The compatibility scope, verified formats,
+transaction rules, ownership identifiers, rollback, and prohibited behavior in
+this record remain accepted and move to the narrow Lock Screen helper.
 
 ## Context
 

@@ -1,0 +1,1 @@
+{"schema":{"epoch":1,"revision":0},"key_id":"catalog-test-2026-01","revision":1,"issued_at":"2026-09-01T16:05:00Z","revocations":[{"release_id":"22222222-2222-4222-8222-222222222222","artifact_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","reason":"critical_security","issued_at":"2026-09-01T16:04:00Z"}]}

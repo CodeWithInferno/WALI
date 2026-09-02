@@ -8,3 +8,17 @@ ENABLE_USER_SCRIPT_SANDBOXING = YES
 MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
 
+// Public marketplace client configuration. Environment-specific values belong
+// in ignored environment files; privileged secrets are forbidden. Release is
+// fail-closed unless an authorized production config explicitly overrides this.
+WALI_MARKETPLACE_ENABLED = NO
+WALI_SUPABASE_URL =
+WALI_SUPABASE_PUBLISHABLE_KEY =
+WALI_CATALOG_CDN_HOST =
+WALI_CATALOG_SIGNING_KEY_ID =
+WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64 =
+WALI_CATALOG_RECOVERY_SIGNING_KEY_ID =
+WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64 =
+WALI_LEGAL_BASE_URL = https:/$()/github.com/TryCleanMcp/WALI/blob/main/docs/legal
+WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER = com.wali.WALILockScreenHelper
+WALI_LOCK_SCREEN_HELPER_SERVICE_NAME = com.wali.WALILockScreenHelper.control

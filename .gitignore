@@ -8,15 +8,29 @@ xcuserdata/
 
 # Generated build products
 .build/
+/build/
+/.derivedData/
+/.derivedData-*/
 DerivedData/
 Config/Generated/
+Config/Marketplace.local.xcconfig
+Config/Marketplace.*.local.xcconfig
+Config/Signing.local.xcconfig
 *.profraw
+
+# Python tooling caches
+.venv/
+.pytest_cache/
+__pycache__/
+*.py[cod]
 
 # Swift Package Manager
 Packages/WALICore/.build/
+Packages/WALICore/build/
 Packages/WALICore/.swiftpm/
 
 # Transient root planning logs; curate durable material under docs/
 /findings.md
 /progress.md
 /task_plan.md
+.gstack/

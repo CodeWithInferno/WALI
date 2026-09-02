@@ -22,9 +22,28 @@ Do not include personal media, credentials, access tokens, or unrelated user dat
 - WALI operates in the current user's GUI session.
 - It must not patch protected system components, bypass SIP/FileVault, or install behavior into another user account without consent.
 - Ordinary wallpaper operation must not require Accessibility, Screen Recording, Full Disk Access, or root.
-- Login-item registration and experimental lock-screen integration must be explicit and reversible.
+- Login-item registration and experimental lock-screen integration must be explicit and reversible. Only `WALILockScreenHelper.app` may be eligible for Full Disk Access; `WALI.app`, `WALIAgent.app`, and media/catalog components must not require it.
 - IPC peers and remote catalog manifests must be authenticated before their data is trusted.
 - Imported files, transcoder outputs, manifests, thumbnails, and catalog metadata are untrusted input.
+- No WALI process with Full Disk Access may parse media, perform network requests, load scripts/plugins, open the marketplace database, or accept caller-controlled paths. The helper accepts only the fixed operations and roots in ADR 0013.
+- Never grant Full Disk Access to an ad-hoc/unsigned Debug build. Live helper IPC requires both peers to carry exact bundle identifiers and the same non-empty Apple signing Team ID; a credential-free Debug build therefore fails closed and Lock Screen continuity stays unavailable.
+- The macOS app contains no Supabase service-role key, database password, catalog signing private key, worker credential, or moderator secret.
+- Public catalog artifacts are immutable and content-addressed. Install requires a canonical bounded manifest, trusted detached Ed25519 signature, exact approved host, length/SHA-256 match, sandboxed media inspection, and agent-owned destination-byte verification.
+- Authoritative marketplace tables remain in the non-exposed `wali` schema with default grants revoked and RLS enabled. Public views/RPCs are an explicit versioned allowlist.
+
+The marketplace threat model, data inventory, upload limits, and dependency
+rules are normative:
+
+- [`docs/security/marketplace-threat-model.md`](docs/security/marketplace-threat-model.md)
+- [`docs/security/data-inventory.yml`](docs/security/data-inventory.yml)
+- [`docs/security/media-policy.yml`](docs/security/media-policy.yml)
+- [`docs/security/dependency-policy.yml`](docs/security/dependency-policy.yml)
+
+Public creator uploads remain disabled until RLS, hostile-media isolation,
+signed catalog/key rotation, backup restore, moderation/legal, and signed bundle
+gates have all passed. A shared VM kernel is not a hard security boundary for
+unrelated production workloads; the hostile-media worker's production target is
+a dedicated replaceable VM.
 
 ## Safe research
 
@@ -39,3 +58,12 @@ Good-faith testing against your own WALI data and processes is welcome. Do not:
 ## Automated tests
 
 Security and compatibility tests use temporary directories and sanitized fixtures. They never mutate the user's live Apple wallpaper store or delete source media.
+
+Tests may inject synthetic peer identities and temporary roots explicitly. Those
+test seams are not selected by a build configuration and are not reachable from
+the shipped helper composition root.
+
+Marketplace fixtures are synthetic and contain no production credentials,
+private object URL, user media, rights evidence, or proprietary competitor
+asset. Never report a security test as production-safe merely because a checksum,
+antivirus scanner, container, or model accepted an input.

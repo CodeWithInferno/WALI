@@ -30,10 +30,11 @@ Other controlled `accepted_by` values are `project_owner` and
 
 A scoped supersession uses reciprocal metadata:
 
-- the older ADR records `superseded_by` and comma-separated
-  `superseded_scope`;
-- the newer ADR records `supersedes` and the identical comma-separated
-  `supersedes_scope`.
+- a single reciprocal pair may use a comma-separated scope list;
+- when an ADR participates in multiple pairs, each scope field uses
+  semicolon-separated `NNNN=scope_a,scope_b` entries, one per counterpart;
+- the older ADR records `superseded_by` and `superseded_scope`, while the
+  newer record uses `supersedes` and the matching `supersedes_scope` entry.
 
 For every accepted, partially superseded, or superseded ADR, the checker
 validates reciprocal references and exact scope-set equality regardless of

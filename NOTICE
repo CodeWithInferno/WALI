@@ -8,3 +8,8 @@ That code license does not grant rights to wallpaper, video, image, audio,
 catalog, or reference-product media. Such content requires its own explicit
 license. Third-party software and content retain their respective copyright,
 license, and attribution notices.
+
+Resolved third-party software notices are documented in THIRD_PARTY_NOTICES.md
+and release-specific SPDX inventories under sbom/. Marketplace and seed media
+must carry item-level provenance in docs/content/seed-catalog.yml or the
+authoritative marketplace rights records.

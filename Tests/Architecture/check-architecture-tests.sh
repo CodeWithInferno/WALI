@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHECKER="${REPOSITORY_ROOT}/scripts/check-architecture.sh"
+MARKETPLACE_CHECKER="${REPOSITORY_ROOT}/scripts/check-marketplace-contracts.rb"
 RUBY_BIN="/usr/bin/ruby"
 TEMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "${TEMP_ROOT}"' EXIT
@@ -56,10 +57,13 @@ new_fixture() {
         "${root}/Sources/WALIAppRuntime" \
         "${root}/Sources/WALIAgent" \
         "${root}/Sources/WALIAgentRuntime" \
+        "${root}/Sources/WALILockScreenHelper" \
+        "${root}/Sources/WALILockScreenHelperRuntime" \
         "${root}/Sources/WALITranscoder" \
         "${root}/Sources/WALITranscoderRuntime" \
         "${root}/Sources/WALIUI" \
         "${root}/Tests/WALIAppTests" \
+        "${root}/Tests/WALILockScreenHelperTests" \
         "${root}/Config" \
         "${root}/.cursor/rules" \
         "${root}/docs/architecture" \
@@ -84,14 +88,20 @@ new_fixture() {
     printf 'import SwiftUI\nimport WALIModel\nimport WALIWire\nimport WALIUI\n' > \
         "${root}/Sources/WALIAppRuntime/App.swift"
     printf 'import SwiftUI\nimport WALIAgentRuntime\n' > "${root}/Sources/WALIAgent/Agent.swift"
-    printf 'import SwiftUI\nimport WALIModel\nimport WALIWire\nimport WALIEngine\nimport WALIUI\n' > \
+    printf 'import SwiftUI\nimport WALIModel\nimport WALIWire\nimport WALIEngine\nimport WALICatalog\nimport WALIUI\n' > \
         "${root}/Sources/WALIAgentRuntime/Agent.swift"
+    printf 'import WALILockScreenHelperRuntime\n' > \
+        "${root}/Sources/WALILockScreenHelper/Helper.swift"
+    printf 'import Foundation\nimport WALIWire\n' > \
+        "${root}/Sources/WALILockScreenHelperRuntime/HelperRuntime.swift"
     printf 'import WALITranscoderRuntime\n' > "${root}/Sources/WALITranscoder/Transcoder.swift"
     printf 'import Foundation\nimport WALIModel\nimport WALIWire\n' > \
         "${root}/Sources/WALITranscoderRuntime/Transcoder.swift"
     printf 'import SwiftUI\nimport WALIModel\n' > "${root}/Sources/WALIUI/UI.swift"
     printf 'import XCTest\n@testable import WALIAppRuntime\n' > \
         "${root}/Tests/WALIAppTests/WALIAppTests.swift"
+    printf 'import XCTest\n@testable import WALILockScreenHelperRuntime\nimport WALIWire\n' > \
+        "${root}/Tests/WALILockScreenHelperTests/HelperTests.swift"
     printf '{"fixture":"golden"}\n' > \
         "${root}/Fixtures/Compatibility/model-records-v1.json"
     printf '{"fixture":"invalid"}\n' > \
@@ -103,6 +113,7 @@ EOF
     cat > "${root}/Config/Base.xcconfig" <<'EOF'
 MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
+WALI_MARKETPLACE_ENABLED = NO
 EOF
 
     cat > "${root}/Config/Debug.xcconfig" <<'EOF'
@@ -207,6 +218,9 @@ targets:
     type: application
     sources:
       - path: Sources/WALIApp
+    info:
+      properties:
+        WALIMarketplaceEnabled: "$(WALI_MARKETPLACE_ENABLED)"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_APP_BUNDLE_IDENTIFIER)"
@@ -856,6 +870,74 @@ surface_manifest = {
 File.write(File.join(root, "docs/compatibility/surfaces.yml"), Psych.dump(surface_manifest))
 RUBY
 
+    # Overlay the current governed marketplace baseline. The synthetic sources
+    # remain intentionally tiny, but their direct imports mirror the registered
+    # package/build graph so legacy mutation cases exercise one clean baseline.
+    mkdir -p \
+        "${root}/Packages/WALICore/Sources/WALICatalog" \
+        "${root}/Packages/WALICore/Tests/WALICatalogTests" \
+        "${root}/Packages/WALICore/Tests/WALIModelTests/Fixtures" \
+        "${root}/Sources/WALICatalogRuntime" \
+        "${root}/Tests/WALICatalogRuntimeTests" \
+        "${root}/Tests/WALIAgentTests" \
+        "${root}/Tests/WALITranscoderTests" \
+        "${root}/Tests/WALIUITests" \
+        "${root}/UITests/WALIEndToEndTests" \
+        "${root}/docs/api" \
+        "${root}/docs/security" \
+        "${root}/Fixtures/Catalog/invalid"
+    printf 'import WALIModel\npackage enum WALICatalogModule { package static let model = WALIModelModule.name }\n' > \
+        "${root}/Packages/WALICore/Sources/WALICatalog/Catalog.swift"
+    printf 'import Testing\n@testable import WALICatalog\n@Test func catalogMarker() {}\n' > \
+        "${root}/Packages/WALICore/Tests/WALICatalogTests/CatalogTests.swift"
+    printf 'import Foundation\nimport WALICatalog\n' > \
+        "${root}/Sources/WALICatalogRuntime/CatalogRuntime.swift"
+    printf 'import SwiftUI\nimport WALIModel\nimport WALIWire\nimport WALIUI\nimport WALICatalogRuntime\n' > \
+        "${root}/Sources/WALIAppRuntime/App.swift"
+    printf 'import XCTest\n@testable import WALIAppRuntime\n@testable import WALICatalogRuntime\nimport WALICatalog\n' > \
+        "${root}/Tests/WALIAppTests/WALIAppTests.swift"
+    printf 'import XCTest\n@testable import WALICatalogRuntime\nimport WALICatalog\n' > \
+        "${root}/Tests/WALICatalogRuntimeTests/CatalogRuntimeTests.swift"
+    printf 'import XCTest\n@testable import WALIAgentRuntime\nimport WALIWire\nimport WALIEngine\nimport WALIModel\nimport WALICatalog\n' > \
+        "${root}/Tests/WALIAgentTests/AgentTests.swift"
+    printf 'import XCTest\n@testable import WALITranscoderRuntime\n' > \
+        "${root}/Tests/WALITranscoderTests/TranscoderTests.swift"
+    printf 'import XCTest\n@testable import WALIUI\n' > \
+        "${root}/Tests/WALIUITests/UITests.swift"
+    printf 'import XCTest\n' > "${root}/UITests/WALIEndToEndTests/EndToEndTests.swift"
+
+    cp "${REPOSITORY_ROOT}/project.yml" "${root}/project.yml"
+    cp "${REPOSITORY_ROOT}/Packages/WALICore/Package.swift" \
+        "${root}/Packages/WALICore/Package.swift"
+    cp "${REPOSITORY_ROOT}/docs/architecture/modules.yml" \
+        "${root}/docs/architecture/modules.yml"
+    cp "${REPOSITORY_ROOT}/docs/compatibility/surfaces.yml" \
+        "${root}/docs/compatibility/surfaces.yml"
+    cp "${REPOSITORY_ROOT}/docs/api/"*.md "${root}/docs/api/"
+    cp "${REPOSITORY_ROOT}/docs/security/marketplace-threat-model.md" \
+        "${REPOSITORY_ROOT}/docs/security/data-inventory.yml" \
+        "${REPOSITORY_ROOT}/docs/security/media-policy.yml" \
+        "${REPOSITORY_ROOT}/docs/security/dependency-policy.yml" \
+        "${root}/docs/security/"
+    cp "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.json" \
+        "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.signature" \
+        "${REPOSITORY_ROOT}/Fixtures/Catalog/revocations-v1.json" \
+        "${root}/Fixtures/Catalog/"
+    cp "${REPOSITORY_ROOT}/Fixtures/Catalog/invalid/"*.json \
+        "${root}/Fixtures/Catalog/invalid/"
+    cp "${REPOSITORY_ROOT}/Packages/WALICore/Tests/WALIModelTests/Fixtures/"*.json \
+        "${root}/Packages/WALICore/Tests/WALIModelTests/Fixtures/"
+    cp "${REPOSITORY_ROOT}/docs/adr/0008-session-lock-aerial-adapter.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0009-global-linked-lock-screen-activation.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0010-restart-lock-screen-playback-on-session-lock.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0011-supabase-marketplace-control-plane.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0012-signed-remote-catalog-releases.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0013-separate-full-disk-access-helper.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0014-marketplace-schema-and-rls.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0015-hostile-media-canonicalization.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0016-minimal-engagement-and-ranking-data.md" \
+        "${root}/docs/adr/"
+
     printf '%s\n' "${root}"
 }
 
@@ -881,6 +963,86 @@ expect_failure() {
 
     if "${CHECKER}" "${fixture}" > "${output}" 2>&1; then
         printf 'RED GAP: %s expected failure containing: %s\n' "${name}" "${expected}" >&2
+        failure_count=$((failure_count + 1))
+        return
+    fi
+    if ! contains_text "${output}" "${expected}"; then
+        printf 'RED GAP: %s did not report: %s\n' "${name}" "${expected}" >&2
+        awk '{ print }' "${output}" >&2
+        failure_count=$((failure_count + 1))
+        return
+    fi
+    pass_count=$((pass_count + 1))
+}
+
+new_marketplace_fixture() {
+    local name="$1"
+    local root="${TEMP_ROOT}/marketplace-${name}"
+
+    mkdir -p \
+        "${root}/docs/adr" \
+        "${root}/docs/api" \
+        "${root}/docs/architecture" \
+        "${root}/docs/compatibility" \
+        "${root}/docs/security" \
+        "${root}/Fixtures/Catalog/invalid" \
+        "${root}/Packages/WALICore"
+    cp "${REPOSITORY_ROOT}/project.yml" "${root}/project.yml"
+    cp "${REPOSITORY_ROOT}/Packages/WALICore/Package.swift" \
+        "${root}/Packages/WALICore/Package.swift"
+    cp "${REPOSITORY_ROOT}/docs/architecture/modules.yml" \
+        "${root}/docs/architecture/modules.yml"
+    cp "${REPOSITORY_ROOT}/docs/compatibility/surfaces.yml" \
+        "${root}/docs/compatibility/surfaces.yml"
+    cp "${REPOSITORY_ROOT}/docs/api/"*.md "${root}/docs/api/"
+    cp "${REPOSITORY_ROOT}/docs/security/marketplace-threat-model.md" \
+        "${REPOSITORY_ROOT}/docs/security/data-inventory.yml" \
+        "${REPOSITORY_ROOT}/docs/security/media-policy.yml" \
+        "${REPOSITORY_ROOT}/docs/security/dependency-policy.yml" \
+        "${root}/docs/security/"
+    cp "${REPOSITORY_ROOT}/docs/adr/0008-session-lock-aerial-adapter.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0009-global-linked-lock-screen-activation.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0010-restart-lock-screen-playback-on-session-lock.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0011-supabase-marketplace-control-plane.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0012-signed-remote-catalog-releases.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0013-separate-full-disk-access-helper.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0014-marketplace-schema-and-rls.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0015-hostile-media-canonicalization.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0016-minimal-engagement-and-ranking-data.md" \
+        "${root}/docs/adr/"
+    cp "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.json" \
+        "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.signature" \
+        "${REPOSITORY_ROOT}/Fixtures/Catalog/revocations-v1.json" \
+        "${root}/Fixtures/Catalog/"
+    cp "${REPOSITORY_ROOT}/Fixtures/Catalog/invalid/"*.json \
+        "${root}/Fixtures/Catalog/invalid/"
+
+    printf '%s\n' "${root}"
+}
+
+expect_marketplace_success() {
+    local name="$1"
+    local fixture="$2"
+    local output="${TEMP_ROOT}/${name}.out"
+
+    if "${RUBY_BIN}" "${MARKETPLACE_CHECKER}" "${fixture}" > "${output}" 2>&1; then
+        pass_count=$((pass_count + 1))
+    else
+        printf 'FAIL: %s expected marketplace success\n' "${name}" >&2
+        awk '{ print }' "${output}" >&2
+        failure_count=$((failure_count + 1))
+    fi
+}
+
+expect_marketplace_failure() {
+    local name="$1"
+    local fixture="$2"
+    local expected="$3"
+    local output="${TEMP_ROOT}/${name}.out"
+
+    if "${RUBY_BIN}" "${MARKETPLACE_CHECKER}" "${fixture}" > "${output}" 2>&1; then
+        printf 'RED GAP: %s expected marketplace failure containing: %s\n' \
+            "${name}" "${expected}" >&2
         failure_count=$((failure_count + 1))
         return
     fi
@@ -1086,7 +1248,8 @@ expect_failure "dynamic package product" "${dynamic_product_fixture}" "Swift pac
 automatic_product_fixture="$(new_fixture automatic-package-product)"
 replace_text \
     "${automatic_product_fixture}/Packages/WALICore/Package.swift" \
-    ", type: .static" \
+    "            type: .static,
+" \
     ""
 expect_failure "automatic package product" "${automatic_product_fixture}" "Swift package product WALIModel must be a static library"
 
@@ -1113,7 +1276,7 @@ mutate_yaml "${broad_product_fixture}/docs/architecture/modules.yml" '
 expect_failure \
     "retired broad package product" \
     "${broad_product_fixture}" \
-    "current WALICore package products must be exactly WALIModel, WALIWire, and WALIEngine"
+    "current WALICore package products do not match the governed product graph"
 
 missing_package_target_fixture="$(new_fixture missing-package-target)"
 mutate_yaml "${missing_package_target_fixture}/docs/architecture/modules.yml" \
@@ -1178,9 +1341,20 @@ mkdir -p "${current_package_cycle_fixture}/Packages/WALICore/Sources/Cycle"
 printf 'public enum CycleMarker {}\n' > "${current_package_cycle_fixture}/Packages/WALICore/Sources/Cycle/Cycle.swift"
 replace_text \
     "${current_package_cycle_fixture}/Packages/WALICore/Package.swift" \
-    '.target(name: "WALIModel", path: "Sources/WALIModel"),' \
-    '.target(name: "WALIModel", dependencies: ["Cycle"], path: "Sources/WALIModel"),
-        .target(name: "Cycle", dependencies: ["WALIModel"], path: "Sources/Cycle"),'
+    '        .target(
+            name: "WALIModel",
+            path: "Sources/WALIModel"
+        ),' \
+    '        .target(
+            name: "WALIModel",
+            dependencies: ["Cycle"],
+            path: "Sources/WALIModel"
+        ),
+        .target(
+            name: "Cycle",
+            dependencies: ["WALIModel"],
+            path: "Sources/Cycle"
+        ),'
 mutate_yaml "${current_package_cycle_fixture}/docs/architecture/modules.yml" '
     package = data["swift_packages"]["WALICore"]["current"]
     package["targets"]["WALIModel"]["dependencies"] = ["Cycle"]
@@ -1648,6 +1822,16 @@ expect_failure \
     "${release_hardened_runtime_fixture}" \
     "WALI Release ENABLE_HARDENED_RUNTIME must be YES"
 
+release_marketplace_fixture="$(new_fixture enabled-release-marketplace)"
+replace_text \
+    "${release_marketplace_fixture}/Config/Release.xcconfig" \
+    '#include "Base.xcconfig"' \
+    $'#include "Base.xcconfig"\nWALI_MARKETPLACE_ENABLED = YES'
+expect_failure \
+    "Release marketplace default off" \
+    "${release_marketplace_fixture}" \
+    "Release marketplace must default to NO"
+
 duplicate_surface_id_fixture="$(new_fixture duplicate-surface-id)"
 mutate_yaml "${duplicate_surface_id_fixture}/docs/compatibility/surfaces.yml" \
     'data["surfaces"] << Marshal.load(Marshal.dump(data["surfaces"].first))'
@@ -1742,6 +1926,97 @@ alwaysApply: true
 # Fixture
 EOF
 expect_failure "invalid rule frontmatter" "${invalid_frontmatter_fixture}" "has invalid YAML frontmatter"
+
+marketplace_clean_fixture="$(new_marketplace_fixture clean)"
+expect_marketplace_success "clean marketplace contracts" "${marketplace_clean_fixture}"
+
+marketplace_unaccepted_adr_fixture="$(new_marketplace_fixture unaccepted-adr)"
+replace_text \
+    "${marketplace_unaccepted_adr_fixture}/docs/adr/0012-signed-remote-catalog-releases.md" \
+    "- status: accepted" \
+    "- status: proposed"
+expect_marketplace_failure \
+    "marketplace requires accepted ADR" \
+    "${marketplace_unaccepted_adr_fixture}" \
+    "[MKT-ADR-GATE]"
+
+marketplace_missing_compatibility_fixture="$(new_marketplace_fixture missing-compatibility)"
+mutate_yaml \
+    "${marketplace_missing_compatibility_fixture}/docs/compatibility/surfaces.yml" \
+    'data["surfaces"].reject! { |surface| surface["id"] == "catalog_signing_keys" }'
+expect_marketplace_failure \
+    "marketplace requires compatibility entry" \
+    "${marketplace_missing_compatibility_fixture}" \
+    "[MKT-COMPATIBILITY-MISSING]"
+
+marketplace_exposed_table_fixture="$(new_marketplace_fixture exposed-table)"
+mkdir -p "${marketplace_exposed_table_fixture}/supabase/migrations"
+printf '%s\n' \
+    'create table public.secret_uploads (id uuid primary key);' \
+    > "${marketplace_exposed_table_fixture}/supabase/migrations/001_invalid.sql"
+expect_marketplace_failure \
+    "marketplace rejects exposed table" \
+    "${marketplace_exposed_table_fixture}" \
+    "[MKT-EXPOSED-TABLE]"
+
+marketplace_helper_import_fixture="$(new_marketplace_fixture helper-import)"
+mkdir -p "${marketplace_helper_import_fixture}/Sources/WALILockScreenHelperRuntime"
+printf '%s\n' \
+    'import AVFoundation' \
+    'struct UnsafeHelper {}' \
+    > "${marketplace_helper_import_fixture}/Sources/WALILockScreenHelperRuntime/Unsafe.swift"
+expect_marketplace_failure \
+    "marketplace rejects helper media import" \
+    "${marketplace_helper_import_fixture}" \
+    "[MKT-HELPER-FORBIDDEN-IMPORT]"
+
+marketplace_helper_api_fixture="$(new_marketplace_fixture helper-api)"
+mkdir -p "${marketplace_helper_api_fixture}/Sources/WALILockScreenHelperRuntime"
+printf '%s\n' \
+    'import Foundation' \
+    'let forbiddenLauncher = Process()' \
+    > "${marketplace_helper_api_fixture}/Sources/WALILockScreenHelperRuntime/Unsafe.swift"
+expect_marketplace_failure \
+    "marketplace rejects helper process API" \
+    "${marketplace_helper_api_fixture}" \
+    "[MKT-HELPER-FORBIDDEN-API]"
+
+marketplace_unpinned_dependency_fixture="$(new_marketplace_fixture unpinned-dependency)"
+mutate_yaml \
+    "${marketplace_unpinned_dependency_fixture}/project.yml" \
+    'data["packages"]["Unsafe"] = {"url" => "https://example.invalid/unsafe.git", "branch" => "main"}'
+expect_marketplace_failure \
+    "marketplace rejects unpinned dependency" \
+    "${marketplace_unpinned_dependency_fixture}" \
+    "[MKT-DEPENDENCY-UNPINNED]"
+
+marketplace_media_policy_fixture="$(new_marketplace_fixture media-policy-drift)"
+mutate_yaml \
+    "${marketplace_media_policy_fixture}/docs/security/media-policy.yml" \
+    'data["processing"]["network"] = "host"'
+expect_marketplace_failure \
+    "marketplace rejects media policy drift" \
+    "${marketplace_media_policy_fixture}" \
+    "[MKT-MEDIA-POLICY]"
+
+marketplace_data_inventory_fixture="$(new_marketplace_fixture data-inventory-drift)"
+mutate_yaml \
+    "${marketplace_data_inventory_fixture}/docs/security/data-inventory.yml" \
+    'data["stores"].reject! { |store| store["id"] == "wali.rights_declarations" }'
+expect_marketplace_failure \
+    "marketplace rejects undocumented data store" \
+    "${marketplace_data_inventory_fixture}" \
+    "[MKT-DATA-INVENTORY]"
+
+marketplace_new_table_inventory_fixture="$(new_marketplace_fixture new-table-without-inventory)"
+mkdir -p "${marketplace_new_table_inventory_fixture}/supabase/migrations"
+printf '%s\n' \
+    'create table wali.undocumented_security_state (id uuid primary key);' \
+    > "${marketplace_new_table_inventory_fixture}/supabase/migrations/001_invalid.sql"
+expect_marketplace_failure \
+    "marketplace rejects migration table absent from inventory" \
+    "${marketplace_new_table_inventory_fixture}" \
+    "[MKT-DATA-INVENTORY]"
 
 if (( failure_count > 0 )); then
     printf 'Architecture policy fixture failures: %s; passes: %s\n' "${failure_count}" "${pass_count}" >&2

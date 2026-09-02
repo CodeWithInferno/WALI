@@ -75,6 +75,65 @@ enum LibraryRecordFactory {
         )
     }
 
+    static func makeCatalogRecord(
+        displayName proposedName: String,
+        sourceDigest: ContentDigest,
+        origin: CatalogLibraryOriginSnapshot,
+        artifacts storedArtifacts: [StoredArtifact]
+    ) throws -> CommittedLibraryRecord {
+        guard let itemUUID = UUID(uuidString: origin.releaseID),
+              let master = storedArtifacts.first(where: { $0.role == .masterVideo }),
+              let preview = storedArtifacts.first(where: { $0.role == .previewVideo }),
+              let poster = storedArtifacts.first(where: { $0.role == .posterImage })
+        else {
+            throw LibraryRecordFactoryError.incompleteArtifactSet
+        }
+        let artifacts = try storedArtifacts.map(makeArtifact)
+        let masterVariantID = try AssetVariantID(canonicalUUID())
+        let previewVariantID = try AssetVariantID(canonicalUUID())
+        let release = try AssetRelease(
+            schema: .current,
+            id: AssetReleaseID(origin.releaseID),
+            assetID: AssetID(origin.wallpaperID),
+            edition: origin.edition,
+            artifacts: artifacts,
+            posterArtifactID: poster.digest,
+            variants: [
+                try AssetVariant(
+                    id: masterVariantID,
+                    qualityTier: .high,
+                    rendererRequirement: .init(rendererID: .waliVideo),
+                    bindings: [.init(role: .waliPlayback, artifactID: master.digest)]
+                ),
+                try AssetVariant(
+                    id: previewVariantID,
+                    qualityTier: .preview,
+                    rendererRequirement: .init(rendererID: .waliVideo),
+                    bindings: [.init(role: .waliPlayback, artifactID: preview.digest)]
+                ),
+            ],
+            defaultVariantID: masterVariantID
+        )
+        let item = try LibraryItem(
+            schema: .current,
+            id: LibraryItemID(itemUUID.uuidString.lowercased()),
+            releaseID: release.id,
+            displayName: boundedName(
+                proposedName,
+                maximumUTF8Bytes: LibraryItem.maximumDisplayNameUTF8Length
+            ),
+            origin: .catalog,
+            catalogOrigin: origin
+        )
+        return try CommittedLibraryRecord(
+            item: item,
+            release: release,
+            sourceDigest: sourceDigest,
+            sourceFileName: "catalog-\(origin.releaseID).mp4",
+            artifacts: storedArtifacts
+        )
+    }
+
     static func makeEngineItem(
         from record: CommittedLibraryRecord,
         preserving existing: EngineLibraryItem? = nil

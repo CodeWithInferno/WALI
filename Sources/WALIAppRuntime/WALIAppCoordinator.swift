@@ -1,12 +1,19 @@
 import AppKit
 import Foundation
+import OSLog
 import WALIModel
+import WALICatalogRuntime
 import WALIUI
 import WALIWire
 
 /// Live foreground adapter: lifecycle, XPC transport, snapshot mapping and UI intentions.
 @MainActor
 public final class WALIAppCoordinator: WALIUIActionHandling {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.wali.WALI",
+        category: "AgentSnapshot"
+    )
+
     public let model: WALIAppModel
 
     private let connection: AgentConnection
@@ -101,6 +108,46 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
         }
     }
 
+    public func installCatalogRelease(
+        _ prepared: PreparedCatalogInstall
+    ) async throws {
+        let request = AgentCatalogInstallRequest(
+            canonicalManifest: prepared.canonicalManifest,
+            canonicalMetadata: prepared.canonicalMetadata,
+            signatureBase64URL: prepared.signatureBase64URL,
+            keyID: prepared.keyID,
+            quarantineReference: prepared.quarantineReference
+        )
+        let snapshot = try await sendWithSingleStaleRetry(.installCatalogRelease(request))
+        apply(snapshot, clearNotice: true)
+    }
+
+    public func updateCatalogSecurityState(
+        _ security: CatalogSecuritySnapshot
+    ) async throws {
+        if let transition = security.trustTransition {
+            let snapshot = try await sendWithSingleStaleRetry(.updateCatalogTrustTransition(
+                AgentCatalogTrustTransitionUpdate(
+                    revision: transition.revision,
+                    canonicalBody: transition.canonicalBody,
+                    signatureBase64URL: transition.signatureBase64URL,
+                    keyID: transition.keyID
+                )
+            ))
+            apply(snapshot)
+        }
+        let revocations = security.revocations
+        let snapshot = try await sendWithSingleStaleRetry(.updateCatalogRevocations(
+            AgentCatalogRevocationUpdate(
+                revision: revocations.revision,
+                canonicalBody: revocations.canonicalBody,
+                signatureBase64URL: revocations.signatureBase64URL,
+                keyID: revocations.keyID
+            )
+        ))
+        apply(snapshot)
+    }
+
     private func perform(_ action: WALIUIAction) async {
         do {
             guard let command = try command(for: action) else { return }
@@ -146,7 +193,8 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
 
     private func expectedRevision(for command: AgentCommand) -> EngineRevision? {
         switch command {
-        case .snapshot, .diagnosticsSnapshot, .handshake, .openForegroundApp, .revealItem, .quit:
+        case .snapshot, .diagnosticsSnapshot, .handshake, .openForegroundApp, .revealItem,
+             .updateCatalogTrustTransition, .updateCatalogRevocations, .quit:
             nil
         default:
             lastSnapshot?.revision
@@ -214,7 +262,7 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     private func refresh() async {
         do {
             let snapshot = try await connection.send(.snapshot)
-            apply(snapshot)
+            apply(snapshot, clearNotice: true)
         } catch {
             if lastSnapshot == nil {
                 present(error: error, title: "Connecting to WALI")
@@ -223,6 +271,11 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     }
 
     private func apply(_ snapshot: AgentSnapshot, clearNotice: Bool = false) {
+        if _isDebugAssertConfiguration() {
+            Self.logger.debug(
+                "Applying agent snapshot revision \(snapshot.revision.rawValue, privacy: .public) with \(snapshot.items.count, privacy: .public) library items"
+            )
+        }
         guard lastSnapshot == nil || snapshot.revision.rawValue >= lastSnapshot!.revision.rawValue else {
             return
         }

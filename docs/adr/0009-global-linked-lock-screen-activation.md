@@ -6,12 +6,16 @@
 - accepted_by: project_owner
 - approval_reference: project-owner global linked activation directive 2026-08-31
 - related: [0008](0008-session-lock-aerial-adapter.md)
-- superseded_by: 0010
-- superseded_scope: refresh_only_after_required_mutation
+- superseded_by: 0010, 0013
+- superseded_scope: 0010=refresh_only_after_required_mutation;0013=lock_screen_privileged_process_ownership
 
 ADR 0010 supersedes only the rule that Apple wallpaper processes refresh solely
 after a managed mutation. The store scope, transaction, ownership, rollback,
 and quiesce-before-write rules in this record remain accepted.
+
+ADR 0013 additionally supersedes only the clause assigning those privileged
+Apple-store transactions to `WALIAgent`; the narrow Lock Screen helper inherits
+the unchanged compatibility and transaction contract.
 
 ## Context
 

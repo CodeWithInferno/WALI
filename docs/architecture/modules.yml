@@ -23,6 +23,11 @@ swift_packages:
           linkage: static
           targets:
             - WALIEngine
+        WALICatalog:
+          kind: library
+          linkage: static
+          targets:
+            - WALICatalog
       targets:
         WALIModel:
           kind: regular
@@ -53,6 +58,16 @@ swift_packages:
           path: Tests/WALIEngineTests
           dependencies:
             - WALIEngine
+        WALICatalog:
+          kind: regular
+          path: Sources/WALICatalog
+          dependencies:
+            - WALIModel
+        WALICatalogTests:
+          kind: test
+          path: Tests/WALICatalogTests
+          dependencies:
+            - WALICatalog
     target:
       products:
         WALIModel:
@@ -70,6 +85,11 @@ swift_packages:
           linkage: static
           targets:
             - WALIEngine
+        WALICatalog:
+          kind: library
+          linkage: static
+          targets:
+            - WALICatalog
       targets:
         WALIModel:
           kind: regular
@@ -100,6 +120,16 @@ swift_packages:
           path: Tests/WALIEngineTests
           dependencies:
             - WALIEngine
+        WALICatalog:
+          kind: regular
+          path: Sources/WALICatalog
+          dependencies:
+            - WALIModel
+        WALICatalogTests:
+          kind: test
+          path: Tests/WALICatalogTests
+          dependencies:
+            - WALICatalog
 
 xcode_test_targets:
   WALIAppTests:
@@ -107,7 +137,16 @@ xcode_test_targets:
     source_path: Tests/WALIAppTests
     build_dependencies:
       - WALIAppRuntime
-    package_dependencies: []
+      - WALICatalogRuntime
+    package_dependencies:
+      - WALICatalog
+  WALICatalogRuntimeTests:
+    type: bundle.unit-test
+    source_path: Tests/WALICatalogRuntimeTests
+    build_dependencies:
+      - WALICatalogRuntime
+    package_dependencies:
+      - WALICatalog
   WALIAgentTests:
     type: bundle.unit-test
     source_path: Tests/WALIAgentTests
@@ -116,12 +155,21 @@ xcode_test_targets:
     package_dependencies:
       - WALIWire
       - WALIEngine
+      - WALIModel
+      - WALICatalog
   WALITranscoderTests:
     type: bundle.unit-test
     source_path: Tests/WALITranscoderTests
     build_dependencies:
       - WALITranscoderRuntime
     package_dependencies: []
+  WALILockScreenHelperTests:
+    type: bundle.unit-test
+    source_path: Tests/WALILockScreenHelperTests
+    build_dependencies:
+      - WALILockScreenHelperRuntime
+    package_dependencies:
+      - WALIWire
   WALIUITests:
     type: bundle.unit-test
     source_path: Tests/WALIUITests
@@ -296,6 +344,50 @@ modules:
       - CloudKit
       - Network
 
+  WALICatalog:
+    presence: current
+    source_path: Packages/WALICore/Sources/WALICatalog
+    owner_role: catalog_maintainer
+    stability: stable_contract
+    current_capabilities:
+      - bounded_catalog_manifest_values
+      - strict_canonical_json_codec
+      - ed25519_manifest_verification
+      - approved_host_and_revocation_validation
+    target_responsibility: Strict bounded catalog values, canonical JSON, Ed25519 trust, approved-host validation, and revocation policy with no network transport.
+    current_target:
+      build_system: swift_package
+      name: WALICatalog
+      type: library.static
+      package_reference: WALICore
+      product: WALICatalog
+      target: WALICatalog
+    target_target:
+      build_system: swift_package
+      name: WALICatalog
+      type: library.static
+      package_reference: WALICore
+      product: WALICatalog
+      target: WALICatalog
+    current_allowed_internal_imports:
+      - WALIModel
+    target_allowed_internal_imports:
+      - WALIModel
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - SwiftUI
+      - AppKit
+      - AVFoundation
+      - VideoToolbox
+      - Metal
+      - SQLite3
+      - CoreData
+      - SwiftData
+      - ServiceManagement
+      - CloudKit
+      - Network
+
   WALIUI:
     presence: current
     source_path: Sources/WALIUI
@@ -355,16 +447,126 @@ modules:
       - WALIModel
       - WALIWire
       - WALIUI
+      - WALICatalogRuntime
     target_allowed_internal_imports:
       - WALIModel
       - WALIWire
       - WALIUI
+      - WALICatalogRuntime
     current_allowed_internal_reexports: []
     target_allowed_internal_reexports: []
     forbidden_frameworks:
       - SQLite3
       - CoreData
       - SwiftData
+
+  WALICatalogRuntime:
+    presence: current
+    source_path: Sources/WALICatalogRuntime
+    owner_role: catalog_maintainer
+    stability: adapter
+    current_capabilities:
+      - product_shaped_catalog_gateway
+      - supabase_auth_and_catalog_adapter
+      - bounded_catalog_dto_mapping
+      - create_exclusive_verified_download
+      - public_catalog_cache
+    target_responsibility: Foreground Supabase auth, public catalog API, creator/moderator commands, bounded download, mapping, and public cache adapters.
+    current_target:
+      build_system: xcode
+      name: WALICatalogRuntime
+      type: framework.static
+    target_target:
+      build_system: xcode
+      name: WALICatalogRuntime
+      type: framework.static
+    current_allowed_internal_imports:
+      - WALICatalog
+    target_allowed_internal_imports:
+      - WALICatalog
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - AVFoundation
+      - VideoToolbox
+      - SQLite3
+      - CoreData
+      - SwiftData
+      - ServiceManagement
+
+  WALILockScreenHelperRuntime:
+    presence: current
+    source_path: Sources/WALILockScreenHelperRuntime
+    owner_role: security_responder
+    stability: adapter
+    current_capabilities:
+      - strict_four_operation_router
+      - designated_peer_authentication
+      - fixed_root_store_transactions
+      - replay_bounded_idempotency
+    target_responsibility: Fixed-root, authenticated, version-gated Lock Screen store transactions and process refresh without media, network, database, or generic command capability.
+    current_target:
+      build_system: xcode
+      name: WALILockScreenHelperRuntime
+      type: framework.static
+    target_target:
+      build_system: xcode
+      name: WALILockScreenHelperRuntime
+      type: framework.static
+    current_allowed_internal_imports:
+      - WALIWire
+    target_allowed_internal_imports:
+      - WALIWire
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - SwiftUI
+      - AppKit
+      - AVFoundation
+      - VideoToolbox
+      - WebKit
+      - JavaScriptCore
+      - Network
+      - SQLite3
+      - CoreData
+      - SwiftData
+      - CloudKit
+
+  WALILockScreenHelper:
+    presence: current
+    source_path: Sources/WALILockScreenHelper
+    owner_role: security_responder
+    stability: adapter
+    current_capabilities:
+      - lsui_element_composition_root
+      - authenticated_named_xpc_listener
+    target_responsibility: LSUIElement composition root and authenticated named service for the narrow Full-Disk-Access compatibility helper.
+    current_target:
+      build_system: xcode
+      name: WALILockScreenHelper
+      type: application
+    target_target:
+      build_system: xcode
+      name: WALILockScreenHelper
+      type: application
+    current_allowed_internal_imports:
+      - WALILockScreenHelperRuntime
+    target_allowed_internal_imports:
+      - WALILockScreenHelperRuntime
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+      - SwiftUI
+      - AppKit
+      - AVFoundation
+      - VideoToolbox
+      - WebKit
+      - JavaScriptCore
+      - Network
+      - SQLite3
+      - CoreData
+      - SwiftData
+      - CloudKit
 
   WALIAgentRuntime:
     presence: current
@@ -378,6 +580,7 @@ modules:
       - per_display_scaling_and_reconnect_continuity
       - crash_recoverable_content_store
       - import_and_transcoder_orchestration
+      - signed_catalog_install_authority
       - native_menu_bar_scene
     target_responsibility: Host Engine, rendering, jobs, storage, and system-event adapters.
     current_target:
@@ -392,11 +595,13 @@ modules:
       - WALIModel
       - WALIWire
       - WALIEngine
+      - WALICatalog
       - WALIUI
     target_allowed_internal_imports:
       - WALIModel
       - WALIWire
       - WALIEngine
+      - WALICatalog
       - WALIUI
     current_allowed_internal_reexports: []
     target_allowed_internal_reexports: []
@@ -528,12 +733,16 @@ edges:
         to: WALIAppRuntime
       - from: WALIAppRuntime
         to: WALIUI
+      - from: WALIAppRuntime
+        to: WALICatalogRuntime
       - from: WALIAgent
         to: WALIAgentRuntime
       - from: WALIAgentRuntime
         to: WALIUI
       - from: WALITranscoder
         to: WALITranscoderRuntime
+      - from: WALILockScreenHelper
+        to: WALILockScreenHelperRuntime
     package:
       - from: WALIAppRuntime
         to: WALIModel
@@ -545,17 +754,25 @@ edges:
         to: WALIWire
       - from: WALIAgentRuntime
         to: WALIEngine
+      - from: WALIAgentRuntime
+        to: WALICatalog
       - from: WALITranscoderRuntime
         to: WALIModel
       - from: WALITranscoderRuntime
         to: WALIWire
       - from: WALIUI
         to: WALIModel
+      - from: WALICatalogRuntime
+        to: WALICatalog
+      - from: WALILockScreenHelperRuntime
+        to: WALIWire
     embed_only:
       - from: WALI
         to: WALIAgent
       - from: WALIAgent
         to: WALITranscoder
+      - from: WALI
+        to: WALILockScreenHelper
 
   target:
     build:
@@ -563,12 +780,16 @@ edges:
         to: WALIAppRuntime
       - from: WALIAppRuntime
         to: WALIUI
+      - from: WALIAppRuntime
+        to: WALICatalogRuntime
       - from: WALIAgent
         to: WALIAgentRuntime
       - from: WALIAgentRuntime
         to: WALIUI
       - from: WALITranscoder
         to: WALITranscoderRuntime
+      - from: WALILockScreenHelper
+        to: WALILockScreenHelperRuntime
     package:
       - from: WALIAppRuntime
         to: WALIModel
@@ -580,14 +801,24 @@ edges:
         to: WALIWire
       - from: WALIAgentRuntime
         to: WALIEngine
+      - from: WALIAgentRuntime
+        to: WALICatalog
       - from: WALITranscoderRuntime
         to: WALIModel
       - from: WALITranscoderRuntime
         to: WALIWire
       - from: WALIUI
         to: WALIModel
+      - from: WALICatalogRuntime
+        to: WALIModel
+      - from: WALICatalogRuntime
+        to: WALICatalog
+      - from: WALILockScreenHelperRuntime
+        to: WALIWire
     embed_only:
       - from: WALI
         to: WALIAgent
       - from: WALIAgent
         to: WALITranscoder
+      - from: WALI
+        to: WALILockScreenHelper

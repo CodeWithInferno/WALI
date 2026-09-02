@@ -28,11 +28,14 @@ xcodebuild \
 unit_test_bundles=(
     WALIAppTests
     WALIAgentTests
+    WALICatalogRuntimeTests
+    WALILockScreenHelperTests
     WALITranscoderTests
     WALIUITests
 )
 
 mkdir -p "${PROFILE_OUTPUT_DIR}"
+find "${PROFILE_OUTPUT_DIR}" -maxdepth 1 -type f -name '*.profraw' -delete
 
 for test_bundle in "${unit_test_bundles[@]}"; do
     bundle_path="${PRODUCTS_DIR}/${test_bundle}.xctest"
@@ -45,3 +48,5 @@ for test_bundle in "${unit_test_bundles[@]}"; do
         xcrun xctest "${bundle_path}"
 done
 
+DERIVED_DATA_PATH="${DERIVED_DATA_PATH}" \
+    "${ROOT_DIR}/scripts/check-swift-coverage.sh"

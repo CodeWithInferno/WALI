@@ -64,6 +64,131 @@ enum ContentStorage {
         }
     }
 
+    /// Copies catalog bytes from an already-open quarantine directory into a
+    /// fresh agent-owned directory while hashing the exact descriptor bytes.
+    /// The caller only ever bookmarks and transcodes the returned copy.
+    static func adoptCatalogQuarantine(
+        _ url: URL,
+        under root: URL,
+        into destinationDirectory: URL,
+        expectedDigest: ContentDigest,
+        expectedByteCount: UInt64
+    ) throws -> URL {
+        try requireDirectoryWithoutSymlink(root)
+        try requireDirectoryWithoutSymlink(destinationDirectory)
+        guard url.standardizedFileURL.deletingLastPathComponent() == root.standardizedFileURL,
+              !url.lastPathComponent.isEmpty,
+              !url.lastPathComponent.contains("/")
+        else { throw StorageError.pathEscapesStore }
+
+        let rootDescriptor = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard rootDescriptor >= 0 else {
+            throw StorageError.ioFailure(String(cString: strerror(errno)))
+        }
+        defer { close(rootDescriptor) }
+        var preflight = stat()
+        guard fstatat(
+            rootDescriptor,
+            url.lastPathComponent,
+            &preflight,
+            AT_SYMLINK_NOFOLLOW
+        ) == 0 else {
+            throw StorageError.ioFailure(String(cString: strerror(errno)))
+        }
+        guard (preflight.st_mode & S_IFMT) == S_IFREG else {
+            if (preflight.st_mode & S_IFMT) == S_IFLNK {
+                throw StorageError.symbolicLinkRejected
+            }
+            throw StorageError.nonregularFile
+        }
+        let input = openat(
+            rootDescriptor,
+            url.lastPathComponent,
+            O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard input >= 0 else {
+            throw StorageError.ioFailure(String(cString: strerror(errno)))
+        }
+        defer { close(input) }
+        var info = stat()
+        guard fstat(input, &info) == 0 else {
+            throw StorageError.ioFailure(String(cString: strerror(errno)))
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_nlink == 1,
+              info.st_size > 0,
+              UInt64(info.st_size) == expectedByteCount,
+              UInt64(info.st_blocks) * 512 >= expectedByteCount
+        else {
+            throw StorageError.invalidCandidate
+        }
+
+        let destinationDescriptor = open(
+            destinationDirectory.path,
+            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+        guard destinationDescriptor >= 0 else {
+            throw StorageError.ioFailure(String(cString: strerror(errno)))
+        }
+        defer { close(destinationDescriptor) }
+        let fileName = "catalog-source.mp4"
+        let destination = destinationDirectory.appendingPathComponent(fileName, isDirectory: false)
+        let output = openat(
+            destinationDescriptor,
+            fileName,
+            O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC,
+            0o600
+        )
+        guard output >= 0 else {
+            throw StorageError.ioFailure(String(cString: strerror(errno)))
+        }
+        var keepDestination = false
+        defer {
+            close(output)
+            if !keepDestination { unlinkat(destinationDescriptor, fileName, 0) }
+        }
+
+        var hasher = SHA256()
+        var total: UInt64 = 0
+        var buffer = [UInt8](repeating: 0, count: chunkSize)
+        while true {
+            try Task.checkCancellation()
+            let count = buffer.withUnsafeMutableBytes { bytes in
+                read(input, bytes.baseAddress, bytes.count)
+            }
+            guard count >= 0 else {
+                throw StorageError.ioFailure(String(cString: strerror(errno)))
+            }
+            if count == 0 { break }
+            total += UInt64(count)
+            guard total <= expectedByteCount else { throw StorageError.byteCountMismatch }
+            try buffer.withUnsafeBytes { bytes in
+                guard let base = bytes.baseAddress else { return }
+                var offset = 0
+                while offset < count {
+                    let written = write(output, base.advanced(by: offset), count - offset)
+                    guard written > 0 else {
+                        throw StorageError.ioFailure(String(cString: strerror(errno)))
+                    }
+                    offset += written
+                }
+            }
+            hasher.update(data: Data(buffer[0..<count]))
+        }
+        guard total == expectedByteCount else { throw StorageError.byteCountMismatch }
+        let digest = try ContentDigest(
+            algorithm: .sha256,
+            value: hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        )
+        guard digest == expectedDigest else { throw StorageError.digestMismatch }
+        guard fsync(output) == 0, fchmod(output, 0o400) == 0 else {
+            throw StorageError.ioFailure(String(cString: strerror(errno)))
+        }
+        keepDestination = true
+        try syncDirectory(destinationDirectory)
+        return destination
+    }
+
     static func prepare(candidate: StagedArtifactCandidate, paths: LibraryPaths) throws -> PreparedArtifact {
         try requireContainedRegularFile(candidate.stagedURL, under: paths.staging)
         let fileName = "\(UUID().uuidString.lowercased()).\(candidate.mediaKind.fileExtension)"

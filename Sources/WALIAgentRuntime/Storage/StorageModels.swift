@@ -266,7 +266,8 @@ public struct ArtifactTombstone: Codable, Sendable, Hashable {
 
 public struct RuntimeSnapshot: Codable, Sendable, Hashable {
     public static let schemaEpoch: UInt16 = 1
-    public static let schemaRevision: UInt16 = 0
+    public static let minimumReadableSchemaRevision: UInt16 = 0
+    public static let schemaRevision: UInt16 = 1
 
     public var schemaEpoch: UInt16
     public var schemaRevision: UInt16
@@ -329,6 +330,7 @@ public enum StorageError: Error, Sendable, Equatable {
     case jobNotInstallable
     case jobNotRetryable
     case missingPublishedArtifact
+    case catalogInstallConflict
     case ioFailure(String)
 }
 
@@ -354,6 +356,7 @@ extension StorageError: LocalizedError {
         case .jobNotInstallable: "The import job is not awaiting installation."
         case .jobNotRetryable: "The import job is not in a retryable terminal-attempt state."
         case .missingPublishedArtifact: "A committed artifact is missing from content storage."
+        case .catalogInstallConflict: "A catalog release conflicts with an existing local record."
         case let .ioFailure(message): "Local storage failed: \(message)"
         }
     }

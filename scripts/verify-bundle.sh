@@ -120,12 +120,16 @@ shopt -u dotglob
 
 [[ ${#main_xpc_entries[@]} -eq 0 ]] ||
     fail "stale topology: main app Contents/XPCServices must be absent or empty"
-[[ ${#login_item_entries[@]} -eq 1 ]] || fail "expected exactly one embedded login item"
+[[ ${#login_item_entries[@]} -eq 2 ]] || fail "expected exactly two embedded login items"
 
-AGENT_PATH="${login_item_entries[0]}"
+AGENT_PATH="${LOGIN_ITEMS_DIR}/WALIAgent.app"
+HELPER_PATH="${LOGIN_ITEMS_DIR}/WALILockScreenHelper.app"
 
-[[ "$(/usr/bin/basename "${AGENT_PATH}")" == "WALIAgent.app" ]] ||
-    fail "unexpected login item name"
+for entry in "${login_item_entries[@]}"; do
+    name="$(/usr/bin/basename "${entry}")"
+    [[ "${name}" == "WALIAgent.app" || "${name}" == "WALILockScreenHelper.app" ]] ||
+        fail "unexpected login item name"
+done
 assert_not_symlink "${AGENT_PATH}" "WALIAgent.app root"
 [[ -d "${AGENT_PATH}" ]] || fail "embedded WALIAgent.app is not a directory"
 assert_not_symlink "${AGENT_PATH}/Contents" "WALIAgent.app/Contents"
@@ -134,6 +138,29 @@ assert_strict_descendant \
     "${AGENT_CANONICAL_PATH}" \
     "${APP_CANONICAL_PATH}" \
     "WALIAgent.app"
+assert_not_symlink "${HELPER_PATH}" "WALILockScreenHelper.app root"
+[[ -d "${HELPER_PATH}" ]] || fail "embedded WALILockScreenHelper.app is not a directory"
+assert_not_symlink "${HELPER_PATH}/Contents" "WALILockScreenHelper.app/Contents"
+HELPER_CANONICAL_PATH="$(canonical_path "${HELPER_PATH}" "WALILockScreenHelper.app")"
+assert_strict_descendant \
+    "${HELPER_CANONICAL_PATH}" \
+    "${APP_CANONICAL_PATH}" \
+    "WALILockScreenHelper.app"
+
+HELPER_XPC_SERVICES_DIR="${HELPER_PATH}/Contents/XPCServices"
+assert_not_symlink \
+    "${HELPER_XPC_SERVICES_DIR}" \
+    "WALILockScreenHelper.app/Contents/XPCServices"
+shopt -s nullglob
+shopt -s dotglob
+helper_xpc_entries=()
+if [[ -d "${HELPER_XPC_SERVICES_DIR}" ]]; then
+    helper_xpc_entries=("${HELPER_XPC_SERVICES_DIR}"/*)
+fi
+shopt -u nullglob
+shopt -u dotglob
+[[ ${#helper_xpc_entries[@]} -eq 0 ]] ||
+    fail "WALILockScreenHelper.app must not embed XPC services"
 
 AGENT_XPC_SERVICES_DIR="${AGENT_PATH}/Contents/XPCServices"
 assert_not_symlink \
@@ -168,6 +195,7 @@ assert_strict_descendant \
 expected_app_identifier="$(xcconfig_value WALI_APP_BUNDLE_IDENTIFIER)"
 expected_agent_identifier="$(xcconfig_value WALI_AGENT_BUNDLE_IDENTIFIER)"
 expected_transcoder_identifier="$(xcconfig_value WALI_TRANSCODER_BUNDLE_IDENTIFIER)"
+expected_helper_identifier="$(xcconfig_value WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER)"
 expected_app_group="$(xcconfig_value WALI_APP_GROUP_IDENTIFIER)"
 expected_control_service="$(xcconfig_value WALI_AGENT_CONTROL_SERVICE_NAME)"
 expected_development_team="${DEVELOPMENT_TEAM:-}"
@@ -192,10 +220,15 @@ fi
     fail "incorrect ${CONFIGURATION} agent bundle identifier"
 [[ "$(plist_value "${XPC_PATH}/Contents/Info.plist" CFBundleIdentifier)" == "${expected_transcoder_identifier}" ]] ||
     fail "incorrect ${CONFIGURATION} transcoder bundle identifier"
+[[ "$(plist_value "${HELPER_PATH}/Contents/Info.plist" CFBundleIdentifier)" == "${expected_helper_identifier}" ]] ||
+    fail "incorrect ${CONFIGURATION} lock screen helper bundle identifier"
 
 agent_ui_element="$(plist_value "${AGENT_PATH}/Contents/Info.plist" LSUIElement)"
 [[ "${agent_ui_element}" == "true" || "${agent_ui_element}" == "1" ]] ||
     fail "WALIAgent is not configured as an LSUIElement"
+helper_ui_element="$(plist_value "${HELPER_PATH}/Contents/Info.plist" LSUIElement)"
+[[ "${helper_ui_element}" == "true" || "${helper_ui_element}" == "1" ]] ||
+    fail "WALILockScreenHelper is not configured as an LSUIElement"
 
 [[ "$(plist_value "${XPC_PATH}/Contents/Info.plist" XPCService.ServiceType)" == "Application" ]] ||
     fail "WALITranscoder has an invalid XPC service type"
@@ -203,8 +236,9 @@ agent_ui_element="$(plist_value "${AGENT_PATH}/Contents/Info.plist" LSUIElement)
 [[ -x "${APP_PATH}/Contents/MacOS/WALI" ]] || fail "missing main app executable"
 [[ -x "${AGENT_PATH}/Contents/MacOS/WALIAgent" ]] || fail "missing agent executable"
 [[ -x "${XPC_PATH}/Contents/MacOS/WALITranscoder" ]] || fail "missing transcoder executable"
+[[ -x "${HELPER_PATH}/Contents/MacOS/WALILockScreenHelper" ]] || fail "missing lock screen helper executable"
 
-bundle_paths=("${APP_PATH}" "${AGENT_PATH}" "${XPC_PATH}")
+bundle_paths=("${APP_PATH}" "${AGENT_PATH}" "${XPC_PATH}" "${HELPER_PATH}")
 
 for bundle_path in "${bundle_paths[@]}"; do
     info_plist="${bundle_path}/Contents/Info.plist"
@@ -226,7 +260,7 @@ if [[ "${CONFIGURATION}" == "Debug" || "${CONFIGURATION}" == "Release" ]]; then
     [[ ${sealed_bundle_count} -eq 0 ]] ||
         fail "${CONFIGURATION} verification requires unsealed credential-free bundles"
 else
-    [[ ${sealed_bundle_count} -eq 3 ]] ||
+    [[ ${sealed_bundle_count} -eq 4 ]] ||
         fail "Development verification requires sealed signatures on all runtime bundles"
 fi
 
@@ -249,12 +283,19 @@ if [[ "${CONFIGURATION}" == "Development" ]]; then
         "WALITranscoder.xpc" \
         "${expected_transcoder_identifier}" \
         "${expected_development_team}"
+    verify_development_bundle \
+        "${HELPER_PATH}" \
+        "${expected_app_group}" \
+        "WALILockScreenHelper.app" \
+        "${expected_helper_identifier}" \
+        "${expected_development_team}"
 fi
 
 executables=(
     "${APP_PATH}/Contents/MacOS/WALI"
     "${AGENT_PATH}/Contents/MacOS/WALIAgent"
     "${XPC_PATH}/Contents/MacOS/WALITranscoder"
+    "${HELPER_PATH}/Contents/MacOS/WALILockScreenHelper"
 )
 for bundle_path in "${bundle_paths[@]}"; do
     for debug_dylib in "${bundle_path}/Contents/MacOS/"*.debug.dylib; do
@@ -289,6 +330,7 @@ internal_link_markers=(
     "WALIAppRuntime"
     "WALIAgentRuntime"
     "WALITranscoderRuntime"
+    "WALILockScreenHelperRuntime"
 )
 
 for executable in "${executables[@]}"; do
@@ -298,6 +340,14 @@ for executable in "${executables[@]}"; do
         [[ "${linkage}" != *"${marker}"* ]] ||
             fail "internal module is dynamically linked by ${executable}: ${marker}"
     done
+done
+
+helper_linkage="$(/usr/bin/otool -L "${HELPER_PATH}/Contents/MacOS/WALILockScreenHelper")" ||
+    fail "otool could not inspect WALILockScreenHelper"
+for forbidden in AVFoundation VideoToolbox WebKit JavaScriptCore Network SQLite3; do
+    [[ "${helper_linkage}" != *"/${forbidden}.framework/"* &&
+       "${helper_linkage}" != *"/lib${forbidden}."* ]] ||
+        fail "WALILockScreenHelper links forbidden runtime ${forbidden}"
 done
 
 for bundle_path in "${bundle_paths[@]}"; do

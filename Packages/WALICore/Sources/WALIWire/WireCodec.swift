@@ -1,4 +1,5 @@
 import Foundation
+import WALIModel
 
 public enum WireCodecError: Error, Sendable, Equatable {
     case emptyMessage
@@ -149,6 +150,36 @@ public enum WireCodec {
                   bookmarks.allSatisfy({ $0.count <= 1_024 * 1_024 }) else {
                 throw WireCodecError.collectionTooLarge
             }
+        case let .installCatalogRelease(install):
+            guard !install.canonicalManifest.isEmpty,
+                  install.canonicalManifest.count <= AgentCatalogInstallRequest.maximumManifestBytes,
+                  !install.canonicalMetadata.isEmpty,
+                  install.canonicalMetadata.count <= AgentCatalogInstallRequest.maximumMetadataBytes,
+                  isBase64URL(install.signatureBase64URL, exactLength: 86),
+                  isKeyID(install.keyID)
+            else {
+                throw WireCodecError.collectionTooLarge
+            }
+        case let .updateCatalogTrustTransition(update):
+            guard update.revision > 0,
+                  update.revision <= 9_007_199_254_740_991,
+                  !update.canonicalBody.isEmpty,
+                  update.canonicalBody.count <= AgentCatalogTrustTransitionUpdate.maximumBodyBytes,
+                  isBase64URL(update.signatureBase64URL, exactLength: 86),
+                  isKeyID(update.keyID)
+            else {
+                throw WireCodecError.collectionTooLarge
+            }
+        case let .updateCatalogRevocations(update):
+            guard update.revision > 0,
+                  update.revision <= 9_007_199_254_740_991,
+                  !update.canonicalBody.isEmpty,
+                  update.canonicalBody.count <= AgentCatalogRevocationUpdate.maximumBodyBytes,
+                  isBase64URL(update.signatureBase64URL, exactLength: 86),
+                  isKeyID(update.keyID)
+            else {
+                throw WireCodecError.collectionTooLarge
+            }
         case let .apply(_, displayIDs, _):
             guard displayIDs.count <= 16,
                   displayIDs.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 }) else {
@@ -161,6 +192,27 @@ public enum WireCodec {
         default:
             break
         }
+    }
+
+    private static func isSHA256(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            (48...57).contains($0) || (97...102).contains($0)
+        }
+    }
+
+    private static func isBase64URL(_ value: String, exactLength: Int) -> Bool {
+        value.utf8.count == exactLength && value.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0)
+                || (97...122).contains($0) || $0 == 45 || $0 == 95
+        }
+    }
+
+    private static func isKeyID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= AgentCatalogInstallRequest.maximumKeyIDUTF8Length
+            && value.utf8.allSatisfy {
+                (48...57).contains($0) || (97...122).contains($0)
+                    || $0 == 45 || $0 == 46 || $0 == 95
+            }
     }
 
     private static func validateSize(_ data: Data) throws {

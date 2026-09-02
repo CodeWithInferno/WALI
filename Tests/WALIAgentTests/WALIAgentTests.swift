@@ -727,7 +727,7 @@ final class WALIAgentTests: XCTestCase {
                 continue
             }
             XCTAssertTrue(caughtError.localizedDescription.contains("Full Disk Access"))
-            XCTAssertTrue(caughtError.localizedDescription.contains("WALI Agent"))
+            XCTAssertTrue(caughtError.localizedDescription.contains("WALI Lock Screen Helper"))
             XCTAssertTrue(caughtError.localizedDescription.contains(
                 "System Settings > Privacy & Security > Full Disk Access"
             ))
@@ -747,7 +747,7 @@ final class WALIAgentTests: XCTestCase {
     func testPermissionErrorsMapToFullDiskAccessGuidance() {
         let direct = LockScreenFileIO.actionableTransactionalWriteError(POSIXError(.EACCES))
         XCTAssertTrue(direct.localizedDescription.contains("Full Disk Access"))
-        XCTAssertTrue(direct.localizedDescription.contains("WALI Agent"))
+        XCTAssertTrue(direct.localizedDescription.contains("WALI Lock Screen Helper"))
 
         let nested = NSError(
             domain: NSCocoaErrorDomain,
@@ -756,7 +756,7 @@ final class WALIAgentTests: XCTestCase {
         )
         let mappedNested = LockScreenFileIO.actionableTransactionalWriteError(nested)
         XCTAssertTrue(mappedNested.localizedDescription.contains("Full Disk Access"))
-        XCTAssertTrue(mappedNested.localizedDescription.contains("WALI Agent"))
+        XCTAssertTrue(mappedNested.localizedDescription.contains("WALI Lock Screen Helper"))
 
         let unrelated = LockScreenCompatibilityError.malformedStore("Synthetic schema failure")
         XCTAssertEqual(
@@ -1521,7 +1521,7 @@ final class WALIAgentTests: XCTestCase {
             return XCTFail("A rejected opt-in preflight must fail before persistence")
         }
         XCTAssertTrue(failure.localizedDescription.contains("Full Disk Access"))
-        XCTAssertTrue(failure.localizedDescription.contains("WALI Agent"))
+        XCTAssertTrue(failure.localizedDescription.contains("WALI Lock Screen Helper"))
         let snapshot = await router.snapshot()
         XCTAssertFalse(snapshot.preferences.lockScreenContinuityEnabled)
         XCTAssertEqual(snapshot.revision.rawValue, 0)
@@ -1855,6 +1855,112 @@ final class WALIAgentTests: XCTestCase {
         )
     }
 
+}
+
+final class LockScreenHelperConnectionTests: XCTestCase {
+    func testDisconnectedHelperIsScopedUnavailableError() async throws {
+        let connection = LockScreenHelperConnection(transport: FailingHelperTransport(), preparedThumbnailRoot: try temporaryDirectory())
+        do { _ = try await connection.status(); XCTFail("A disconnected helper must fail closed") }
+        catch { XCTAssertEqual(error as? LockScreenHelperConnectionError, .unavailable) }
+    }
+    func testPermissionStatusNamesHelperAndNotAgent() async throws {
+        let connection = LockScreenHelperConnection(transport: StatusHelperTransport(permission: .permissionRequired), preparedThumbnailRoot: try temporaryDirectory())
+        do { _ = try await connection.status(); XCTFail("Permission denial must fail closed") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("WALI Lock Screen Helper")); XCTAssertTrue(error.localizedDescription.contains("WALI Agent does not need")) }
+    }
+    func testMismatchedResponseRequestIDIsRejected() async throws {
+        let connection = LockScreenHelperConnection(transport: MismatchedResponseHelperTransport(), preparedThumbnailRoot: try temporaryDirectory())
+        do { _ = try await connection.status(); XCTFail("A response for another request must be rejected") }
+        catch { XCTAssertEqual(error as? LockScreenHelperConnectionError, .invalidResponse) }
+    }
+    func testActivatePreparesThumbnailDirectoryBeforeInitialStatusProbe() async throws {
+        let root = try temporaryDirectory()
+        let prepared = root.appendingPathComponent("prepared", isDirectory: true)
+        let poster = root.appendingPathComponent("poster.png")
+        try Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )!.write(to: poster)
+        let connection = LockScreenHelperConnection(
+            transport: PreparedDirectoryHelperTransport(requiredDirectory: prepared),
+            preparedThumbnailRoot: prepared
+        )
+
+        try await connection.activate(
+            .init(
+                releaseID: UUID(),
+                assetID: UUID(),
+                title: "Synthetic",
+                masterSHA256: String(repeating: "a", count: 64),
+                posterURL: poster
+            ),
+            restartPlayback: false
+        )
+
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: prepared.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+    }
+    private func temporaryDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("wali-agent-helper-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }; return url
+    }
+}
+private struct FailingHelperTransport: LockScreenHelperTransport { func send(_ operation: LockScreenOperationName, request: Data) async throws -> Data { throw LockScreenHelperConnectionError.unavailable } }
+private struct StatusHelperTransport: LockScreenHelperTransport {
+    let permission: LockScreenHelperPermission
+    func send(_ operation: LockScreenOperationName, request: Data) async throws -> Data {
+        let value = try JSONDecoder().decode(LockScreenHelperStatusRequest.self, from: request)
+        return try JSONEncoder().encode(LockScreenHelperResponse(requestID: value.header.requestID, revision: 0, changed: false, status: .init(revision: 0, permission: permission, activeReleaseID: nil)))
+    }
+}
+private struct MismatchedResponseHelperTransport: LockScreenHelperTransport {
+    func send(_ operation: LockScreenOperationName, request: Data) async throws -> Data { try JSONEncoder().encode(LockScreenHelperResponse(requestID: UUID(), revision: 0, changed: false, status: .init(revision: 0, permission: .available, activeReleaseID: nil))) }
+}
+private struct PreparedDirectoryHelperTransport: LockScreenHelperTransport {
+    let requiredDirectory: URL
+
+    func send(_ operation: LockScreenOperationName, request: Data) async throws -> Data {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(
+            atPath: requiredDirectory.path,
+            isDirectory: &isDirectory
+        ), isDirectory.boolValue else {
+            throw LockScreenHelperConnectionError.unavailable
+        }
+        let requestID: UUID
+        let revision: UInt64
+        switch operation {
+        case .status:
+            requestID = try JSONDecoder().decode(
+                LockScreenHelperStatusRequest.self,
+                from: request
+            ).header.requestID
+            revision = 0
+        case .activateVerifiedRelease:
+            requestID = try JSONDecoder().decode(
+                LockScreenHelperActivationRequest.self,
+                from: request
+            ).header.requestID
+            revision = 1
+        case .deactivate, .restore:
+            requestID = try JSONDecoder().decode(
+                LockScreenHelperMutationRequest.self,
+                from: request
+            ).header.requestID
+            revision = 1
+        }
+        return try JSONEncoder().encode(LockScreenHelperResponse(
+            requestID: requestID,
+            revision: revision,
+            changed: operation != .status,
+            status: .init(
+                revision: revision,
+                permission: .available,
+                activeReleaseID: nil
+            )
+        ))
+    }
 }
 
 private struct StoreFixture {

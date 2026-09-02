@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1.7
+
+ARG WALI_MODEL_IMAGE=empty-model
+
+FROM --platform=linux/amd64 ghcr.io/astral-sh/uv@sha256:db99140470350437166de1fc646323ecb59e4d99d7857d0baf429a7b4a9523f3 AS uv
+
+FROM --platform=linux/amd64 python:3.12.11-slim-bookworm@sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49 AS dependencies
+COPY --from=uv /uv /usr/local/bin/uv
+WORKDIR /opt/wali
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --extra inference --no-install-project
+
+# The default target is intentionally model-free and can only report
+# model_unavailable. Production supplies an immutable image digest containing
+# reviewed files at /model so the final digest binds code and weights together.
+FROM dependencies AS empty-model
+RUN install -d /model
+
+FROM ${WALI_MODEL_IMAGE} AS verified-model
+
+FROM --platform=linux/amd64 python:3.12.11-slim-bookworm@sha256:c00fc7b44d844b6da22861ec24af43968a5200eac4ec607b4725d585165d6b49 AS source-only
+RUN groupadd --gid 65532 wali && useradd --uid 65532 --gid 65532 --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin wali \
+    && install -d -o 65532 -g 65532 /opt/wali/model /work/input /work/output
+WORKDIR /work
+COPY --from=dependencies /opt/wali/.venv /opt/wali/.venv
+COPY --chown=65532:65532 wali_classifier /opt/wali/wali_classifier
+COPY --chown=65532:65532 model-manifest.json taxonomy-v1.json /opt/wali/
+COPY --from=verified-model /model/ /opt/wali/model/
+RUN find /opt/wali -type f -exec chmod 0444 {} + \
+    && find /opt/wali -type d -exec chmod 0555 {} +
+
+ENV PATH=/opt/wali/.venv/bin:$PATH \
+    PYTHONPATH=/opt/wali \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=0 \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    TOKENIZERS_PARALLELISM=false \
+    DO_NOT_TRACK=1 \
+    HOME=/nonexistent \
+    TMPDIR=/tmp
+USER 65532:65532
+ENTRYPOINT ["python", "-m", "wali_classifier.classify"]
+
+# Production must be selected explicitly with --target production and an
+# immutable WALI_MODEL_IMAGE. This stage verifies the embedded bytes before an
+# image can carry the provenance labels required by deployment.
+FROM source-only AS production
+USER 0:0
+COPY --from=verified-model /model/ /opt/wali/model/
+RUN find /opt/wali/model -type f -exec chmod 0444 {} + \
+    && find /opt/wali/model -type d -exec chmod 0555 {} + \
+    && /opt/wali/.venv/bin/python -c "from pathlib import Path; from wali_classifier.contracts import load_model_manifest, verify_model_directory; manifest = load_model_manifest(Path('/opt/wali/model-manifest.json')); verify_model_directory(Path('/opt/wali/model'), manifest)"
+LABEL com.wali.classifier.production="true" \
+      com.wali.classifier.model-id="google/siglip-base-patch16-224" \
+      com.wali.classifier.model-revision="7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed" \
+      com.wali.classifier.model-digest="2a86b6bf585b3b071c5ccc46a01c18abb08b018dacc868513e592da7bcc9f877" \
+      com.wali.classifier.taxonomy-revision="wali-taxonomy-v1"
+USER 65532:65532
+
+# Keep ordinary CI/source builds model-free and incapable of claiming
+# production provenance. Releases must opt into the verified target above.
+FROM source-only AS source

@@ -1,5 +1,7 @@
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import WALICatalogRuntime
 import WALIModel
 import WALIUI
 import WALIWire
@@ -8,15 +10,18 @@ import WALIWire
 /// intention handler while the parameterless initializer keeps previews safe.
 public struct WALIAppRootView: View {
     @State private var model: WALIAppModel
+    @State private var marketplace: MarketplaceCoordinator
     private let actions: any WALIUIActionHandling
 
     @State private var route: AppRoute = .library
+    @State private var catalogPath: [String] = []
     @State private var selectedWallpaperID: UUID?
     @State private var selectedDisplayIDs: Set<String> = []
     @State private var hasInitializedDisplaySelection = false
     @State private var knownConnectedDisplayIDs: Set<String> = []
     @State private var selectedContentFit: WALIContentFitPreference = .fill
     @State private var searchText = ""
+    @State private var browseSort: CatalogBrowseSort = .featured
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showsImporter = false
     @State private var showsSettings = false
@@ -29,16 +34,19 @@ public struct WALIAppRootView: View {
 
     public init(
         model: WALIAppModel = WALIAppModel(),
-        actions: any WALIUIActionHandling = NoopWALIUIActionHandler()
+        actions: any WALIUIActionHandling = NoopWALIUIActionHandler(),
+        marketplace: MarketplaceCoordinator = MarketplaceCoordinator()
     ) {
         _model = State(initialValue: model)
+        _marketplace = State(initialValue: marketplace)
         self.actions = actions
     }
 
     public var body: some View {
         navigation
-        .navigationTitle(route.title)
+        .navigationTitle(catalogPath.isEmpty ? route.title : "")
         .toolbar { toolbar }
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .fileImporter(
             isPresented: $showsImporter,
             allowedContentTypes: [.movie],
@@ -66,14 +74,24 @@ public struct WALIAppRootView: View {
             Text("The prepared WALI copy will be removed. Your original source video is never deleted.")
         }
         .overlay(alignment: .bottom) { noticeOverlay }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background {
+            WALIAppSurface.catalogCanvas
+                .ignoresSafeArea()
+        }
         .frame(minWidth: 820, idealWidth: 1120, minHeight: 560, idealHeight: 720)
-        .onAppear(perform: synchronizeSelection)
+        .onAppear {
+            synchronizeSelection()
+            marketplace.start()
+        }
+        .onDisappear { marketplace.stop() }
         .onChange(of: connectedDisplayIDs) { _, _ in
             synchronizeDisplays()
             synchronizeContentFit()
         }
         .onChange(of: selectedDisplayIDs) { _, _ in synchronizeContentFit() }
+        .onChange(of: searchText) { _, value in
+            if route == .browse { marketplace.search(value) }
+        }
         .onChange(of: model.snapshot.wallpapers) { _, _ in synchronizeWallpaperSelection() }
         .onChange(of: model.settingsPresentationRequest) { _, _ in showsSettings = true }
         .background(keyboardCommands)
@@ -89,31 +107,73 @@ public struct WALIAppRootView: View {
             } content: {
                 content
                     .navigationSplitViewColumnWidth(min: 350, ideal: 630)
+                    .waliBackgroundExtension()
             } detail: {
                 detail
                     .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 440)
             }
-            .searchable(text: $searchText, placement: .toolbar, prompt: "Search Library")
+        } else if route.isMarketplace {
+            marketplaceRootNavigation
         } else {
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 sidebar
                     .navigationSplitViewColumnWidth(min: 168, ideal: 190, max: 230)
             } detail: {
                 content
+                    .waliBackgroundExtension()
             }
+        }
+    }
+
+    private var marketplaceRootNavigation: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            sidebar
+                .navigationSplitViewColumnWidth(min: 168, ideal: 190, max: 230)
+        } detail: {
+            NavigationStack(path: $catalogPath) {
+                content
+                    .navigationDestination(for: String.self) { wallpaperID in
+                        MarketplaceWallpaperDetailView(
+                            marketplace: marketplace.model,
+                            wallpaperID: wallpaperID,
+                            onRetry: { marketplace.loadDetail(wallpaperID: wallpaperID) },
+                            onOpenRelated: openCatalogWallpaper,
+                            onInstall: { marketplace.installSelectedWallpaper() },
+                            onFavorite: { marketplace.toggleFavorite() },
+                            onSave: { marketplace.toggleSaved() },
+                            onReport: marketplace.reportSelectedWallpaper
+                        )
+                        .task { marketplace.loadDetail(wallpaperID: wallpaperID) }
+                    }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .waliBackgroundExtension()
         }
     }
 
     private var sidebar: some View {
         List(selection: $route) {
+            Section("Marketplace") {
+                sidebarRow(.discover)
+                sidebarRow(.browse)
+                if case .signedIn = marketplace.model.accountState {
+                    sidebarRow(.creatorStudio)
+                }
+                if marketplace.creatorContext.canShowModeratorTools {
+                    sidebarRow(.reviewQueue)
+                    sidebarRow(.reports)
+                }
+            }
             Section("My WALI") {
                 sidebarRow(.library)
                 sidebarRow(.downloads, badge: activeTransferCount)
+                sidebarRow(.account)
             }
         }
         .listStyle(.sidebar)
         .onChange(of: route) { _, newRoute in
             if newRoute != .library { searchText = "" }
+            catalogPath.removeAll()
         }
         .accessibilityIdentifier("WALI.Sidebar")
     }
@@ -136,6 +196,21 @@ public struct WALIAppRootView: View {
     @ViewBuilder
     private var content: some View {
         switch route {
+        case .discover:
+            DiscoverView(
+                marketplace: marketplace.model,
+                onRetry: marketplace.loadHome,
+                onOpen: openCatalogWallpaper
+            )
+        case .browse:
+            BrowseView(
+                marketplace: marketplace.model,
+                sort: $browseSort,
+                query: searchText,
+                onLoad: { marketplace.loadBrowse(sort: $0) },
+                onOpen: openCatalogWallpaper,
+                onLoadMore: marketplace.loadNextBrowsePage
+            )
         case .library:
             LibrarySurface(
                 wallpapers: filteredWallpapers,
@@ -158,7 +233,88 @@ public struct WALIAppRootView: View {
                     actions.send(.cancelTransfer(id: transferID))
                 }
             )
+        case .account:
+            AccountView(
+                account: marketplace.model.accountState,
+                profile: marketplace.model.accountProfile,
+                profileState: marketplace.model.accountProfileState,
+                exportState: marketplace.model.accountExportState,
+                deletionState: marketplace.model.accountDeletionState,
+                onSignIn: marketplace.signIn,
+                onSignOut: marketplace.signOut,
+                onRefresh: marketplace.refreshAccountPrivacy,
+                onRequestExport: marketplace.requestAccountExport,
+                onRefreshExport: marketplace.refreshAccountExport,
+                onSaveExport: marketplace.chooseAccountExportDestination,
+                onRequestDeletion: marketplace.requestAccountDeletion,
+                onRefreshDeletion: marketplace.refreshAccountDeletion,
+                onVerifyDeletionMFA: marketplace.verifyAccountDeletionMFA,
+                onCancelDeletionMFA: marketplace.cancelAccountDeletionMFA
+            )
+        case .creatorStudio:
+            if let studioModel = marketplace.creatorContext.studioModel,
+               let upload = marketplace.creatorContext.uploadCoordinator,
+               let metadata = marketplace.creatorContext.metadata,
+               let gateway = marketplace.creatorGateway {
+                CreatorStudioView(
+                    model: studioModel,
+                    upload: upload,
+                    categories: metadata.categories,
+                    tags: metadata.tags,
+                    licenses: metadata.licenses,
+                    accessState: marketplace.creatorContext.state,
+                    onAcceptTerms: marketplace.acceptCreatorTerms
+                ) { submission in
+                    CreatorSubmissionEditor(
+                        submission: submission,
+                        gateway: gateway,
+                        categories: metadata.categories,
+                        tags: metadata.tags,
+                        licenses: metadata.licenses,
+                        currentTermsVersion: metadata.currentCreatorTermsVersion,
+                        requestProofUpload: {},
+                        didChange: { _ in
+                            Task { await studioModel.loadSubmissions() }
+                        }
+                    )
+                }
+            } else {
+                ContentUnavailableView(
+                    "Creator Studio unavailable",
+                    systemImage: "person.crop.rectangle.stack",
+                    description: Text("Sign in and refresh your account to load creator access.")
+                )
+            }
+        case .reviewQueue:
+            if let moderationModel = marketplace.creatorContext.moderationModel,
+               let moderationMetadata = marketplace.creatorContext.moderationMetadata,
+               marketplace.creatorContext.canShowModeratorTools {
+                ReviewQueueView(model: moderationModel) { item in
+                    SubmissionReviewView(
+                        item: item,
+                        model: moderationModel,
+                        moderationMetadata: moderationMetadata
+                    )
+                }
+            } else {
+                protectedModeratorUnavailable
+            }
+        case .reports:
+            if let moderationModel = marketplace.creatorContext.moderationModel,
+               marketplace.creatorContext.canShowModeratorTools {
+                ReportQueueView(model: moderationModel)
+            } else {
+                protectedModeratorUnavailable
+            }
         }
+    }
+
+    private var protectedModeratorUnavailable: some View {
+        ContentUnavailableView(
+            "Moderator access required",
+            systemImage: "lock.shield",
+            description: Text("A current server grant and fresh two-factor session are required.")
+        )
     }
 
     @ViewBuilder
@@ -185,41 +341,60 @@ public struct WALIAppRootView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Button {
-                showsImporter = true
-            } label: {
-                Label("Import Video", systemImage: "plus")
+        if route == .browse {
+            ToolbarItemGroup(placement: .primaryAction) {
+                CatalogFiltersView(sort: $browseSort)
+                WALICompactSearchField(text: $searchText, prompt: "Search Wallpapers")
+                    .frame(minWidth: 180, idealWidth: 260, maxWidth: 340)
+                    .accessibilityIdentifier("WALI.Marketplace.Search")
             }
-            .help("Import Video… (⌘O)")
-            .accessibilityIdentifier("WALI.Import")
         }
 
-        ToolbarItemGroup(placement: .automatic) {
-            Button {
-                showsDisplayArrangement.toggle()
-            } label: {
-                Label(displayPickerTitle, systemImage: "display.2")
+        if route.isLocalLibrary {
+            ToolbarItem(placement: .secondaryAction) {
+                Button {
+                    showsImporter = true
+                } label: {
+                    Label("Import Video", systemImage: "plus")
+                }
+                .help("Import Video… (⌘O)")
+                .accessibilityIdentifier("WALI.Import")
             }
-            .help("Choose Displays")
-            .popover(isPresented: $showsDisplayArrangement, arrowEdge: .bottom) {
-                DisplayArrangementView(
-                    displays: model.snapshot.displays,
-                    wallpapers: model.snapshot.wallpapers,
-                    selection: $selectedDisplayIDs,
-                    onDone: { showsDisplayArrangement = false }
-                )
-            }
-            .accessibilityIdentifier("WALI.DisplayPicker")
 
-            Button {
-                showsStatus.toggle()
-            } label: {
-                Label("WALI Status", systemImage: rendererToolbarSymbol)
+            ToolbarItemGroup(placement: .secondaryAction) {
+                Button {
+                    showsDisplayArrangement.toggle()
+                } label: {
+                    Label(displayPickerTitle, systemImage: "display.2")
+                }
+                .help("Choose Displays")
+                .popover(isPresented: $showsDisplayArrangement, arrowEdge: .bottom) {
+                    DisplayArrangementView(
+                        displays: model.snapshot.displays,
+                        wallpapers: model.snapshot.wallpapers,
+                        selection: $selectedDisplayIDs,
+                        onDone: { showsDisplayArrangement = false }
+                    )
+                }
+                .accessibilityIdentifier("WALI.DisplayPicker")
+
+                Button {
+                    showsStatus.toggle()
+                } label: {
+                    Label("WALI Status", systemImage: rendererToolbarSymbol)
+                }
+                .help("Wallpaper Status")
+                .popover(isPresented: $showsStatus, arrowEdge: .bottom) {
+                    StatusPanel(status: model.snapshot.renderer, actions: actions)
+                }
             }
-            .help("Wallpaper Status")
-            .popover(isPresented: $showsStatus, arrowEdge: .bottom) {
-                StatusPanel(status: model.snapshot.renderer, actions: actions)
+
+            if route == .library {
+                ToolbarItem(placement: .primaryAction) {
+                    WALICompactSearchField(text: $searchText, prompt: "Search Library")
+                        .frame(minWidth: 180, idealWidth: 260, maxWidth: 340)
+                        .accessibilityIdentifier("WALI.Library.Search")
+                }
             }
         }
     }
@@ -413,30 +588,122 @@ public struct WALIAppRootView: View {
         recentlyDeletedID = wallpaperID
         pendingDeletionID = nil
     }
+
+    private func openCatalogWallpaper(_ wallpaperID: String) {
+        if catalogPath.last != wallpaperID {
+            catalogPath.append(wallpaperID)
+        }
+    }
+}
+
+enum WALIAppSurface {
+    static let catalogCanvas = Color(nsColor: .underPageBackgroundColor)
+}
+
+private struct WALICompactSearchField: NSViewRepresentable {
+    @Binding var text: String
+    let prompt: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let searchField = NSSearchField()
+        searchField.delegate = context.coordinator
+        searchField.placeholderString = prompt
+        searchField.sendsSearchStringImmediately = true
+        searchField.sendsWholeSearchString = true
+        searchField.maximumRecents = 0
+        return searchField
+    }
+
+    func updateNSView(_ searchField: NSSearchField, context: Context) {
+        if searchField.stringValue != text {
+            searchField.stringValue = text
+        }
+        if searchField.placeholderString != prompt {
+            searchField.placeholderString = prompt
+        }
+    }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        @Binding private var text: String
+
+        init(text: Binding<String>) {
+            _text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let searchField = notification.object as? NSSearchField else { return }
+            text = searchField.stringValue
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func waliBackgroundExtension() -> some View {
+        if #available(macOS 26.0, *) {
+            backgroundExtensionEffect()
+        } else {
+            self
+        }
+    }
 }
 
 private enum AppRoute: String, CaseIterable, Hashable {
+    case discover
+    case browse
     case library
     case downloads
+    case account
+    case creatorStudio
+    case reviewQueue
+    case reports
 
     var title: String {
         switch self {
+        case .discover: "Discover"
+        case .browse: "Browse"
         case .library: "Library"
         case .downloads: "Downloads"
+        case .account: "Account"
+        case .creatorStudio: "Creator Studio"
+        case .reviewQueue: "Review Queue"
+        case .reports: "Reports"
         }
     }
 
     var symbolName: String {
         switch self {
+        case .discover: "sparkles.rectangle.stack"
+        case .browse: "square.grid.3x3"
         case .library: "square.grid.2x2"
         case .downloads: "arrow.down.circle"
+        case .account: "person.crop.circle"
+        case .creatorStudio: "person.crop.rectangle.stack"
+        case .reviewQueue: "checklist.checked"
+        case .reports: "flag.2.crossed"
         }
     }
 
     var detailHint: String {
         switch self {
+        case .discover: "Discover curated and trending wallpapers."
+        case .browse: "Browse the complete published catalog."
         case .library: "Select a wallpaper to see details and display controls."
         case .downloads: "Import videos and follow their preparation progress."
+        case .account: "Manage your marketplace account and privacy settings."
+        case .creatorStudio: "Upload, describe, and submit verified wallpapers."
+        case .reviewQueue: "Review canonical submissions with server-owned policy."
+        case .reports: "Review assigned marketplace reports."
         }
     }
+
+    var isMarketplace: Bool {
+        self == .discover || self == .browse || self == .creatorStudio
+            || self == .reviewQueue || self == .reports
+    }
+    var isLocalLibrary: Bool { self == .library || self == .downloads }
 }

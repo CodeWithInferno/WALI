@@ -100,10 +100,18 @@ Media grids use 16 pt gutters and adapt column count to available width. Do not 
 
 Sections:
 
-1. Library
-2. Downloads
+1. Discover
+2. Browse
+3. Creator Studio (signed-in creators)
+4. Review Queue (authorized moderators only)
+5. Library
+6. Downloads
+7. Account
 
-Importing is available from the toolbar, the empty Library and Downloads states, and drag and drop. A separate Create destination would duplicate that flow and is intentionally omitted.
+Local importing is available only from Library/Downloads, their empty states,
+and drag and drop. Creator Studio is a distinct marketplace submission flow:
+rights declaration, resumable upload, server processing, and review. It never
+duplicates local import.
 
 Settings stays in the standard application menu and `⌘,`; it is not a fake sidebar page. Sidebar icon color follows the system accent. Selection, row height, disclosure, and hide/show behavior remain native.
 
@@ -129,6 +137,14 @@ Toolbar items use native grouping. No custom toolbar background is drawn.
 - Only one grid preview may decode at a time.
 - Single click selects. Double click applies. Space opens a Quick Look-style preview.
 - A detail surface shows full preview, title, creator/license, dimensions, duration, file size, per-display targets, scaling, and Apply.
+- A marketplace detail lets the preview fill the whole content plane, including
+  beneath the translucent sidebar/title region. A dark bottom gradient belongs
+  to the media composition—not as decorative chrome—and protects title, creator,
+  rights, license, verified-install count, and primary actions. Reduce Motion
+  replaces the moving hero with its verified poster.
+- Catalog cards may preview on hover, but detail always prefers the bounded
+  preview video over stretching a low-resolution poster. Marketplace counters
+  are server aggregates; WALI never invents a live-viewer count.
 - Scaling is saved with each display assignment: Fill Screen, Fit to Screen, Stretch to Fill, or Center at native size.
 - Imported videos clearly show conversion state.
 
@@ -162,7 +178,11 @@ Performance sampling is demand-driven: 1 Hz while the popover or diagnostics vie
 WALI renders the signed-in user's desktop and follows that desktop across Spaces, display reconnects, wake, and unlock. macOS does not expose a public API for an app to draw arbitrary content inside the protected Lock Screen or FileVault login surface.
 
 Settings uses a native `Form` section with one opt-in toggle beside direct,
-inline status text. The feature is labeled experimental private compatibility:
+inline status text. Permission copy names `WALI Lock Screen Helper` as the only
+WALI product that may receive Full Disk Access and explicitly excludes the main
+app, agent, catalog, downloads, previews, and desktop playback. Ad-hoc Debug
+builds cannot authenticate the signed helper boundary and must not receive the
+permission. The feature is labeled experimental private compatibility:
 it mirrors active assignments through Apple's current-user Aerial provider on
 verified macOS builds. The copy states that the authenticated Lock Screen has
 an independent playback timeline and that FileVault startup is unavailable.

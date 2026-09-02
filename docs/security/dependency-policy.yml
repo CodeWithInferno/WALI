@@ -1,0 +1,128 @@
+schema_version: 1
+policy_id: wali-dependencies-v1
+status: accepted
+owner_role: security_responder
+accepted_by: project_owner
+approval_reference: project-owner AFK marketplace implementation directive 2026-09-01
+
+pinning:
+  swift_remote_packages: exact_version_and_resolved_checksum
+  deno_imports: immutable_version_or_commit_and_integrity
+  go_modules: exact_semver_and_go_sum
+  python_packages: exact_version_and_hash
+  github_actions: full_commit_sha
+  oci_images: sha256_digest
+  ffmpeg_binary: sha256_digest_and_build_flags
+  model_code: immutable_commit_digest
+  model_weights: sha256_digest
+  operating_system_base: immutable_image_digest
+  floating_branches_forbidden: true
+  mutable_container_tags_forbidden: true
+
+license_policy:
+  project_license: Apache-2.0
+  permitted_by_default:
+    - Apache-2.0
+    - BSD-2-Clause
+    - BSD-3-Clause
+    - ISC
+    - MIT
+    - PostgreSQL
+    - Zlib
+    - Unicode-3.0
+    - CC0-1.0
+    - HPND
+    - PSF-2.0
+    - Unlicense
+  explicit_review_required:
+    - LGPL-2.1-only
+    - LGPL-2.1-or-later
+    - LGPL-3.0-only
+    - LGPL-3.0-or-later
+    - MPL-2.0
+    - GPL-2.0-only
+    - GPL-2.0-or-later
+    - GPL-3.0-only
+    - GPL-3.0-or-later
+    - AGPL-3.0-only
+    - AGPL-3.0-or-later
+    - custom
+  forbidden_without_new_adr:
+    - non-commercial
+    - research-only
+    - source-available-not-open-source
+    - no-redistribution
+    - unknown
+  source_and_notice_retention: required
+  spdx_sbom: required
+  reviewed_exceptions:
+    LGPL-2.1-or-later: FFmpeg is isolated, unmodified, dynamically linked, and built without GPL or nonfree features.
+    MPL-2.0: Python certificate and progress-bar libraries remain unmodified and are separately inventoried.
+    LicenseRef-Debian-Image-Mixed: Debian package licenses are preserved in the pinned image and require image-level SBOM scanning before release.
+
+ffmpeg:
+  execution_model: separate_process
+  default_license_profile: LGPL
+  forbidden_default_flags: [--enable-gpl, --enable-nonfree]
+  required_records:
+    - source_revision
+    - binary_digest
+    - configure_flags
+    - linked_libraries
+    - license_texts
+    - corresponding_source_location
+
+models:
+  default:
+    id: google-siglip-base-patch16-224
+    license: Apache-2.0
+    task: taxonomy_suggestion_and_embedding
+  required_records:
+    - source_url
+    - immutable_upstream_revision
+    - code_license
+    - weight_license
+    - weight_digest
+    - training_use_limitations
+    - taxonomy_revision
+    - approving_actor
+    - approval_date
+  unregistered_model_policy: fail_closed
+
+runtime_boundaries:
+  WALICatalog:
+    remote_dependencies: []
+    permitted_system_modules: [Foundation, CryptoKit]
+    forbidden_modules: [SwiftUI, AppKit, AVFoundation, VideoToolbox, Network, SQLite3, CoreData, SwiftData, Supabase]
+  WALILockScreenHelper:
+    remote_dependencies: []
+    forbidden_modules: [SwiftUI, AppKit, AVFoundation, VideoToolbox, WebKit, JavaScriptCore, Network, SQLite3, CoreData, SwiftData, CloudKit]
+    forbidden_apis: [Process, NSTask, dlopen, NSAppleScript, WKWebView, URLSession, NWConnection]
+  media_sandbox:
+    credentials: none
+    network: none
+    dynamic_plugins: false
+  classifier_sandbox:
+    credentials: none
+    network: none
+    dynamic_models: false
+
+automation:
+  secret_scanning: release_blocking
+  dependency_vulnerability_scanning: release_blocking_for_exploitable_high_or_critical
+  container_scanning: release_blocking_for_exploitable_high_or_critical
+  license_check: release_blocking
+  sbom_generation: release_required
+  provenance_attestation: release_required
+  update_policy: verification_before_merge
+
+content_exclusions:
+  prohibited_sources: [Backdrop, Wallsflow]
+  prohibited_material:
+    - proprietary_assets
+    - private_endpoints
+    - cookies
+    - credentials
+    - scraped_manifests
+    - brand_elements
+  seed_media_requires_redistribution_evidence: true

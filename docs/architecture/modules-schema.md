@@ -42,8 +42,10 @@ Edge meanings:
 - `embed_only`: bundle containment with `embed: true` and `link: false`; it is
   not a source import or ordinary link dependency.
 
-The current containment set is exactly `WALI -> WALIAgent` and
-`WALIAgent -> WALITranscoder`. The checker also requires XcodeGen copy
+Before the marketplace helper lands, the containment set is `WALI -> WALIAgent`
+and `WALIAgent -> WALITranscoder`. The accepted target additionally contains
+`WALILockScreenHelper` directly in `WALI`; it never contains the transcoder or
+imports agent implementation. The checker also requires XcodeGen copy
 destinations `Contents/Library/LoginItems` and `Contents/XPCServices`,
 respectively, with nested code signing enabled. A matching manifest and project
 are still rejected if they jointly assign the transcoder to the main app.
@@ -93,8 +95,10 @@ Every XcodeGen package dependency names its product explicitly.
 
 Every library product subject has a `<Subject>Tests` target at
 `Tests/<Subject>Tests` depending exactly on the subject. The current package has
-exactly the static products `WALIModel`, `WALIWire`, and `WALIEngine`, plus
-their three matching test targets. The package reference and folder may remain
+the static products `WALIModel`, `WALIWire`, `WALIEngine`, and `WALICatalog`,
+plus their matching test targets. `WALICatalog` depends only on `WALIModel`
+internally and may import only Foundation/CryptoKit from the platform. The
+package reference and folder may remain
 named `WALICore`; no product or target may use that retired module name.
 
 The checker invokes:
@@ -168,6 +172,14 @@ Planned modules:
 Creating a planned source directory requires changing its presence and current
 facts in the same change. The checker never treats target permissions as
 current permissions.
+
+Accepted marketplace target modules are `WALICatalogRuntime`,
+`WALILockScreenHelperRuntime`, and `WALILockScreenHelper`. The catalog runtime
+may import `WALICatalog` internally and owns external Supabase transport. The
+Lock Screen helper runtime may import only `WALIModel` and `WALIWire` internally;
+its composition root imports only that runtime. Static policy additionally
+rejects the forbidden media/network/UI/database/scripting frameworks and APIs
+recorded in `modules.yml` and `docs/security/dependency-policy.yml`.
 
 Absent modules:
 

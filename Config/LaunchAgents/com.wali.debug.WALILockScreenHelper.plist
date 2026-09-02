@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BundleProgram</key>
+	<string>Contents/Library/LoginItems/WALILockScreenHelper.app/Contents/MacOS/WALILockScreenHelper</string>
+	<key>KeepAlive</key>
+	<dict><key>Crashed</key><true/></dict>
+	<key>Label</key>
+	<string>com.wali.debug.WALILockScreenHelper</string>
+	<key>MachServices</key>
+	<dict><key>com.wali.debug.WALILockScreenHelper.control</key><true/></dict>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>RunAtLoad</key>
+	<true/>
+</dict>
+</plist>
