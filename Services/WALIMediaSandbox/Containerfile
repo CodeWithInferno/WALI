@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # WALI's worker VM is x86-64; this is the immutable linux/amd64 manifest.
-FROM docker.io/library/debian:bookworm-slim@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867 AS build
+FROM docker.io/library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS build
 
 ARG DEBIAN_SNAPSHOT=20260824T000000Z
 ARG FFMPEG_VERSION=7.1.2
@@ -42,7 +42,7 @@ RUN curl --fail --location --proto '=https' --tlsv1.2 \
     && make -j2 \
     && make install
 
-FROM docker.io/library/debian:bookworm-slim@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867
+FROM docker.io/library/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 ARG DEBIAN_SNAPSHOT=20260824T000000Z
 RUN rm -f /etc/apt/sources.list.d/debian.sources \
     && printf 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list \
