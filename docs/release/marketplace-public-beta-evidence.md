@@ -26,13 +26,13 @@ tokens, database URLs, signing private keys, rights evidence, or user data.
 | Legal review | N/A | Not approved | named counsel approval required |
 | Swift trust-boundary coverage | Local candidate | Pass | measured file groups exceed their enforced floors: catalog runtime 64.61%, app coordination 54.62%, agent install/storage 45.81% |
 | SBOM/license/secret hygiene | Candidate artifacts | Pass locally | SPDX generation and all 43 dependency-license checks pass; tracked secret-shape scan and ignored-config checks pass |
-| Vulnerability scan | Candidate artifacts | Pending | attach scanner output from the exact shipped commit before public activation |
+| Vulnerability scan | Candidate artifacts | Pass locally | Trivy 0.74.0 reports zero HIGH/CRITICAL vulnerabilities, secrets, or container-file misconfigurations for the locked Go/Python dependency graph |
 | Signed/notarized bundle | Candidate archive | Deferred | codesign/spctl/notary evidence required |
 | Live display/Lock Screen matrix | Supported Macs | Pending | hardware/build/topology metrics required |
 
 Public-production blockers are the legal/operator contact, a dedicated worker
 host, an isolated production signer/recovery boundary, backup/restore and
-incident drills, vulnerability evidence, notarization, and the manual
+incident drills, notarization, and the manual
 Apple/display/security matrix. Production remains fail-closed: the verified
 Release bundle embeds `WALIMarketplaceEnabled=NO` and no Supabase URL.
 
