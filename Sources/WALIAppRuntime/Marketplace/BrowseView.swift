@@ -10,12 +10,17 @@ struct BrowseView: View {
     let onOpen: (String) -> Void
     let onLoadMore: () -> Void
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 230, maximum: 360), spacing: 18, alignment: .top)
-    ]
-
     var body: some View {
-        content
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Spacer(minLength: 0)
+                CatalogFiltersView(sort: $sort)
+            }
+            .padding(.horizontal, WALIBrowseLayout.chromeInset)
+            .padding(.top, 16)
+            .padding(.bottom, 8)
+            content
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { onLoad(sort) }
         .onChange(of: sort) { _, value in onLoad(value) }
@@ -43,17 +48,21 @@ struct BrowseView: View {
                 description: Text(message)
             )
         case .ready:
-            ScrollView {
+            GeometryReader { geometry in
                 let items = query.isEmpty ? marketplace.browseItems : marketplace.searchItems
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 24) {
-                    ForEach(items) { card in
-                        CatalogCardView(card: card) { onOpen(card.id) }
-                            .onAppear {
-                                if card.id == items.last?.id { onLoadMore() }
-                            }
+                let columnCount = WALIBrowseLayout.columnCount(forAvailableWidth: geometry.size.width)
+                ScrollView {
+                    WALIMasonryLayout(columnCount: columnCount, gutter: WALIBrowseLayout.gutter) {
+                        ForEach(items) { card in
+                            BrowseBentoTile(card: card) { onOpen(card.id) }
+                                .onAppear {
+                                    if card.id == items.last?.id { onLoadMore() }
+                                }
+                        }
                     }
+                    .padding(.horizontal, WALIBrowseLayout.chromeInset)
+                    .padding(.bottom, 24)
                 }
-                .padding(24)
             }
         }
     }
@@ -89,9 +98,111 @@ struct CatalogSearchView: View {
     }
 }
 
+struct BrowseBentoTile: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let card: WALICatalogCardPresentation
+    let onOpen: () -> Void
+
+    @State private var isHovering = false
+    @State private var showsPreview = false
+
+    private var artworkAspect: CGFloat {
+        WALIBrowseLayout.artworkAspect(width: card.pixelWidth, height: card.pixelHeight)
+    }
+
+    var body: some View {
+        Button(action: onOpen) {
+            Color.clear
+                .aspectRatio(artworkAspect, contentMode: .fit)
+                .overlay {
+                    posterMedia
+                }
+                .overlay(alignment: .bottom) {
+                    if isHovering {
+                        hoverCaption
+                    }
+                }
+                .clipShape(
+                    RoundedRectangle(cornerRadius: WALIBrowseLayout.cornerRadius, style: .continuous)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: WALIBrowseLayout.cornerRadius, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovering = hovering
+            guard !reduceMotion else { return }
+            if hovering {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(350))
+                    guard isHovering else { return }
+                    showsPreview = true
+                }
+            } else {
+                showsPreview = false
+            }
+        }
+        .accessibilityLabel("\(card.title), by \(card.creator), \(card.verifiedInstallCount) verified installs")
+    }
+
+    private var hoverCaption: some View {
+        LinearGradient(
+            colors: [.clear, .black.opacity(0.72)],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .frame(height: 88)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .overlay(alignment: .bottomLeading) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(card.title)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text(card.creator)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.86))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.white)
+            .padding(10)
+        }
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private var posterMedia: some View {
+        if showsPreview, !reduceMotion, let previewURL = card.previewURL {
+            LoopingVideoView(url: previewURL, cornerRadius: WALIBrowseLayout.cornerRadius)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let posterURL = card.posterURL {
+            AsyncImage(url: posterURL, transaction: .init(animation: .smooth)) { phase in
+                switch phase {
+                case let .success(image):
+                    image.resizable().scaledToFill()
+                default:
+                    posterPlaceholder
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            posterPlaceholder
+        }
+    }
+
+    private var posterPlaceholder: some View {
+        Rectangle()
+            .fill(.quaternary)
+            .overlay {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.title2)
+                    .foregroundStyle(.tertiary)
+            }
+    }
+}
+
 struct CatalogCardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let card: WALICatalogCardPresentation
+    var artworkAspect: CGFloat = WALIPosterLayout.aspectRatio
     let onOpen: () -> Void
 
     @State private var isHovering = false
@@ -101,62 +212,45 @@ struct CatalogCardView: View {
         Button(action: onOpen) {
             VStack(alignment: .leading, spacing: 9) {
                 ZStack(alignment: .bottomLeading) {
-                    Group {
-                        if showsPreview, !reduceMotion, let previewURL = card.previewURL {
-                            LoopingVideoView(url: previewURL, cornerRadius: 14)
-                        } else if let posterURL = card.posterURL {
-                            AsyncImage(url: posterURL, transaction: .init(animation: .smooth)) { phase in
-                                switch phase {
-                                case let .success(image):
-                                    image.resizable().scaledToFill()
-                                default:
-                                    Rectangle()
-                                        .fill(.quaternary)
-                                        .overlay {
-                                            Image(systemName: "photo.on.rectangle.angled")
-                                                .font(.title2)
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                }
-                            }
-                        } else {
-                            Rectangle()
-                                .fill(.quaternary)
-                                .overlay {
-                                    Image(systemName: "photo.on.rectangle.angled")
-                                        .font(.title2)
-                                        .foregroundStyle(.tertiary)
-                                }
+                    Color.clear
+                        .aspectRatio(artworkAspect, contentMode: .fit)
+                        .overlay {
+                            posterMedia
                         }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(16 / 10, contentMode: .fit)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .clipShape(
+                            RoundedRectangle(cornerRadius: WALIPosterLayout.cornerRadius, style: .continuous)
+                        )
+                        .clipped()
 
                     Label(
                         card.verifiedInstallCount.formatted(.number.notation(.compactName)),
                         systemImage: "arrow.down.circle.fill"
                     )
                     .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .background(.regularMaterial, in: Capsule())
-                    .padding(10)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .foregroundStyle(.white)
+                    .background(.black.opacity(0.45), in: Capsule())
+                    .padding(8)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(card.title)
-                        .font(.headline)
+                        .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                     Text("\(card.creator)  ·  \(card.category)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .scaleEffect(isHovering && !reduceMotion ? 1.02 : 1)
+        .animation(.smooth(duration: 0.18), value: isHovering)
         .onHover { hovering in
             isHovering = hovering
             guard !reduceMotion else { return }
@@ -171,5 +265,35 @@ struct CatalogCardView: View {
             }
         }
         .accessibilityLabel("\(card.title), by \(card.creator), \(card.verifiedInstallCount) verified installs")
+    }
+
+    @ViewBuilder
+    private var posterMedia: some View {
+        if showsPreview, !reduceMotion, let previewURL = card.previewURL {
+            LoopingVideoView(url: previewURL, cornerRadius: WALIPosterLayout.cornerRadius)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let posterURL = card.posterURL {
+            AsyncImage(url: posterURL, transaction: .init(animation: .smooth)) { phase in
+                switch phase {
+                case let .success(image):
+                    image.resizable().scaledToFill()
+                default:
+                    posterPlaceholder
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            posterPlaceholder
+        }
+    }
+
+    private var posterPlaceholder: some View {
+        Rectangle()
+            .fill(.quaternary)
+            .overlay {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.title2)
+                    .foregroundStyle(.tertiary)
+            }
     }
 }

@@ -92,12 +92,50 @@ final class ManifestDownloadTests: XCTestCase {
         )
     }
 
-    func testPresentationMediaCacheRejectsInstallArtifactRole() async throws {
+    func testPresentationMediaCacheAcceptsCanonicalPlaybackArtifact() async throws {
+        let bytes = Data("verified canonical playback".utf8)
+        let source = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let cacheRoot = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try bytes.write(to: source)
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: cacheRoot)
+        }
+        let remoteURL = try XCTUnwrap(URL(string: "https://catalog.wali.example/video-default.mp4"))
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: remoteURL,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Length": "\(bytes.count)"]
+        ))
+        let artifact = try CatalogArtifact(
+            role: .videoDefault,
+            url: remoteURL,
+            sha256: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(),
+            byteCount: UInt64(bytes.count),
+            mediaType: "video/mp4",
+            width: 1,
+            height: 1,
+            durationMilliseconds: 1
+        )
+        let downloader = try CatalogDownloader(
+            transport: FakeDownloadTransport(file: source, response: response),
+            approvedHosts: ["catalog.wali.example"]
+        )
+        let cache = try CatalogPresentationMediaCache(root: cacheRoot, downloader: downloader)
+
+        let output = try await cache.localURL(for: artifact)
+
+        XCTAssertTrue(output.isFileURL)
+        XCTAssertEqual(try Data(contentsOf: output), bytes)
+    }
+
+    func testPresentationMediaCacheRejectsOptionalLadderPlaybackRole() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let artifact = try CatalogArtifact(
-            role: .videoDefault,
-            url: try XCTUnwrap(URL(string: "https://catalog.wali.example/video.mp4")),
+            role: .video2160p,
+            url: try XCTUnwrap(URL(string: "https://catalog.wali.example/video-2160p.mp4")),
             sha256: String(repeating: "a", count: 64),
             byteCount: 1,
             mediaType: "video/mp4",

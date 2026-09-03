@@ -324,6 +324,7 @@ targets:
     dependencies:
       - target: WALIAppRuntime
       - target: WALICatalogRuntime
+      - target: WALIUI
       - package: WALICore
         product: WALICatalog
 

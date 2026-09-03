@@ -95,6 +95,46 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.model.homeSections.map(\.id), ["new"])
     }
 
+    func testDiscoverHomeCarouselCollectsUniqueItemsFromEverySection() async throws {
+        let rick = Self.summary(id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", title: "Rick")
+        let aurora = Self.summary(id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", title: "Aurora")
+        let home = CatalogHome(sections: [
+            CatalogHomeSection(
+                id: "editorial",
+                title: "Picks",
+                kind: .editorial,
+                cursor: nil,
+                items: [rick]
+            ),
+            CatalogHomeSection(
+                id: "trending",
+                title: "Trending",
+                kind: .trending,
+                cursor: nil,
+                items: [rick, aurora]
+            ),
+        ])
+        let coordinator = MarketplaceCoordinator(
+            gateway: ScriptedCatalogGateway(homeSteps: [.value(home, delay: .milliseconds(5))])
+        )
+
+        coordinator.loadHome()
+        try await Task.sleep(for: .milliseconds(30))
+
+        XCTAssertEqual(coordinator.model.homeState, .ready)
+        XCTAssertEqual(
+            coordinator.model.homeSections.map(\.id),
+            [WALIDiscoverLayout.heroSectionID, "editorial", "trending"]
+        )
+        XCTAssertEqual(coordinator.model.homeSections.first?.layout, WALIDiscoverLayout.heroSectionLayout)
+        XCTAssertEqual(coordinator.model.homeSections.first?.title, WALIDiscoverLayout.heroSectionTitle)
+        XCTAssertEqual(coordinator.model.homeSections.first?.cards.map(\.id), [rick.id, aurora.id])
+        XCTAssertEqual(
+            Array(coordinator.model.homeSections.dropFirst().map(\.layout)),
+            [WALIDiscoverLayout.catalogSectionLayout, WALIDiscoverLayout.catalogSectionLayout]
+        )
+    }
+
     func testTemporaryFailureMapsToOfflineWithoutLeakingServerText() async throws {
         let gateway = ScriptedCatalogGateway(homeSteps: [
             .failure(CatalogRemoteError(
@@ -443,10 +483,10 @@ final class MarketplaceCoordinatorTests: XCTestCase {
     private static let wallpaperID = "11111111-1111-4111-8111-111111111111"
     private static let releaseID = "22222222-2222-4222-8222-222222222222"
 
-    private static func detail() -> CatalogWallpaperDetail {
+    private static func summary(id: String, title: String) -> CatalogWallpaperSummary {
         let poster = try! CatalogArtifact(
             role: .poster,
-            url: URL(string: "https://catalog.wali.example/poster")!,
+            url: URL(string: "https://catalog.wali.example/poster-\(id)")!,
             sha256: String(repeating: "a", count: 64),
             byteCount: 1,
             mediaType: "image/jpeg",
@@ -456,7 +496,7 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         )
         let preview = try! CatalogArtifact(
             role: .preview,
-            url: URL(string: "https://catalog.wali.example/preview")!,
+            url: URL(string: "https://catalog.wali.example/preview-\(id)")!,
             sha256: String(repeating: "b", count: 64),
             byteCount: 1,
             mediaType: "video/mp4",
@@ -464,10 +504,10 @@ final class MarketplaceCoordinatorTests: XCTestCase {
             height: 1,
             durationMilliseconds: 1_000
         )
-        let summary = CatalogWallpaperSummary(
-            id: wallpaperID,
-            slug: "report-test",
-            title: "Report Test",
+        return CatalogWallpaperSummary(
+            id: id,
+            slug: title.lowercased().replacingOccurrences(of: " ", with: "-"),
+            title: title,
             creator: .init(
                 id: "33333333-3333-4333-8333-333333333333",
                 handle: "artist",
@@ -491,6 +531,10 @@ final class MarketplaceCoordinatorTests: XCTestCase {
             favoriteCount: 0,
             saveCount: 0
         )
+    }
+
+    private static func detail() -> CatalogWallpaperDetail {
+        let summary = summary(id: wallpaperID, title: "Report Test")
         return CatalogWallpaperDetail(
             summary: summary,
             description: "A test wallpaper.",
@@ -513,6 +557,7 @@ final class MarketplaceCoordinatorTests: XCTestCase {
             height: 1,
             frameRateNumerator: 30,
             frameRateDenominator: 1,
+            videoDefault: summary.preview,
             related: [],
             isFavorite: false,
             favoriteRevision: 0,

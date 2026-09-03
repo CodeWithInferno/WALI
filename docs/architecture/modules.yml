@@ -138,6 +138,7 @@ xcode_test_targets:
     build_dependencies:
       - WALIAppRuntime
       - WALICatalogRuntime
+      - WALIUI
     package_dependencies:
       - WALICatalog
   WALICatalogRuntimeTests:

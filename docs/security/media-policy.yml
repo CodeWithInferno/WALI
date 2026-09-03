@@ -55,12 +55,12 @@ processing:
 canonical_output:
   video:
     container: mp4
-    codec: h264
-    pixel_formats: [yuv420p, yuv420p10le]
+    codec: hevc
+    pixel_formats: [yuv420p10le]
     maximum_width: 7680
     maximum_height: 4320
     maximum_duration_ms: 600000
-    maximum_frame_rate_numerator: 120
+    maximum_frame_rate_numerator: 60
     maximum_frame_rate_denominator: 1
     exact_video_tracks: 1
     exact_audio_tracks: 0

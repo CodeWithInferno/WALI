@@ -29,8 +29,7 @@ public struct WALIAppRootView: View {
     @State private var pendingDeletionID: UUID?
     @State private var recentlyDeletedID: UUID?
     @State private var localError: String?
-    @State private var showsStatus = false
-    @State private var showsDisplayArrangement = false
+    @State private var dismissedNoticeKeys: Set<String> = []
 
     public init(
         model: WALIAppModel = WALIAppModel(),
@@ -43,96 +42,94 @@ public struct WALIAppRootView: View {
     }
 
     public var body: some View {
-        navigation
-        .navigationTitle(catalogPath.isEmpty ? route.title : "")
-        .toolbar { toolbar }
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-        .fileImporter(
-            isPresented: $showsImporter,
-            allowedContentTypes: [.movie],
-            allowsMultipleSelection: true,
-            onCompletion: handleImportResult
-        )
-        .sheet(isPresented: $showsSettings) {
-            WALISettingsView(preferences: model.snapshot.preferences, storage: model.snapshot.storage) { preferences in
-                actions.send(.updatePreferences(preferences))
+        inspectedNavigation
+            .navigationTitle(catalogPath.isEmpty ? route.title : "")
+            .fileImporter(
+                isPresented: $showsImporter,
+                allowedContentTypes: [.movie],
+                allowsMultipleSelection: true,
+                onCompletion: handleImportResult
+            )
+            .sheet(isPresented: $showsSettings) {
+                WALISettingsView(preferences: model.snapshot.preferences, storage: model.snapshot.storage) { preferences in
+                    actions.send(.updatePreferences(preferences))
+                }
             }
-        }
-        .sheet(isPresented: $showsPreview) {
-            if let selectedWallpaper {
-                WallpaperPreviewView(
-                    wallpaper: selectedWallpaper,
-                    displayIDs: effectiveDisplayIDs,
-                    onApply: { apply(selectedWallpaper) }
+            .sheet(isPresented: $showsPreview) {
+                if let selectedWallpaper {
+                    WallpaperPreviewView(
+                        wallpaper: selectedWallpaper,
+                        displayIDs: effectiveDisplayIDs,
+                        onApply: { apply(selectedWallpaper) }
+                    )
+                }
+            }
+            .alert("Delete Wallpaper?", isPresented: deletionAlertBinding) {
+                Button("Cancel", role: .cancel) { pendingDeletionID = nil }
+                Button("Delete", role: .destructive, action: confirmDeletion)
+            } message: {
+                Text("The prepared WALI copy will be removed. Your original source video is never deleted.")
+            }
+            .overlay(alignment: WALIChromeLayout.noticeAlignment) { noticeOverlay }
+            .onChange(of: model.snapshot.notice) { _, notice in
+                if notice == nil {
+                    dismissedNoticeKeys.removeAll()
+                }
+            }
+            .background(
+                WindowTitlebarSeparatorHider(
+                    showsCatalogBack: showsCatalogBack,
+                    onCatalogBack: popCatalogPath
                 )
+            )
+            .frame(minWidth: 820, idealWidth: 1120, minHeight: 560, idealHeight: 720)
+            .onAppear {
+                synchronizeSelection()
+                marketplace.start()
             }
-        }
-        .alert("Delete Wallpaper?", isPresented: deletionAlertBinding) {
-            Button("Cancel", role: .cancel) { pendingDeletionID = nil }
-            Button("Delete", role: .destructive, action: confirmDeletion)
-        } message: {
-            Text("The prepared WALI copy will be removed. Your original source video is never deleted.")
-        }
-        .overlay(alignment: .bottom) { noticeOverlay }
-        .background {
-            WALIAppSurface.catalogCanvas
-                .ignoresSafeArea()
-        }
-        .frame(minWidth: 820, idealWidth: 1120, minHeight: 560, idealHeight: 720)
-        .onAppear {
-            synchronizeSelection()
-            marketplace.start()
-        }
-        .onDisappear { marketplace.stop() }
-        .onChange(of: connectedDisplayIDs) { _, _ in
-            synchronizeDisplays()
-            synchronizeContentFit()
-        }
-        .onChange(of: selectedDisplayIDs) { _, _ in synchronizeContentFit() }
-        .onChange(of: searchText) { _, value in
-            if route == .browse { marketplace.search(value) }
-        }
-        .onChange(of: model.snapshot.wallpapers) { _, _ in synchronizeWallpaperSelection() }
-        .onChange(of: model.settingsPresentationRequest) { _, _ in showsSettings = true }
-        .background(keyboardCommands)
-        .accessibilityIdentifier("WALI.MainWindow")
+            .onDisappear { marketplace.stop() }
+            .onChange(of: connectedDisplayIDs) { _, _ in
+                synchronizeDisplays()
+                synchronizeContentFit()
+            }
+            .onChange(of: selectedDisplayIDs) { _, _ in synchronizeContentFit() }
+            .onChange(of: searchText) { _, value in
+                if route == .browse { marketplace.search(value) }
+            }
+            .onChange(of: model.snapshot.wallpapers) { _, _ in synchronizeWallpaperSelection() }
+            .onChange(of: model.settingsPresentationRequest) { _, _ in showsSettings = true }
+            .background(keyboardCommands)
+            .accessibilityIdentifier("WALI.MainWindow")
     }
 
     @ViewBuilder
-    private var navigation: some View {
+    private var inspectedNavigation: some View {
         if route == .library {
-            NavigationSplitView(columnVisibility: $columnVisibility) {
-                sidebar
-                    .navigationSplitViewColumnWidth(min: 168, ideal: 190, max: 230)
-            } content: {
-                content
-                    .navigationSplitViewColumnWidth(min: 350, ideal: 630)
-                    .waliBackgroundExtension()
-            } detail: {
-                detail
-                    .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 440)
-            }
-        } else if route.isMarketplace {
-            marketplaceRootNavigation
+            navigation
+                .inspector(isPresented: libraryInspectorPresented) {
+                    libraryInspector
+                        .inspectorColumnWidth(min: 280, ideal: 340, max: 420)
+                }
         } else {
-            NavigationSplitView(columnVisibility: $columnVisibility) {
-                sidebar
-                    .navigationSplitViewColumnWidth(min: 168, ideal: 190, max: 230)
-            } detail: {
-                content
-                    .waliBackgroundExtension()
-            }
+            navigation
         }
     }
 
-    private var marketplaceRootNavigation: some View {
+    private var navigation: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .navigationSplitViewColumnWidth(min: 168, ideal: 190, max: 230)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+                .toolbar {
+                    if #available(macOS 26.0, *) {
+                        DefaultToolbarItem(kind: .sidebarToggle, placement: .navigation)
+                            .sharedBackgroundVisibility(sidebarToolbarSharedBackground)
+                    }
+                }
         } detail: {
-            NavigationStack(path: $catalogPath) {
-                content
-                    .navigationDestination(for: String.self) { wallpaperID in
+            Group {
+                if route.isMarketplace {
+                    if let wallpaperID = catalogPath.last,
+                       WALIMarketplaceDetailLayout.hidesDestinationNavigationHeader {
                         MarketplaceWallpaperDetailView(
                             marketplace: marketplace.model,
                             wallpaperID: wallpaperID,
@@ -144,11 +141,34 @@ public struct WALIAppRootView: View {
                             onReport: marketplace.reportSelectedWallpaper
                         )
                         .task { marketplace.loadDetail(wallpaperID: wallpaperID) }
+                    } else {
+                        content
                     }
+                } else {
+                    content
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .waliBackgroundExtension()
+            .toolbar(WALIChromeLayout.hidesWindowToolbar ? .hidden : .automatic)
+            .waliHiddenWindowToolbarBackground(
+                WALIMarketplaceDetailLayout.hidesWindowToolbarBackground
+                    && route.isMarketplace
+                    && !catalogPath.isEmpty
+            )
+            .disableMirroredBackgroundExtension()
         }
+        .modifier(StableSidebarToggleModifier())
+        .environment(
+            \.waliOverlayLeadingBleed,
+            WALIChromeLayout.overlayLeadingBleed(columnVisibility: columnVisibility)
+        )
+    }
+
+    private var showsCatalogBack: Bool {
+        WALIChromeLayout.catalogBackLivesBesideSidebarToggle && !catalogPath.isEmpty
+    }
+
+    private var sidebarToolbarSharedBackground: Visibility {
+        WALIChromeLayout.hidesToolbarSharedBackground ? .hidden : .automatic
     }
 
     private var sidebar: some View {
@@ -171,8 +191,16 @@ public struct WALIAppRootView: View {
             }
         }
         .listStyle(.sidebar)
+        .searchable(
+            text: $searchText,
+            placement: WALIChromeLayout.searchFieldPlacement,
+            prompt: Text("Search")
+        )
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            sidebarImportControl
+        }
         .onChange(of: route) { _, newRoute in
-            if newRoute != .library { searchText = "" }
+            if newRoute != .library && newRoute != .browse { searchText = "" }
             catalogPath.removeAll()
         }
         .accessibilityIdentifier("WALI.Sidebar")
@@ -180,7 +208,18 @@ public struct WALIAppRootView: View {
 
     private func sidebarRow(_ item: AppRoute, badge: Int = 0) -> some View {
         HStack(spacing: 8) {
-            Label(item.title, systemImage: item.symbolName)
+            if item == .account {
+                Label {
+                    Text(item.title)
+                } icon: {
+                    WALIAccountAvatarView(
+                        displayName: accountAvatarName,
+                        size: 22
+                    )
+                }
+            } else {
+                Label(item.title, systemImage: item.symbolName)
+            }
             Spacer(minLength: 0)
             if badge > 0 {
                 Text(badge, format: .number)
@@ -191,6 +230,20 @@ public struct WALIAppRootView: View {
         }
         .tag(item)
         .accessibilityIdentifier("WALI.Sidebar.\(item.rawValue)")
+    }
+
+    private var sidebarImportControl: some View {
+        Button {
+            showsImporter = true
+        } label: {
+            Label("Import Video", systemImage: "plus")
+        }
+        .buttonStyle(.borderless)
+        .help("Import Video… (⌘O)")
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .accessibilityIdentifier("WALI.Import")
     }
 
     @ViewBuilder
@@ -263,6 +316,7 @@ public struct WALIAppRootView: View {
                     tags: metadata.tags,
                     licenses: metadata.licenses,
                     accessState: marketplace.creatorContext.state,
+                    lastFailureCode: marketplace.creatorContext.lastFailureCode,
                     onAcceptTerms: marketplace.acceptCreatorTerms
                 ) { submission in
                     CreatorSubmissionEditor(
@@ -318,8 +372,8 @@ public struct WALIAppRootView: View {
     }
 
     @ViewBuilder
-    private var detail: some View {
-        if route == .library, let selectedWallpaper {
+    private var libraryInspector: some View {
+        if let selectedWallpaper {
             WallpaperDetailView(
                 wallpaper: selectedWallpaper,
                 displays: model.snapshot.displays,
@@ -330,72 +384,6 @@ public struct WALIAppRootView: View {
                 onDelete: { requestDeletion(selectedWallpaper) },
                 onReveal: { actions.send(.revealWallpaper(itemID: selectedWallpaper.id)) }
             )
-        } else {
-            ContentUnavailableView {
-                Label(route.title, systemImage: route.symbolName)
-            } description: {
-                Text(route.detailHint)
-            }
-        }
-    }
-
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        if route == .browse {
-            ToolbarItemGroup(placement: .primaryAction) {
-                CatalogFiltersView(sort: $browseSort)
-                WALICompactSearchField(text: $searchText, prompt: "Search Wallpapers")
-                    .frame(minWidth: 180, idealWidth: 260, maxWidth: 340)
-                    .accessibilityIdentifier("WALI.Marketplace.Search")
-            }
-        }
-
-        if route.isLocalLibrary {
-            ToolbarItem(placement: .secondaryAction) {
-                Button {
-                    showsImporter = true
-                } label: {
-                    Label("Import Video", systemImage: "plus")
-                }
-                .help("Import Video… (⌘O)")
-                .accessibilityIdentifier("WALI.Import")
-            }
-
-            ToolbarItemGroup(placement: .secondaryAction) {
-                Button {
-                    showsDisplayArrangement.toggle()
-                } label: {
-                    Label(displayPickerTitle, systemImage: "display.2")
-                }
-                .help("Choose Displays")
-                .popover(isPresented: $showsDisplayArrangement, arrowEdge: .bottom) {
-                    DisplayArrangementView(
-                        displays: model.snapshot.displays,
-                        wallpapers: model.snapshot.wallpapers,
-                        selection: $selectedDisplayIDs,
-                        onDone: { showsDisplayArrangement = false }
-                    )
-                }
-                .accessibilityIdentifier("WALI.DisplayPicker")
-
-                Button {
-                    showsStatus.toggle()
-                } label: {
-                    Label("WALI Status", systemImage: rendererToolbarSymbol)
-                }
-                .help("Wallpaper Status")
-                .popover(isPresented: $showsStatus, arrowEdge: .bottom) {
-                    StatusPanel(status: model.snapshot.renderer, actions: actions)
-                }
-            }
-
-            if route == .library {
-                ToolbarItem(placement: .primaryAction) {
-                    WALICompactSearchField(text: $searchText, prompt: "Search Library")
-                        .frame(minWidth: 180, idealWidth: 260, maxWidth: 340)
-                        .accessibilityIdentifier("WALI.Library.Search")
-                }
-            }
         }
     }
 
@@ -414,6 +402,9 @@ public struct WALIAppRootView: View {
             .keyboardShortcut("p", modifiers: [.command, .shift])
             Button("Settings") { showsSettings = true }
                 .keyboardShortcut(",", modifiers: .command)
+            Button("Back") { popCatalogPath() }
+                .keyboardShortcut("[", modifiers: .command)
+                .disabled(!showsCatalogBack)
         }
         .frame(width: 0, height: 0)
         .opacity(0)
@@ -423,9 +414,12 @@ public struct WALIAppRootView: View {
     @ViewBuilder
     private var noticeOverlay: some View {
         if let localError {
-            NoticeBanner(kind: .error, title: "Import Failed", message: localError) {
-                self.localError = nil
-            }
+            NoticeBanner(
+                kind: .error,
+                title: "Import Failed",
+                message: localError,
+                onDismiss: { self.localError = nil }
+            )
             .padding(16)
         } else if let deletedID = recentlyDeletedID {
             NoticeBanner(
@@ -440,10 +434,34 @@ public struct WALIAppRootView: View {
                 onDismiss: { recentlyDeletedID = nil }
             )
             .padding(16)
-        } else if let notice = model.snapshot.notice {
-            NoticeBanner(kind: notice.kind, title: notice.title, message: notice.message)
-                .padding(16)
+        } else if let notice = visibleSnapshotNotice {
+            NoticeBanner(
+                kind: notice.kind,
+                title: notice.title,
+                message: notice.message,
+                onDismiss: { dismissedNoticeKeys.insert(notice.dismissalKey) }
+            )
+            .padding(16)
         }
+    }
+
+    private var visibleSnapshotNotice: WALINoticePresentation? {
+        guard let notice = model.snapshot.notice else { return nil }
+        guard dismissedNoticeKeys.contains(notice.dismissalKey) == false else { return nil }
+        return notice
+    }
+
+    private var libraryInspectorPresented: Binding<Bool> {
+        Binding(
+            get: { route == .library && selectedWallpaper != nil },
+            set: { presented in
+                if !presented { selectedWallpaperID = nil }
+            }
+        )
+    }
+
+    private var accountAvatarName: String? {
+        marketplace.model.accountProfile?.displayName
     }
 
     private var filteredWallpapers: [WALIWallpaperPresentation] {
@@ -480,24 +498,6 @@ public struct WALIAppRootView: View {
         }
     }
 
-    private var rendererToolbarSymbol: String {
-        switch model.snapshot.renderer.state {
-        case .playing: "play.circle.fill"
-        case .automaticallyPaused, .userPaused: "pause.circle"
-        case .converting: "arrow.trianglehead.2.clockwise.rotate.90"
-        case .error: "exclamationmark.triangle"
-        case .stopped: "circle"
-        }
-    }
-
-    private var displayPickerTitle: String {
-        switch selectedDisplayIDs.count {
-        case 0: "Choose Displays"
-        case 1: "1 Display"
-        default: "\(selectedDisplayIDs.count) Displays"
-        }
-    }
-
     private var deletionAlertBinding: Binding<Bool> {
         Binding(
             get: { pendingDeletionID != nil },
@@ -531,8 +531,10 @@ public struct WALIAppRootView: View {
     }
 
     private func synchronizeWallpaperSelection() {
-        guard selectedWallpaper == nil else { return }
-        selectedWallpaperID = model.snapshot.wallpapers.first?.id
+        guard let selectedWallpaperID else { return }
+        if !model.snapshot.wallpapers.contains(where: { $0.id == selectedWallpaperID }) {
+            self.selectedWallpaperID = nil
+        }
     }
 
     private func handleImportResult(_ result: Result<[URL], any Error>) {
@@ -594,61 +596,10 @@ public struct WALIAppRootView: View {
             catalogPath.append(wallpaperID)
         }
     }
-}
 
-enum WALIAppSurface {
-    static let catalogCanvas = Color(nsColor: .underPageBackgroundColor)
-}
-
-private struct WALICompactSearchField: NSViewRepresentable {
-    @Binding var text: String
-    let prompt: String
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
-    }
-
-    func makeNSView(context: Context) -> NSSearchField {
-        let searchField = NSSearchField()
-        searchField.delegate = context.coordinator
-        searchField.placeholderString = prompt
-        searchField.sendsSearchStringImmediately = true
-        searchField.sendsWholeSearchString = true
-        searchField.maximumRecents = 0
-        return searchField
-    }
-
-    func updateNSView(_ searchField: NSSearchField, context: Context) {
-        if searchField.stringValue != text {
-            searchField.stringValue = text
-        }
-        if searchField.placeholderString != prompt {
-            searchField.placeholderString = prompt
-        }
-    }
-
-    final class Coordinator: NSObject, NSSearchFieldDelegate {
-        @Binding private var text: String
-
-        init(text: Binding<String>) {
-            _text = text
-        }
-
-        func controlTextDidChange(_ notification: Notification) {
-            guard let searchField = notification.object as? NSSearchField else { return }
-            text = searchField.stringValue
-        }
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func waliBackgroundExtension() -> some View {
-        if #available(macOS 26.0, *) {
-            backgroundExtensionEffect()
-        } else {
-            self
-        }
+    private func popCatalogPath() {
+        guard !catalogPath.isEmpty else { return }
+        catalogPath.removeLast()
     }
 }
 
@@ -688,22 +639,269 @@ private enum AppRoute: String, CaseIterable, Hashable {
         }
     }
 
-    var detailHint: String {
-        switch self {
-        case .discover: "Discover curated and trending wallpapers."
-        case .browse: "Browse the complete published catalog."
-        case .library: "Select a wallpaper to see details and display controls."
-        case .downloads: "Import videos and follow their preparation progress."
-        case .account: "Manage your marketplace account and privacy settings."
-        case .creatorStudio: "Upload, describe, and submit verified wallpapers."
-        case .reviewQueue: "Review canonical submissions with server-owned policy."
-        case .reports: "Review assigned marketplace reports."
-        }
-    }
-
     var isMarketplace: Bool {
         self == .discover || self == .browse || self == .creatorStudio
             || self == .reviewQueue || self == .reports
     }
-    var isLocalLibrary: Bool { self == .library || self == .downloads }
+}
+
+private struct StableSidebarToggleModifier: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.toolbar(removing: .sidebarToggle)
+        } else {
+            content
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func disableMirroredBackgroundExtension() -> some View {
+        if #available(macOS 26.0, *), WALIDiscoverLayout.usesMirroredBackgroundExtension == false {
+            backgroundExtensionEffect(isEnabled: false)
+        } else {
+            self
+        }
+    }
+}
+
+private struct WindowTitlebarSeparatorHider: NSViewRepresentable {
+    var showsCatalogBack: Bool
+    var onCatalogBack: () -> Void
+
+    func makeNSView(context: Context) -> WindowAccessView {
+        let view = WindowAccessView()
+        view.showsCatalogBack = showsCatalogBack
+        view.onCatalogBack = onCatalogBack
+        return view
+    }
+
+    func updateNSView(_ nsView: WindowAccessView, context: Context) {
+        nsView.showsCatalogBack = showsCatalogBack
+        nsView.onCatalogBack = onCatalogBack
+        nsView.applyChrome()
+    }
+}
+
+private final class WindowAccessView: NSView {
+    var showsCatalogBack = false
+    var onCatalogBack: (() -> Void)?
+
+    private let catalogBackButton = CatalogBackTitlebarButton()
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        catalogBackButton.removeFromSuperview()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        NotificationCenter.default.removeObserver(self)
+        applyChrome()
+        DispatchQueue.main.async { [weak self] in
+            self?.applyChrome()
+        }
+        guard let window else { return }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidChange(_:)),
+            name: NSWindow.didResizeNotification,
+            object: window
+        )
+        if let toolbar = window.toolbar {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(toolbarWillAddItem(_:)),
+                name: NSToolbar.willAddItemNotification,
+                object: toolbar
+            )
+        }
+    }
+
+    func applyChrome() {
+        guard let window else { return }
+        if WALIChromeLayout.hidesTitlebarSeparator {
+            window.titlebarSeparatorStyle = .none
+        }
+        if WALIChromeLayout.usesFullSizeContentTitlebar {
+            window.styleMask.insert(.fullSizeContentView)
+            window.titlebarAppearsTransparent = true
+        }
+        overlaySidebarOnDetail(in: window)
+        if WALIChromeLayout.hidesSplitToolbarHandle, let toolbar = window.toolbar {
+            toolbar.removeItem(identifier: .sidebarTrackingSeparator)
+            toolbar.removeItem(identifier: .inspectorTrackingSeparator)
+            toolbar.removeItem(identifier: .space)
+            toolbar.removeItem(identifier: .flexibleSpace)
+            for item in toolbar.items where isSplitTrackingItem(item) {
+                item.isHidden = true
+            }
+        }
+        syncCatalogBackButton(in: window)
+    }
+
+    private func overlaySidebarOnDetail(in window: NSWindow) {
+        guard WALIChromeLayout.overlaysSidebarOnDetail else { return }
+        guard #available(macOS 26.0, *) else { return }
+        let split = window.contentView.flatMap(findSplitViewController(in:))
+            ?? findSplitViewController(from: window.contentViewController)
+        guard let split else { return }
+        for item in split.splitViewItems where item.behavior != .sidebar && item.behavior != .inspector {
+            item.automaticallyAdjustsSafeAreaInsets = true
+        }
+    }
+
+    private func findSplitViewController(from controller: NSViewController?) -> NSSplitViewController? {
+        guard let controller else { return nil }
+        if let split = controller as? NSSplitViewController {
+            return split
+        }
+        for child in controller.children {
+            if let found = findSplitViewController(from: child) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private func findSplitViewController(in view: NSView) -> NSSplitViewController? {
+        var responder: NSResponder? = view.nextResponder
+        while let current = responder {
+            if let split = current as? NSSplitViewController {
+                return split
+            }
+            responder = current.nextResponder
+        }
+        for subview in view.subviews {
+            if let found = findSplitViewController(in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    @objc private func windowDidChange(_ notification: Notification) {
+        applyChrome()
+    }
+
+    @objc private func toolbarWillAddItem(_ notification: Notification) {
+        if WALIChromeLayout.hidesSplitToolbarHandle {
+            let item = notification.userInfo?.values.compactMap { value in
+                value as? NSToolbarItem
+            }.first
+            if let item, isSplitTrackingItem(item) {
+                item.isHidden = true
+            }
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.applyChrome()
+        }
+    }
+
+    private func isSplitTrackingItem(_ item: NSToolbarItem) -> Bool {
+        item is NSTrackingSeparatorToolbarItem
+            || item.itemIdentifier == .sidebarTrackingSeparator
+            || item.itemIdentifier == .inspectorTrackingSeparator
+            || item.itemIdentifier == .space
+            || item.itemIdentifier == .flexibleSpace
+    }
+
+    private func syncCatalogBackButton(in window: NSWindow) {
+        catalogBackButton.onBack = onCatalogBack
+        guard WALIChromeLayout.catalogBackLivesBesideSidebarToggle, showsCatalogBack else {
+            catalogBackButton.removeFromSuperview()
+            return
+        }
+        guard let titlebar = window.standardWindowButton(.closeButton)?.superview,
+              let toggle = sidebarToggleView(in: window, titlebar: titlebar)
+        else {
+            catalogBackButton.removeFromSuperview()
+            return
+        }
+        if catalogBackButton.superview !== titlebar {
+            catalogBackButton.removeFromSuperview()
+            titlebar.addSubview(catalogBackButton)
+        }
+        let toggleFrame = toggle.convert(toggle.bounds, to: titlebar)
+        let width = max(toggleFrame.width, 28)
+        catalogBackButton.frame = NSRect(
+            x: toggleFrame.maxX + WALIChromeLayout.catalogBackTitlebarSpacing,
+            y: toggleFrame.minY,
+            width: width,
+            height: toggleFrame.height
+        )
+    }
+
+    private func sidebarToggleView(in window: NSWindow, titlebar: NSView) -> NSView? {
+        if let toolbar = window.toolbar {
+            for item in toolbar.items where isSidebarToggleItem(item) {
+                if let view = item.view, view.bounds.width > 0 {
+                    return view
+                }
+            }
+        }
+        let lights = Set(trafficLights(in: window).map(ObjectIdentifier.init))
+        let buttons = buttons(in: titlebar).filter { button in
+            button !== catalogBackButton && lights.contains(ObjectIdentifier(button)) == false
+        }
+        return buttons.min { left, right in
+            left.convert(left.bounds, to: titlebar).minX < right.convert(right.bounds, to: titlebar).minX
+        }
+    }
+
+    private func isSidebarToggleItem(_ item: NSToolbarItem) -> Bool {
+        if item.itemIdentifier == .toggleSidebar { return true }
+        let raw = item.itemIdentifier.rawValue.lowercased()
+        return raw.contains("sidebar") && raw.contains("toggle")
+    }
+
+    private func trafficLights(in window: NSWindow) -> [NSView] {
+        [
+            window.standardWindowButton(.closeButton),
+            window.standardWindowButton(.miniaturizeButton),
+            window.standardWindowButton(.zoomButton)
+        ].compactMap { $0 }
+    }
+
+    private func buttons(in view: NSView) -> [NSButton] {
+        var found: [NSButton] = []
+        if let button = view as? NSButton {
+            found.append(button)
+        }
+        for subview in view.subviews {
+            found.append(contentsOf: buttons(in: subview))
+        }
+        return found
+    }
+}
+
+private final class CatalogBackTitlebarButton: NSButton {
+    var onBack: (() -> Void)?
+
+    init() {
+        super.init(frame: .zero)
+        let image = NSImage(systemSymbolName: "chevron.backward", accessibilityDescription: "Back")
+        self.image = image
+        imagePosition = .imageOnly
+        isBordered = false
+        bezelStyle = .shadowlessSquare
+        toolTip = "Back"
+        identifier = NSUserInterfaceItemIdentifier("WALI.Marketplace.Detail.Back")
+        setButtonType(.momentaryChange)
+        target = self
+        action = #selector(clicked)
+        setAccessibilityLabel("Back")
+        setAccessibilityIdentifier("WALI.Marketplace.Detail.Back")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is unused")
+    }
+
+    @objc private func clicked() {
+        onBack?()
+    }
 }

@@ -281,6 +281,10 @@ public struct WALINoticePresentation: Identifiable, Equatable, Sendable {
         self.title = title
         self.message = message
     }
+
+    public var dismissalKey: String {
+        "\(title)\u{1e}\(message)"
+    }
 }
 
 public enum WALINoticeKind: Equatable, Sendable {

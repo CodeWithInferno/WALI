@@ -20,9 +20,9 @@
     "video_default"
   ],
   "canonical": {
-    "video_codec": "h264",
-    "video_encoder": "libopenh264",
-    "pixel_format": "yuv420p",
+    "video_codec": "hevc",
+    "video_encoder": "libkvazaar",
+    "pixel_format": "yuv420p10le",
     "color_space": "bt709",
     "audio_tracks": 0,
     "metadata": "stripped"

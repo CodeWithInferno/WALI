@@ -20,7 +20,7 @@ end
 
 class MarketplaceContractChecker
   ACCEPTANCE_REFERENCE = "project-owner AFK marketplace implementation directive 2026-09-01"
-  REQUIRED_ADRS = %w[0011 0012 0013 0014 0015 0016].freeze
+  REQUIRED_ADRS = %w[0011 0012 0013 0014 0015 0016 0017].freeze
   REQUIRED_CONTRACT_FILES = %w[
     docs/api/catalog-v1.md
     docs/api/creator-v1.md
@@ -201,7 +201,7 @@ class MarketplaceContractChecker
         record("MKT-ADR-GATE", "missing accepted ADR #{id}")
         next
       end
-      record("MKT-ADR-GATE", "ADR #{id} must be accepted") unless metadata["status"] == "accepted"
+      record("MKT-ADR-GATE", "ADR #{id} must be accepted or partially superseded") unless %w[accepted partially_superseded].include?(metadata["status"])
       record("MKT-ADR-GATE", "ADR #{id} must be accepted by project_owner") unless metadata["accepted_by"] == "project_owner"
       unless metadata["approval_reference"] == ACCEPTANCE_REFERENCE
         record("MKT-ADR-GATE", "ADR #{id} has the wrong approval reference")
@@ -235,7 +235,7 @@ class MarketplaceContractChecker
       %w[processing maximum_total_output_bytes] => 2_147_483_648,
       %w[processing network] => "none",
       %w[processing credentials] => "none",
-      %w[canonical_output video codec] => "h264",
+      %w[canonical_output video codec] => "hevc",
       %w[canonical_output video exact_video_tracks] => 1,
       %w[canonical_output video exact_audio_tracks] => 0,
       %w[classification deterministic_frame_count] => 7,

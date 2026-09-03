@@ -20,6 +20,7 @@ public protocol CatalogPresentationMediaCaching: Sendable {
 public actor CatalogPresentationMediaCache: CatalogPresentationMediaCaching {
     private static let posterByteLimit: UInt64 = 25 * 1_024 * 1_024
     private static let previewByteLimit: UInt64 = 128 * 1_024 * 1_024
+    private static let playbackByteLimit: UInt64 = 512 * 1_024 * 1_024
 
     private let root: URL
     private let incoming: URL
@@ -134,6 +135,10 @@ public actor CatalogPresentationMediaCache: CatalogPresentationMediaCaching {
             }
         case (.preview, "video/mp4"):
             guard artifact.byteCount <= Self.previewByteLimit else {
+                throw CatalogPresentationMediaCacheError.unsupportedArtifact
+            }
+        case (.videoDefault, "video/mp4"):
+            guard artifact.byteCount <= Self.playbackByteLimit else {
                 throw CatalogPresentationMediaCacheError.unsupportedArtifact
             }
         default:

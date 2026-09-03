@@ -18,33 +18,44 @@ struct LibrarySurface: View {
     @State private var previewTask: Task<Void, Never>?
     @State private var hoveringID: UUID?
 
-    private let columns = [
-        GridItem(.adaptive(minimum: 190, maximum: 300), spacing: 16, alignment: .top)
-    ]
-
     var body: some View {
         Group {
             if wallpapers.isEmpty {
                 emptyState
             } else {
-                ScrollView {
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
-                        ForEach(wallpapers) { wallpaper in
-                            WallpaperTile(
-                                wallpaper: wallpaper,
-                                isSelected: wallpaper.id == selectedID,
-                                isPreviewing: wallpaper.id == hoveringID,
-                                canApply: canApply,
-                                onSelect: { selectedID = wallpaper.id },
-                                onApply: { onApply(wallpaper) },
-                                onPreview: { onPreview(wallpaper) },
-                                onDelete: { onDelete(wallpaper) },
-                                onReveal: { onReveal(wallpaper) },
-                                onHover: { updateHover($0, wallpaperID: wallpaper.id) }
-                            )
+                GeometryReader { geometry in
+                    let columnCount = WALILibraryLayout.columnCount(forAvailableWidth: geometry.size.width)
+                    let columns = Array(
+                        repeating: GridItem(
+                            .flexible(),
+                            spacing: WALILibraryLayout.gutter,
+                            alignment: .top
+                        ),
+                        count: columnCount
+                    )
+                    ScrollView {
+                        LazyVGrid(
+                            columns: columns,
+                            alignment: .leading,
+                            spacing: WALILibraryLayout.gutter
+                        ) {
+                            ForEach(wallpapers) { wallpaper in
+                                WallpaperTile(
+                                    wallpaper: wallpaper,
+                                    isSelected: wallpaper.id == selectedID,
+                                    isPreviewing: wallpaper.id == hoveringID,
+                                    canApply: canApply,
+                                    onSelect: { selectedID = wallpaper.id },
+                                    onApply: { onApply(wallpaper) },
+                                    onPreview: { onPreview(wallpaper) },
+                                    onDelete: { onDelete(wallpaper) },
+                                    onReveal: { onReveal(wallpaper) },
+                                    onHover: { updateHover($0, wallpaperID: wallpaper.id) }
+                                )
+                            }
                         }
+                        .padding(WALILibraryLayout.chromeInset)
                     }
-                    .padding(20)
                 }
             }
         }
@@ -105,6 +116,10 @@ private struct WallpaperTile: View {
     let onReveal: () -> Void
     let onHover: (Bool) -> Void
 
+    private var displayTitle: String {
+        WALILibraryItemTitle.displayName(from: wallpaper.title)
+    }
+
     @ViewBuilder
     var body: some View {
         if isApplyEnabled {
@@ -118,18 +133,18 @@ private struct WallpaperTile: View {
     private var tile: some View {
         VStack(alignment: .leading, spacing: 8) {
             ZStack(alignment: .bottomLeading) {
-                Group {
-                    if isPreviewing, let previewURL = wallpaper.previewURL {
-                        LoopingVideoView(url: previewURL)
-                    } else {
-                        ArtworkThumbnail(imageURL: wallpaper.thumbnailURL, title: wallpaper.title)
+                Color.clear
+                    .aspectRatio(WALILibraryLayout.artworkAspect, contentMode: .fit)
+                    .overlay {
+                        artwork
                     }
-                }
-                .aspectRatio(16 / 10, contentMode: .fit)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 3)
-                }
+                    .clipShape(
+                        RoundedRectangle(cornerRadius: WALILibraryLayout.cornerRadius, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: WALILibraryLayout.cornerRadius, style: .continuous)
+                            .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 2)
+                    }
 
                 statusOverlay
                     .padding(8)
@@ -137,9 +152,9 @@ private struct WallpaperTile: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(wallpaper.title)
-                        .font(.headline)
-                        .lineLimit(1)
+                    Text(displayTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
                     if wallpaper.isActive {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(Color.accentColor)
@@ -152,6 +167,7 @@ private struct WallpaperTile: View {
                     .lineLimit(1)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) {
             guard isApplyEnabled else { return }
@@ -174,6 +190,21 @@ private struct WallpaperTile: View {
     }
 
     @ViewBuilder
+    private var artwork: some View {
+        if isPreviewing, let previewURL = wallpaper.previewURL {
+            LoopingVideoView(url: previewURL, cornerRadius: WALILibraryLayout.cornerRadius)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ArtworkThumbnail(
+                imageURL: wallpaper.thumbnailURL,
+                title: displayTitle,
+                cornerRadius: 0
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
     private var statusOverlay: some View {
         switch wallpaper.availability {
         case .ready:
@@ -182,7 +213,8 @@ private struct WallpaperTile: View {
                     .font(.caption.weight(.medium))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
-                    .background(.regularMaterial, in: Capsule())
+                    .foregroundStyle(.white)
+                    .background(.black.opacity(0.45), in: Capsule())
             }
         case let .preparing(progress):
             HStack(spacing: 6) {
@@ -194,14 +226,15 @@ private struct WallpaperTile: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
-            .background(.regularMaterial, in: Capsule())
+            .foregroundStyle(.white)
+            .background(.black.opacity(0.45), in: Capsule())
         case .failed:
             Label("Failed", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.red)
+                .foregroundStyle(.white)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(.regularMaterial, in: Capsule())
+                .background(.black.opacity(0.45), in: Capsule())
         }
     }
 
@@ -212,7 +245,7 @@ private struct WallpaperTile: View {
     }
 
     private var accessibilityLabel: String {
-        var parts = [wallpaper.title, metadata]
+        var parts = [displayTitle, metadata]
         if wallpaper.isActive { parts.append("Active") }
         return parts.joined(separator: ", ")
     }

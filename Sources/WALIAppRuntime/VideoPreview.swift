@@ -1,5 +1,7 @@
+import AppKit
 import AVFoundation
 import AVKit
+import QuartzCore
 import SwiftUI
 import WALIUI
 
@@ -7,13 +9,18 @@ struct LoopingVideoView: View {
     let url: URL
     var cornerRadius: CGFloat = 12
     var videoGravity: AVLayerVideoGravity = .resizeAspectFill
+    var fadesOutAtBottom: Bool = false
 
     @State private var playback: LoopingPlayback?
 
     var body: some View {
         Group {
             if let playback {
-                LayerBackedVideoPlayer(player: playback.player, videoGravity: videoGravity)
+                LayerBackedVideoPlayer(
+                    player: playback.player,
+                    videoGravity: videoGravity,
+                    fadesOutAtBottom: fadesOutAtBottom
+                )
             } else {
                 Color(nsColor: .controlBackgroundColor)
                     .overlay {
@@ -30,7 +37,7 @@ struct LoopingVideoView: View {
         }
         .onDisappear {
             playback?.player.pause()
-            playback = nil
+            self.playback = nil
         }
         .accessibilityHidden(true)
     }
@@ -39,17 +46,20 @@ struct LoopingVideoView: View {
 private struct LayerBackedVideoPlayer: NSViewRepresentable {
     let player: AVPlayer
     let videoGravity: AVLayerVideoGravity
+    var fadesOutAtBottom = false
 
     func makeNSView(context: Context) -> PlayerLayerView {
         let view = PlayerLayerView()
         view.player = player
         view.videoGravity = videoGravity
+        view.fadesOutAtBottom = fadesOutAtBottom
         return view
     }
 
     func updateNSView(_ view: PlayerLayerView, context: Context) {
         view.player = player
         view.videoGravity = videoGravity
+        view.fadesOutAtBottom = fadesOutAtBottom
     }
 }
 
@@ -66,6 +76,12 @@ private final class PlayerLayerView: NSView {
         set { playerLayer.videoGravity = newValue }
     }
 
+    var fadesOutAtBottom = false {
+        didSet { updateBottomFade() }
+    }
+
+    private let fadeMask = CAGradientLayer()
+
     private var playerLayer: AVPlayerLayer {
         guard let playerLayer = layer as? AVPlayerLayer else {
             preconditionFailure("PlayerLayerView requires AVPlayerLayer backing")
@@ -76,11 +92,30 @@ private final class PlayerLayerView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        fadeMask.startPoint = CGPoint(x: 0.5, y: 1)
+        fadeMask.endPoint = CGPoint(x: 0.5, y: 0)
+        fadeMask.colors = [
+            NSColor.black.cgColor,
+            NSColor.black.cgColor,
+            NSColor.black.withAlphaComponent(0.45).cgColor,
+            NSColor.clear.cgColor
+        ]
+        fadeMask.locations = [0, 0.48, 0.78, 1]
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         wantsLayer = true
+    }
+
+    override func layout() {
+        super.layout()
+        fadeMask.frame = bounds
+        updateBottomFade()
+    }
+
+    private func updateBottomFade() {
+        playerLayer.mask = fadesOutAtBottom ? fadeMask : nil
     }
 }
 

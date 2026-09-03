@@ -11,6 +11,26 @@ final class WALITranscoderTests: XCTestCase {
         )
     }
 
+    func testMasterExportPreservesHighFrameRateUpToSixty() async throws {
+        let root = try temporaryDirectory()
+        let sourceURL = root.appendingPathComponent("source-120fps.mov")
+        try await makeSourceVideo(at: sourceURL, timescale: 120, frameCount: 120)
+        let outputURL = root.appendingPathComponent("master.mov")
+        try await MediaTranscoder().exportVideo(
+            sourceURL: sourceURL,
+            outputURL: outputURL,
+            preview: false,
+            phase: .transcodingMaster,
+            progress: { _ in }
+        )
+
+        let asset = AVURLAsset(url: outputURL)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let frameRate = Double(try await track.load(.nominalFrameRate))
+        XCTAssertEqual(frameRate, 60, accuracy: 0.6)
+    }
+
     func testExportsAerialCompatibleMain10VideoForMasterAndPreview() async throws {
         let root = try temporaryDirectory()
         let sourceURL = root.appendingPathComponent("source.mov")
@@ -151,7 +171,12 @@ final class WALITranscoderTests: XCTestCase {
         ))
     }
 
-    private func makeSourceVideo(at url: URL, videoTrackCount: Int = 1) async throws {
+    private func makeSourceVideo(
+        at url: URL,
+        videoTrackCount: Int = 1,
+        timescale: CMTimeScale = 4,
+        frameCount: Int = 12
+    ) async throws {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         let inputs = (0..<videoTrackCount).map { _ in
             let input = AVAssetWriterInput(
@@ -177,7 +202,7 @@ final class WALITranscoderTests: XCTestCase {
         XCTAssertTrue(writer.startWriting())
         writer.startSession(atSourceTime: .zero)
 
-        for index in 0..<12 {
+        for index in 0..<frameCount {
             for (input, adaptor) in inputs {
                 while !input.isReadyForMoreMediaData {
                     try await Task.sleep(for: .milliseconds(1))
@@ -196,7 +221,7 @@ final class WALITranscoderTests: XCTestCase {
                 CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
                 XCTAssertTrue(adaptor.append(
                     pixelBuffer,
-                    withPresentationTime: CMTime(value: Int64(index), timescale: 4)
+                    withPresentationTime: CMTime(value: Int64(index), timescale: timescale)
                 ))
             }
         }

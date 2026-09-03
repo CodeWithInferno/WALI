@@ -223,35 +223,52 @@ struct NoticeBanner: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
             Image(systemName: symbolName)
+                .font(.title3)
                 .foregroundStyle(symbolColor)
+                .symbolRenderingMode(.hierarchical)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
-                    .font(.callout.weight(.semibold))
+                    .font(.headline)
+                    .foregroundStyle(.primary)
                 Text(message)
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
+                    .controlSize(.small)
+                    .padding(.top, 1)
             }
-            if let onDismiss {
-                Button("Dismiss", systemImage: "xmark", action: onDismiss)
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.plain)
-                    .help("Dismiss")
+
+            if WALIChromeLayout.noticeShowsDismissControl, let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, height: 24)
+                        .background(.quaternary.opacity(0.55), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss")
+                .accessibilityLabel("Dismiss")
             }
         }
-        .padding(12)
-        .frame(maxWidth: 520)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: WALIChromeLayout.noticeMaxWidth, alignment: .leading)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: WALIChromeLayout.noticeCornerRadius, style: .continuous)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
         .accessibilityElement(children: .contain)
     }
 

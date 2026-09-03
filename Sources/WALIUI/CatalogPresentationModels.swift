@@ -13,6 +13,8 @@ public struct WALICatalogCardPresentation: Identifiable, Equatable, Sendable {
     public let verifiedInstallCount: UInt64
     public var favoriteCount: UInt64
     public var saveCount: UInt64
+    public let pixelWidth: UInt32
+    public let pixelHeight: UInt32
 
     public init(
         id: String,
@@ -24,7 +26,9 @@ public struct WALICatalogCardPresentation: Identifiable, Equatable, Sendable {
         previewURL: URL?,
         verifiedInstallCount: UInt64,
         favoriteCount: UInt64,
-        saveCount: UInt64
+        saveCount: UInt64,
+        pixelWidth: UInt32 = 1920,
+        pixelHeight: UInt32 = 1200
     ) {
         self.id = id
         self.title = title
@@ -36,17 +40,31 @@ public struct WALICatalogCardPresentation: Identifiable, Equatable, Sendable {
         self.verifiedInstallCount = verifiedInstallCount
         self.favoriteCount = favoriteCount
         self.saveCount = saveCount
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
     }
+}
+
+public enum WALICatalogSectionLayout: Equatable, Sendable {
+    case hero
+    case row
 }
 
 public struct WALICatalogSectionPresentation: Identifiable, Equatable, Sendable {
     public let id: String
     public let title: String
+    public let layout: WALICatalogSectionLayout
     public let cards: [WALICatalogCardPresentation]
 
-    public init(id: String, title: String, cards: [WALICatalogCardPresentation]) {
+    public init(
+        id: String,
+        title: String,
+        layout: WALICatalogSectionLayout = .row,
+        cards: [WALICatalogCardPresentation]
+    ) {
         self.id = id
         self.title = title
+        self.layout = layout
         self.cards = cards
     }
 }

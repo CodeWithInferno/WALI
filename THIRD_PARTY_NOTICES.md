@@ -10,7 +10,8 @@ resolved versions and checksums.
 | Supabase / PostgreSQL local tooling | Backend development and database | Apache-2.0 / PostgreSQL |
 | pgx and Go transitive modules | Media worker database client | MIT / BSD-3-Clause |
 | FFmpeg | Networkless media normalization | LGPL-2.1-or-later, configured without GPL/nonfree features |
-| OpenH264 | H.264 codec used by FFmpeg | BSD-2-Clause; patent terms remain upstream |
+| Kvazaar | HEVC Main 10 encoder used by the media sandbox, built with `KVZ_BIT_DEPTH=10` | BSD-3-Clause |
+| FFmpeg libkvazaar 10-bit wrapper patch | In-tree LGPL patch so FFmpeg 7.1.2 accepts `yuv420p10le` | LGPL-2.1-or-later |
 | SigLIP model code and declared weights | Offline taxonomy suggestions | Apache-2.0, subject to verified model manifest |
 | PyTorch, Transformers, Pillow, NumPy, safetensors | Optional offline classifier runtime | BSD-3-Clause / Apache-2.0 / HPND / BSD-3-Clause / Apache-2.0 |
 | pytest and development dependencies | Classifier tests | MIT / BSD licenses |

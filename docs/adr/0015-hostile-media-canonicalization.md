@@ -1,10 +1,12 @@
 # 0015: Canonicalize hostile media in credential-free sandboxes
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-09-01
 - owner_role: media_worker_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner AFK marketplace implementation directive 2026-09-01
+- superseded_by: 0017
+- superseded_scope: 0017=marketplace_canonical_codec
 
 ## Context
 
@@ -46,8 +48,9 @@ No process with Full Disk Access parses those bytes.
   host path.
 - One attempt receives fresh process/container state and an opaque directory;
   time, CPU, memory, process, output, and disk limits are mandatory.
-- Canonical playback output is H.264 MP4 with exactly one video track and no
-  audio; posters and thumbnails are bounded raster JPEG/PNG only.
+- Canonical playback output is a single silent video track in a bounded MP4
+  plus raster JPEG/PNG posters and thumbnails. Marketplace codec, bit depth,
+  and long-edge policy are defined by ADR 0017.
 - SVG, PDF, animated images, archives, playlists, scripts, shaders, fonts,
   plug-ins, encrypted tracks, and dynamic/external references are rejected.
 - Worker and model images, FFmpeg build/flags, arguments policy, model weights,
@@ -56,6 +59,12 @@ No process with Full Disk Access parses those bytes.
   moderation, immutable storage, and signing are still required.
 - Failure or timeout preserves creator source until retention policy applies and
   emits only a stable safe error code.
+
+## Partially superseded clauses
+
+ADR 0017 replaces the H.264 MP4 codec clause for marketplace sandbox output.
+Hostile decode/re-encode, independent verification, audio stripping, and
+sandbox isolation remain in force.
 
 ## Alternatives considered
 

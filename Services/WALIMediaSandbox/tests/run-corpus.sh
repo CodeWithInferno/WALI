@@ -86,6 +86,7 @@ run_runtime_corpus() {
 }
 
 run_static_checks
+bash "$ROOT/../../Tests/Worker/process-media-encode-contract-tests.sh"
 if [[ "${1:-}" == "--runtime" ]]; then
   run_runtime_corpus
 else

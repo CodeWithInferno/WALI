@@ -87,6 +87,61 @@ final class CatalogMapperTests: XCTestCase {
         ))
     }
 
+    func testMapperAcceptsCanonicalPlaybackArtifactOnDetail() throws {
+        let policy = try CatalogRemoteURLPolicy(
+            supabaseURL: XCTUnwrap(URL(string: "https://project.supabase.co")),
+            approvedCDNHosts: ["cdn.wali.example"]
+        )
+        let mapper = CatalogMapper(remoteURLPolicy: policy)
+        let summary = wallpaperSummary(mediaHost: "cdn.wali.example")
+        let videoDefault = ArtifactSummaryDTO(
+            role: "video_default",
+            url: URL(string: "https://cdn.wali.example/video-default.mp4")!,
+            sha256: String(repeating: "c", count: 64),
+            byteCount: 100,
+            mediaType: "video/mp4",
+            width: 3840,
+            height: 2160,
+            durationMilliseconds: 24_200
+        )
+        let dto = WallpaperDetailDTO(
+            wallpaper: summary,
+            description: "A test wallpaper.",
+            edition: 1,
+            rightsHolder: "Artist",
+            attributionText: nil,
+            sourceURL: nil,
+            license: LicenseDTO(
+                code: "CC0-1.0",
+                name: "CC0 1.0",
+                termsURL: URL(string: "https://creativecommons.org/publicdomain/zero/1.0/")!,
+                attributionRequired: false,
+                commercialUseAllowed: true,
+                derivativesAllowed: true,
+                redistributionAllowed: true,
+                termsRevision: 1
+            ),
+            durationMilliseconds: 24_200,
+            width: 3840,
+            height: 2160,
+            frameRateNumerator: 60,
+            frameRateDenominator: 1,
+            videoDefault: videoDefault,
+            related: [],
+            isFavorite: false,
+            favoriteRevision: 0,
+            isSaved: false,
+            savedRevision: 0
+        )
+
+        let detail = try mapper.detail(dto)
+
+        XCTAssertEqual(detail.videoDefault.role, .videoDefault)
+        XCTAssertEqual(detail.width, 3840)
+        XCTAssertEqual(detail.height, 2160)
+        XCTAssertEqual(detail.framesPerSecond, 60)
+    }
+
     func testMapperAcceptsSupabasePostgresTimestamp() throws {
         let policy = try CatalogRemoteURLPolicy(
             supabaseURL: XCTUnwrap(URL(string: "https://project.supabase.co")),

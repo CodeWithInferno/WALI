@@ -1,0 +1,13 @@
+---
+description: When the user gives an example, inspect that artifact and research the whole class, not only the named names.
+alwaysApply: true
+---
+
+# Example-driven research
+
+If the user names Netflix, a file path, a screenshot, or any example, that is a *class*, not a ceiling.
+
+- Inspect the given artifact first (ffprobe, frames, bytes). Do not argue from display size.
+- Research the whole neighborhood: Prime Video, Disney+, Apple TV+, Hulu, Max, YouTube, Apple Aerials, wallpaper engines, encoder docs — then follow every new lead (bit depth, grain, fps, encoder profile).
+- Do not skip a sibling because it was not named. "Netflix and YouTube" means streaming encode practice, not those two brands only.
+- Prefer measurements of the user's file over generic blog numbers.

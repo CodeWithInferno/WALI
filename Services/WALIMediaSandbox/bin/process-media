@@ -89,23 +89,33 @@ readonly INPUT_CODEC="$(jq -r '[.streams[] | select(.codec_type == "video")][0].
 [[ "$INPUT_CODEC" == h264 || "$INPUT_CODEC" == hevc ]] || emit_failure unsupported_codec
 readonly DURATION_MS="$(jq -r '((.format.duration | tonumber) * 1000 | floor)' /tmp/input-probe.json)"
 [[ "$DURATION_MS" =~ ^[1-9][0-9]*$ ]] || emit_failure media_limits_exceeded
+readonly SOURCE_FPS="$(jq -er '
+  [.streams[] | select(.codec_type == "video")][0].avg_frame_rate as $rate
+  | ($rate | split("/")) as $parts
+  | if (($parts[1] | tonumber) == 0) then error("invalid frame rate")
+    else ($parts[0] | tonumber) / ($parts[1] | tonumber) end
+' /tmp/input-probe.json)"
+readonly DEFAULT_FPS_FILTER="$(awk -v fps="$SOURCE_FPS" 'BEGIN { if (fps > 60.0001) print "fps=60,"; else print "" }')"
+readonly PREVIEW_FPS_FILTER="$(awk -v fps="$SOURCE_FPS" 'BEGIN { if (fps > 30.0001) print "fps=30,"; else print "" }')"
 
 mkdir -p -- "$OUTPUT/artifacts" "$OUTPUT/frames"
 
-readonly VIDEO_FILTER="scale=min(1920\\,iw):-2:force_original_aspect_ratio=decrease,format=yuv420p"
-readonly PREVIEW_FILTER="scale=min(1280\\,iw):-2:force_original_aspect_ratio=decrease,format=yuv420p"
+readonly VIDEO_FILTER="${DEFAULT_FPS_FILTER}scale=min(7680\\,iw):-8:force_original_aspect_ratio=decrease,format=yuv420p10le"
+readonly PREVIEW_FILTER="${PREVIEW_FPS_FILTER}scale=min(1920\\,iw):-8:force_original_aspect_ratio=decrease,format=yuv420p10le"
 readonly POSTER_FILTER="thumbnail=100,scale=min(1920\\,iw):-2:force_original_aspect_ratio=decrease"
 readonly THUMBNAIL_FILTER="thumbnail=100,scale=512:512:force_original_aspect_ratio=increase,crop=512:512"
 readonly FRAME_FILTER="fps=7000/${DURATION_MS},scale=384:224:force_original_aspect_ratio=decrease,pad=384:224:(ow-iw)/2:(oh-ih)/2"
 
 if ! ffmpeg -nostdin -hide_banner -loglevel error -i "$INPUT" -map 0:v:0 -an -sn -dn \
-  -map_metadata -1 -map_chapters -1 -vf "$VIDEO_FILTER" -c:v libopenh264 -b:v 8000k \
+  -map_metadata -1 -map_chapters -1 -vf "$VIDEO_FILTER" -pix_fmt yuv420p10le \
+  -c:v libkvazaar -kvazaar-params preset=medium,qp=20 -tag:v hvc1 \
   -colorspace bt709 -color_primaries bt709 -color_trc bt709 \
   -movflags +faststart -y "$OUTPUT/artifacts/video-default.mp4"; then
   emit_failure canonicalization_failed
 fi
 if ! ffmpeg -nostdin -hide_banner -loglevel error -i "$INPUT" -map 0:v:0 -an -sn -dn \
-  -map_metadata -1 -map_chapters -1 -t 30 -vf "$PREVIEW_FILTER" -c:v libopenh264 -b:v 2500k \
+  -map_metadata -1 -map_chapters -1 -t 30 -vf "$PREVIEW_FILTER" -pix_fmt yuv420p10le \
+  -c:v libkvazaar -kvazaar-params preset=fast,qp=26 -tag:v hvc1 \
   -colorspace bt709 -color_primaries bt709 -color_trc bt709 \
   -movflags +faststart -y "$OUTPUT/artifacts/preview.mp4"; then
   emit_failure canonicalization_failed
@@ -186,7 +196,7 @@ jq -n --argjson schema_version 1 --arg kind media --arg attempt_id "$WALI_ATTEMP
   --arg submission_id "$WALI_SUBMISSION_ID" --argjson generation "$WALI_GENERATION" \
   --arg policy_digest "$WALI_POLICY_DIGEST" --arg input_digest "$WALI_INPUT_DIGEST" \
   --slurpfile artifacts /tmp/artifacts.json --slurpfile sample_frames /tmp/frames.json \
-  --arg encoder_build "ffmpeg-7.1.2-openh264-2.6.0" --arg safe_code ok \
+  --arg encoder_build "ffmpeg-7.1.2-kvazaar-2.3.1" --arg safe_code ok \
   '{schema_version:$schema_version,kind:$kind,attempt_id:$attempt_id,submission_id:$submission_id,generation:$generation,policy_digest:$policy_digest,input_digest:$input_digest,artifacts:$artifacts[0],sample_frames:$sample_frames[0],encoder_build:$encoder_build,safe_code:$safe_code}' \
   >"$OUTPUT/.media-claim.json.tmp"
 mv -- "$OUTPUT/.media-claim.json.tmp" "$CLAIM"

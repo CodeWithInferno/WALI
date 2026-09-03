@@ -166,6 +166,7 @@ final class CatalogInstallFlowTests: XCTestCase {
             height: 1,
             frameRateNumerator: 30,
             frameRateDenominator: 1,
+            videoDefault: preview,
             related: [],
             isFavorite: false,
             favoriteRevision: 0,
