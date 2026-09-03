@@ -45,7 +45,7 @@ insert into wali.runtime_configuration (
   singleton, environment, catalog_public_base_url, creator_terms_version, media_policy_digest
 ) values (
   true, 'local', 'https://example.invalid/storage/v1/object/public/catalog-public', '2026-09-01',
-  'eecd4f6911a2392b5286cd0c9ef09e78e5cc5c756ad39bca042832d70f48598e'
+  '9710d4e665b29989a0c6109c1f807ae5fb52ef009536194663b365ae06e28875'
 ) on conflict (singleton) do update set
   environment = excluded.environment,
   catalog_public_base_url = excluded.catalog_public_base_url,

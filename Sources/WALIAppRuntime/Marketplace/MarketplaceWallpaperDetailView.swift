@@ -5,8 +5,8 @@ import WALIUI
 
 struct MarketplaceWallpaperDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
+    @Environment(\.waliOverlayLeadingBleed) private var overlayLeadingBleed
 
     @Bindable var marketplace: WALIMarketplaceModel
     let wallpaperID: String
@@ -27,12 +27,6 @@ struct MarketplaceWallpaperDetailView: View {
                 loadingContent
             }
         }
-        .navigationBarBackButtonHidden(true)
-        .overlay(alignment: .topLeading) {
-            backButton
-                .padding(.leading, 228)
-                .padding(.top, 14)
-        }
         .overlay(alignment: .bottom) {
             actionNotice
                 .padding(18)
@@ -52,21 +46,47 @@ struct MarketplaceWallpaperDetailView: View {
     @ViewBuilder
     private func detailContent(_ detail: WALICatalogDetailPresentation) -> some View {
         GeometryReader { geometry in
+            let leadingBleed = WALIMarketplaceDetailLayout.leadingBleed(
+                reportedSafeArea: geometry.safeAreaInsets.leading,
+                overlayFallback: overlayLeadingBleed
+            )
+            let fullWidth = geometry.size.width
+            let heroHeight = WALIMarketplaceDetailLayout.heroHeight(
+                viewportHeight: geometry.size.height,
+                topSafeArea: geometry.safeAreaInsets.top
+            )
             ScrollView {
                 VStack(spacing: 0) {
-                    hero(detail, height: max(560, geometry.size.height * 0.82))
-                    metadata(detail)
+                    hero(detail, height: heroHeight, leadingBleed: leadingBleed)
+                    metadata(detail, leadingBleed: leadingBleed)
                     if !detail.related.isEmpty {
-                        related(detail.related)
+                        related(detail.related, leadingBleed: leadingBleed)
                     }
                 }
+                .frame(width: fullWidth, alignment: .leading)
+                .padding(
+                    .top,
+                    WALIMarketplaceDetailLayout.extendsHeroUnderChrome
+                        ? -geometry.safeAreaInsets.top
+                        : 0
+                )
             }
+            .scrollContentBackground(.hidden)
+            .contentMargins(.all, 0, for: .scrollContent)
+            .scrollClipDisabled(WALIMarketplaceDetailLayout.extendsHeroUnderChrome)
+            .waliHiddenTopScrollEdge(WALIMarketplaceDetailLayout.hidesTopScrollEdgeEffect)
             .background(Color.black)
+            .ignoresSafeArea()
         }
-        .ignoresSafeArea(edges: .top)
+        .ignoresSafeArea()
+        .waliHiddenWindowToolbarBackground(WALIMarketplaceDetailLayout.hidesWindowToolbarBackground)
     }
 
-    private func hero(_ detail: WALICatalogDetailPresentation, height: CGFloat) -> some View {
+    private func hero(
+        _ detail: WALICatalogDetailPresentation,
+        height: CGFloat,
+        leadingBleed: CGFloat
+    ) -> some View {
         ZStack(alignment: .bottom) {
             Group {
                 if reduceMotion, let posterURL = detail.posterURL {
@@ -95,8 +115,8 @@ struct MarketplaceWallpaperDetailView: View {
             .clipped()
 
             LinearGradient(
-                colors: [.clear, .black.opacity(0.18), .black.opacity(0.9)],
-                startPoint: .center,
+                colors: [.clear, .black.opacity(0.55)],
+                startPoint: UnitPoint(x: 0.5, y: 0.52),
                 endPoint: .bottom
             )
             .allowsHitTesting(false)
@@ -106,42 +126,28 @@ struct MarketplaceWallpaperDetailView: View {
                     Text(detail.title)
                         .font(.largeTitle.weight(.bold))
                         .lineLimit(2)
-                    Text("By \(detail.creator)  ·  \(detail.category)")
-                        .font(.title3.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.82))
-                    Label(
-                        "\(detail.verifiedInstallCount.formatted(.number.notation(.compactName))) verified installs",
-                        systemImage: "checkmark.seal.fill"
-                    )
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.78))
+                    if !detail.description.isEmpty {
+                        Text(detail.description)
+                            .font(.title3.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.88))
+                            .lineLimit(WALIMarketplaceDetailLayout.descriptionLineLimit)
+                    }
+                    Text("\(detail.dimensions)  ·  \(detail.duration)  ·  by \(detail.creator)")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 heroActions(detail)
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 34)
-            .padding(.bottom, 30)
+            .padding(.leading, WALIMarketplaceDetailLayout.chromeLeadingInset(leadingBleed: leadingBleed))
+            .padding(.trailing, WALIMarketplaceDetailLayout.chromeInset)
+            .padding(.bottom, WALIMarketplaceDetailLayout.chromeBottomInset)
         }
         .frame(height: height)
         .accessibilityElement(children: .contain)
-    }
-
-    @ViewBuilder
-    private var backButton: some View {
-        if #available(macOS 26.0, *) {
-            Button("Back", systemImage: "chevron.left") { dismiss() }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.glass)
-                .controlSize(.large)
-        } else {
-            Button("Back", systemImage: "chevron.left") { dismiss() }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .clipShape(Circle())
-        }
     }
 
     @ViewBuilder
@@ -180,7 +186,7 @@ struct MarketplaceWallpaperDetailView: View {
         .disabled(marketplace.actionState == .working)
     }
 
-    private func metadata(_ detail: WALICatalogDetailPresentation) -> some View {
+    private func metadata(_ detail: WALICatalogDetailPresentation, leadingBleed: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 42) {
             VStack(alignment: .leading, spacing: 18) {
                 Text("About this wallpaper")
@@ -189,6 +195,11 @@ struct MarketplaceWallpaperDetailView: View {
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .lineSpacing(3)
+
+                LabeledContent(
+                    "Verified installs",
+                    value: detail.verifiedInstallCount.formatted(.number.notation(.compactName))
+                )
 
                 LabeledContent("Rights Holder", value: detail.rightsHolder)
 
@@ -227,12 +238,14 @@ struct MarketplaceWallpaperDetailView: View {
             }
             .frame(width: 330, alignment: .leading)
         }
-        .padding(34)
+        .padding(.leading, WALIMarketplaceDetailLayout.chromeLeadingInset(leadingBleed: leadingBleed))
+        .padding(.trailing, WALIMarketplaceDetailLayout.chromeInset)
+        .padding(.vertical, WALIMarketplaceDetailLayout.chromeInset)
         .foregroundStyle(.white)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
     }
 
-    private func related(_ cards: [WALICatalogCardPresentation]) -> some View {
+    private func related(_ cards: [WALICatalogCardPresentation], leadingBleed: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Related Wallpapers")
                 .font(.title2.weight(.semibold))
@@ -247,7 +260,9 @@ struct MarketplaceWallpaperDetailView: View {
                 }
             }
         }
-        .padding(34)
+        .padding(.leading, WALIMarketplaceDetailLayout.chromeLeadingInset(leadingBleed: leadingBleed))
+        .padding(.trailing, WALIMarketplaceDetailLayout.chromeInset)
+        .padding(.vertical, WALIMarketplaceDetailLayout.chromeInset)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
     }
 

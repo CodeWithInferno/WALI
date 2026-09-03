@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Shared renderer controls used by both the main toolbar and menu-bar extra.
+/// Shared renderer controls used by the menu-bar extra.
 public struct StatusPanel: View {
     private let status: WALIRendererPresentation
     private let actions: any WALIUIActionHandling

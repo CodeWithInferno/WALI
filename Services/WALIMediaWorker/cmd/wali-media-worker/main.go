@@ -23,7 +23,7 @@ import (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := run(logger); err != nil && !errors.Is(err, context.Canceled) {
-		logger.Error("worker stopped", "safe_code", "worker_stopped")
+		logger.Error("worker stopped", "safe_code", "worker_stopped", "error", err.Error())
 		os.Exit(1)
 	}
 }

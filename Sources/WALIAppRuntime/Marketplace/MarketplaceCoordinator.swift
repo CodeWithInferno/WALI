@@ -79,6 +79,7 @@ public enum MarketplaceCreatorAccessState: Sendable, Equatable {
 @Observable
 public final class MarketplaceCreatorContext {
     public private(set) var state: MarketplaceCreatorAccessState = .idle
+    public private(set) var lastFailureCode: String?
     public private(set) var metadata: CreatorMetadata?
     public private(set) var moderationMetadata: ModerationMetadata?
     public let studioModel: CreatorStudioModel?
@@ -131,6 +132,7 @@ public final class MarketplaceCreatorContext {
     }
 
     func beginAcceptingTerms() {
+        lastFailureCode = nil
         state = .acceptingTerms
     }
 
@@ -150,7 +152,8 @@ public final class MarketplaceCreatorContext {
         state = .ready
     }
 
-    func fail() {
+    func fail(code: String = "temporarily_unavailable") {
+        lastFailureCode = code
         state = .failed
     }
 
@@ -605,51 +608,51 @@ public final class MarketplaceCoordinator {
 
     public func acceptCreatorTerms() {
         guard case let .signedIn(userID) = model.accountState,
-              let creatorAuthorizationGateway,
-              let version = creatorContext.metadata?.currentCreatorTermsVersion,
-              CreatorTermsDocument.supported(version: version) != nil
+              let creatorAuthorizationGateway
         else { return }
+        let version = creatorContext.studioModel?.authorization.currentCreatorTermsVersion
+            ?? creatorContext.metadata?.currentCreatorTermsVersion
+        guard let version, CreatorTermsDocument.supported(version: version) != nil else { return }
         creatorTask?.cancel()
         creatorContext.beginAcceptingTerms()
         let moderationGateway = self.moderationGateway
+        let existingMetadata = creatorContext.metadata
         creatorTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let result = try await Self.withTimeout(creatorRequestTimeout) {
-                    let authorization = try await creatorAuthorizationGateway.acceptCreatorTerms(
+                let authorization = try await Self.withTimeout(creatorRequestTimeout) {
+                    try await creatorAuthorizationGateway.acceptCreatorTerms(
                         expectedSubjectID: userID,
                         version: version,
                         idempotencyKey: UUID().uuidString.lowercased()
-                    )
-                    let metadata = try await creatorAuthorizationGateway.creatorMetadata()
-                    let moderationMetadata: ModerationMetadata?
-                    if authorization.canAccessModeration(), let moderationGateway {
-                        moderationMetadata = try await moderationGateway.moderationMetadata()
-                    } else {
-                        moderationMetadata = nil
-                    }
-                    return CreatorAcceptanceResult(
-                        authorization: authorization,
-                        metadata: metadata,
-                        moderationMetadata: moderationMetadata
                     )
                 }
                 try Task.checkCancellation()
                 guard case let .signedIn(currentUserID) = model.accountState,
                       currentUserID == userID
                 else { return }
-                guard result.authorization.subjectID == userID,
-                      result.authorization.currentCreatorTermsVersion == version,
-                      result.authorization.currentCreatorTermsVersion == result.metadata.currentCreatorTermsVersion,
-                      result.authorization.acceptedCreatorTermsVersion == version
-                else {
-                    creatorContext.fail()
+                guard resultAuthorization(authorization, matches: userID, version: version) else {
+                    creatorContext.fail(code: "invalid_response")
                     return
                 }
+                let metadata = (try? await creatorAuthorizationGateway.creatorMetadata())
+                    ?? existingMetadata
+                guard let metadata,
+                      metadata.currentCreatorTermsVersion == version
+                else {
+                    creatorContext.fail(code: "temporarily_unavailable")
+                    return
+                }
+                let moderationMetadata: ModerationMetadata?
+                if authorization.canAccessModeration(), let moderationGateway {
+                    moderationMetadata = try? await moderationGateway.moderationMetadata()
+                } else {
+                    moderationMetadata = nil
+                }
                 creatorContext.apply(
-                    authorization: result.authorization,
-                    metadata: result.metadata,
-                    moderationMetadata: result.moderationMetadata
+                    authorization: authorization,
+                    metadata: metadata,
+                    moderationMetadata: moderationMetadata
                 )
             } catch is CancellationError {
                 return
@@ -657,9 +660,19 @@ public final class MarketplaceCoordinator {
                 guard case let .signedIn(currentUserID) = model.accountState,
                       currentUserID == userID
                 else { return }
-                creatorContext.fail()
+                creatorContext.fail(code: Self.diagnosticCode(for: error))
             }
         }
+    }
+
+    private func resultAuthorization(
+        _ authorization: CreatorAuthorizationSnapshot,
+        matches userID: String,
+        version: String
+    ) -> Bool {
+        authorization.subjectID == userID
+            && authorization.currentCreatorTermsVersion == version
+            && authorization.acceptedCreatorTermsVersion == version
     }
 
     public func requestAccountExport() {
@@ -1548,12 +1561,15 @@ public final class MarketplaceCoordinator {
             previewURL: previewURL,
             verifiedInstallCount: item.verifiedInstallCount,
             favoriteCount: item.favoriteCount,
-            saveCount: item.saveCount
+            saveCount: item.saveCount,
+            pixelWidth: item.poster.width,
+            pixelHeight: item.poster.height
         )
     }
 
     private func presentationCards(
-        _ items: [CatalogWallpaperSummary]
+        _ items: [CatalogWallpaperSummary],
+        includePreview: Bool = false
     ) async -> [WALICatalogCardPresentation] {
         guard let presentationMediaCache else {
             return items.map { Self.card($0) }
@@ -1562,7 +1578,10 @@ public final class MarketplaceCoordinator {
             for (index, item) in items.enumerated() {
                 group.addTask {
                     let posterURL = try? await presentationMediaCache.localURL(for: item.poster)
-                    return (index, Self.card(item, posterURL: posterURL))
+                    let previewURL = includePreview
+                        ? try? await presentationMediaCache.localURL(for: item.preview)
+                        : nil
+                    return (index, Self.card(item, posterURL: posterURL, previewURL: previewURL))
                 }
             }
             var values: [(Int, WALICatalogCardPresentation)] = []
@@ -1574,11 +1593,21 @@ public final class MarketplaceCoordinator {
     private func presentationSections(
         _ sections: [CatalogHomeSection]
     ) async -> [WALICatalogSectionPresentation] {
+        let heroSummaries = WALIDiscoverLayout.carouselItems(from: sections.map(\.items))
         var result: [WALICatalogSectionPresentation] = []
+        if !heroSummaries.isEmpty {
+            result.append(WALICatalogSectionPresentation(
+                id: WALIDiscoverLayout.heroSectionID,
+                title: WALIDiscoverLayout.heroSectionTitle,
+                layout: WALIDiscoverLayout.heroSectionLayout,
+                cards: await presentationCards(heroSummaries, includePreview: true)
+            ))
+        }
         for section in sections {
             result.append(WALICatalogSectionPresentation(
                 id: section.id,
                 title: section.title,
+                layout: WALIDiscoverLayout.catalogSectionLayout,
                 cards: await presentationCards(section.items)
             ))
         }
@@ -1589,7 +1618,13 @@ public final class MarketplaceCoordinator {
         _ value: CatalogWallpaperDetail
     ) async -> WALICatalogDetailPresentation {
         let posterURL = try? await presentationMediaCache?.localURL(for: value.summary.poster)
-        let previewURL = try? await presentationMediaCache?.localURL(for: value.summary.preview)
+        let playbackURL = try? await presentationMediaCache?.localURL(for: value.videoDefault)
+        let previewURL: URL?
+        if let playbackURL {
+            previewURL = playbackURL
+        } else {
+            previewURL = try? await presentationMediaCache?.localURL(for: value.summary.preview)
+        }
         let related = await presentationCards(value.related)
         let totalSeconds = value.durationMilliseconds / 1_000
         let duration = String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)

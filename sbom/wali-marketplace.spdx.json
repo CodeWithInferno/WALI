@@ -14,7 +14,7 @@
   "documentDescribes": [
     "SPDXRef-Package-generic-ffmpeg-7.1.2",
     "SPDXRef-Package-generic-google-siglip-base-patch16-224-7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed",
-    "SPDXRef-Package-generic-openh264-2.6.0",
+    "SPDXRef-Package-generic-kvazaar-2.3.1",
     "SPDXRef-Package-golang-github.com-jackc-pgpassfile-v1.0.0",
     "SPDXRef-Package-golang-github.com-jackc-pgservicefile-v0.0.0-20240606120523-5a60cdf6a761",
     "SPDXRef-Package-golang-github.com-jackc-puddle-v2-v2.2.2",
@@ -113,26 +113,26 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-generic-openh264-2.6.0",
-      "name": "openh264",
-      "versionInfo": "2.6.0",
+      "SPDXID": "SPDXRef-Package-generic-kvazaar-2.3.1",
+      "name": "kvazaar",
+      "versionInfo": "2.3.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
-      "licenseConcluded": "BSD-2-Clause",
-      "licenseDeclared": "BSD-2-Clause",
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
       "supplier": "NOASSERTION",
       "primaryPackagePurpose": "LIBRARY",
       "externalRefs": [
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:generic/openh264@2.6.0"
+          "referenceLocator": "pkg:generic/kvazaar@2.3.1"
         }
       ],
       "checksums": [
         {
           "algorithm": "SHA256",
-          "checksumValue": "558544ad358283a7ab2930d69a9ceddf913f4a51ee9bf1bfb9e377322af81a69"
+          "checksumValue": "ca30575026d2f1a1201af4b94697bb0fcd05913388008631dc3332bae94122bd"
         }
       ]
     },

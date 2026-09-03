@@ -178,7 +178,7 @@ public struct MediaTranscoder: Sendable {
         }
         let naturalSize = try await sourceTrack.load(.naturalSize)
         let sourceTransform = try await sourceTrack.load(.preferredTransform)
-        let frameRate = max(1, min(Double(try await sourceTrack.load(.nominalFrameRate)), 30))
+        let frameRate = max(1, min(Double(try await sourceTrack.load(.nominalFrameRate)), 60))
         let plan = conversionPlan(
             naturalSize: naturalSize,
             sourceTransform: sourceTransform,
@@ -249,7 +249,7 @@ public struct MediaTranscoder: Sendable {
     ) -> ConversionPlan {
         let sourceBounds = CGRect(origin: .zero, size: naturalSize).applying(sourceTransform)
         let orientedSize = CGSize(width: abs(sourceBounds.width), height: abs(sourceBounds.height))
-        let maximumEdge: CGFloat = preview ? 960 : 4_096
+        let maximumEdge: CGFloat = preview ? 960 : 8_192
         let scale = min(1, maximumEdge / max(orientedSize.width, orientedSize.height))
         let width = max(2, floor(orientedSize.width * scale / 2) * 2)
         let height = max(2, floor(orientedSize.height * scale / 2) * 2)
@@ -257,7 +257,7 @@ public struct MediaTranscoder: Sendable {
         let rawBitRate = Int(pixelsPerSecond * (preview ? 0.10 : 0.12))
         let bitRate = preview
             ? min(max(rawBitRate, 450_000), 3_000_000)
-            : min(max(rawBitRate, 2_000_000), 40_000_000)
+            : min(max(rawBitRate, 2_000_000), 120_000_000)
         return ConversionPlan(
             renderSize: CGSize(width: width, height: height),
             scale: scale,

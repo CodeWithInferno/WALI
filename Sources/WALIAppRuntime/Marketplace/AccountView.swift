@@ -26,23 +26,42 @@ struct AccountView: View {
 
     var body: some View {
         Form {
-                Section("Account") {
+                Section {
+                    HStack(spacing: 16) {
+                        WALIAccountAvatarView(displayName: profile?.displayName, size: 72)
+                        VStack(alignment: .leading, spacing: 4) {
+                            switch account {
+                            case .signedOut:
+                                Text("Apple Account")
+                                    .font(.title2.weight(.semibold))
+                                Text("Not signed in")
+                                    .foregroundStyle(.secondary)
+                            case .signedIn:
+                                Text(profile?.displayName ?? "Signed in")
+                                    .font(.title2.weight(.semibold))
+                                if let handle = profile?.handle {
+                                    Text("@\(handle)")
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text("This is your marketplace profile. Sign in with Apple only proves the account; it does not turn your email into this name or @handle.")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 4)
+                    .accessibilityElement(children: .combine)
+
                     switch account {
                     case .signedOut:
-                        LabeledContent("Status", value: "Not signed in")
                         signInButton
                     case let .signedIn(userID):
-                        if let profile {
-                            LabeledContent("Name", value: profile.displayName)
-                            LabeledContent("Handle", value: "@\(profile.handle)")
-                            LabeledContent("Status", value: profile.status.capitalized)
-                        } else if profileState == .loading {
+                        if profileState == .loading && profile == nil {
                             HStack(spacing: 8) {
                                 ProgressView().controlSize(.small)
                                 Text("Loading account…").foregroundStyle(.secondary)
                             }
-                        } else {
-                            LabeledContent("Status", value: "Signed in")
                         }
                         LabeledContent("Account ID", value: userID)
                             .textSelection(.enabled)
@@ -111,9 +130,7 @@ struct AccountView: View {
         }
         .formStyle(.grouped)
         .font(.body)
-        .frame(maxWidth: 760, maxHeight: .infinity)
-        .padding(.horizontal, 20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityIdentifier("WALI.Marketplace.Account")
         .sheet(isPresented: $showsDeletionConfirmation) {
             deletionConfirmationSheet
@@ -123,10 +140,10 @@ struct AccountView: View {
     @ViewBuilder
     private var signInButton: some View {
         if #available(macOS 26.0, *) {
-            Button("Sign in with Apple", action: onSignIn)
+            Button("Sign in with Apple", systemImage: "apple.logo", action: onSignIn)
                 .buttonStyle(.glassProminent)
         } else {
-            Button("Sign in with Apple", action: onSignIn)
+            Button("Sign in with Apple", systemImage: "apple.logo", action: onSignIn)
                 .buttonStyle(.borderedProminent)
         }
     }

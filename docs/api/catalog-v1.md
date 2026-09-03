@@ -1,6 +1,6 @@
 # Catalog API v1
 
-Status: accepted contract under ADRs 0011, 0012, 0014, and 0016. The transport
+Status: accepted contract under ADRs 0011, 0012, 0014, 0016, and 0017. The transport
 adapter may use Supabase PostgREST and Edge Functions, but this document—not a
 generated Supabase type—is the client compatibility boundary.
 
@@ -106,8 +106,10 @@ Shared `WallpaperSummaryV1` fields:
 `WallpaperDetailV1` wraps one `WallpaperSummaryV1` as `wallpaper`, then adds
 description (1...2,000), edition, rights holder, attribution text/source URL
 when required, a license object, duration, dimensions, rational frame rate,
-related wallpaper summaries (at most 24), and authenticated viewer flags
-`is_favorite`/`is_saved` plus `favorite_revision`/`saved_revision`. Each viewer
+related wallpaper summaries (at most 24), authenticated viewer flags
+`is_favorite`/`is_saved` plus `favorite_revision`/`saved_revision`, and
+`video_default` as a public `ArtifactSummaryV1` for hero/desktop playback.
+Each viewer
 revision is an integer in 0...9,007,199,254,740,991 and is `0` when no row
 has ever existed. A false tombstone retains its nonzero monotonic revision so
 an add/remove/add cycle cannot recreate revision `0`. It contains no raw
@@ -122,7 +124,8 @@ The stable JSON field order for `WallpaperSummaryV1` is `id`, `slug`, `title`,
 `wallpaper`, `description`, `edition`, `rights_holder`, `attribution_text`,
 `source_url`, `license`, `duration_ms`, `width`, `height`,
 `frame_rate_numerator`, `frame_rate_denominator`, `is_favorite`,
-`favorite_revision`, `is_saved`, `saved_revision`, and `related`. Nullable
+`favorite_revision`, `is_saved`, `saved_revision`, `related`, and
+`video_default`. Nullable
 fields are `attribution_text` and `source_url`; unauthenticated viewer flags are
 `false` and viewer revisions are `0`.
 

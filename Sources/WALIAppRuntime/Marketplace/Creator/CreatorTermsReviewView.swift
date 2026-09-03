@@ -3,6 +3,7 @@ import SwiftUI
 struct CreatorTermsReviewView: View {
     let document: CreatorTermsDocument
     let accessState: MarketplaceCreatorAccessState
+    var lastFailureCode: String? = nil
     let onAccept: () -> Void
     let onCancel: () -> Void
 
@@ -75,7 +76,9 @@ struct CreatorTermsReviewView: View {
 
             if accessState == .failed {
                 Label(
-                    "WALI couldn’t record your acceptance. Check your connection and try again.",
+                    lastFailureCode == "request_timed_out"
+                        ? "WALI couldn’t record your acceptance in time. Try again."
+                        : "WALI couldn’t record your acceptance. Check your connection and try again.",
                     systemImage: "exclamationmark.triangle"
                 )
                 .font(.callout)

@@ -9,6 +9,7 @@ public struct CreatorStudioView: View {
     private let tags: [CreatorTaxonomyOption]
     private let licenses: [CreatorLicenseOption]
     private let accessState: MarketplaceCreatorAccessState
+    private let lastFailureCode: String?
     private let onAcceptTerms: () -> Void
     private let editor: (CreatorSubmission) -> AnyView
 
@@ -22,6 +23,7 @@ public struct CreatorStudioView: View {
         tags: [CreatorTaxonomyOption],
         licenses: [CreatorLicenseOption],
         accessState: MarketplaceCreatorAccessState,
+        lastFailureCode: String? = nil,
         onAcceptTerms: @escaping () -> Void,
         @ViewBuilder editor: @escaping (CreatorSubmission) -> some View
     ) {
@@ -31,6 +33,7 @@ public struct CreatorStudioView: View {
         self.tags = tags
         self.licenses = licenses
         self.accessState = accessState
+        self.lastFailureCode = lastFailureCode
         self.onAcceptTerms = onAcceptTerms
         self.editor = { AnyView(editor($0)) }
     }
@@ -44,14 +47,6 @@ public struct CreatorStudioView: View {
             }
         }
         .navigationTitle("Creator Studio")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("Upload Wallpaper", systemImage: "square.and.arrow.up") {
-                    isImporting = true
-                }
-                .disabled(!model.canUseCreatorStudio)
-            }
-        }
         .fileImporter(
             isPresented: $isImporting,
             allowedContentTypes: [.mpeg4Movie, .quickTimeMovie],
@@ -65,6 +60,7 @@ public struct CreatorStudioView: View {
                 CreatorTermsReviewView(
                     document: document,
                     accessState: accessState,
+                    lastFailureCode: lastFailureCode,
                     onAccept: onAcceptTerms,
                     onCancel: { isReviewingTerms = false }
                 )
@@ -130,11 +126,14 @@ public struct CreatorStudioView: View {
                 ProgressView("Loading your submissions…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .empty, .idle:
-                ContentUnavailableView(
-                    "Upload your first wallpaper",
-                    systemImage: "sparkles.rectangle.stack",
-                    description: Text("WALI verifies media and creates canonical variants before review.")
-                )
+                ContentUnavailableView {
+                    Label("Upload your first wallpaper", systemImage: "sparkles.rectangle.stack")
+                } description: {
+                    Text("WALI verifies media and creates canonical variants before review.")
+                } actions: {
+                    uploadWallpaperButton
+                        .controlSize(.large)
+                }
             case .offline:
                 ContentUnavailableView(
                     "Creator Studio is offline",
@@ -189,6 +188,21 @@ public struct CreatorStudioView: View {
             }
         }
         .listStyle(.inset)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack {
+                uploadWallpaperButton
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+        }
+    }
+
+    private var uploadWallpaperButton: some View {
+        Button("Upload Wallpaper", systemImage: "square.and.arrow.up") {
+            isImporting = true
+        }
+        .disabled(!model.canUseCreatorStudio)
     }
 
     @ViewBuilder

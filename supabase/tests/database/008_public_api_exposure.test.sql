@@ -1,6 +1,6 @@
 begin;
 
-select plan(29);
+select plan(30);
 
 select has_view('public', 'catalog_home_v1', 'public home projection exists');
 select has_view('public', 'catalog_wallpapers_v1', 'public catalog view exists');
@@ -119,6 +119,12 @@ select is(
     -> 'wallpaper' ->> 'id',
   '30000000-0000-0000-0000-000000000001',
   'detail RPC returns the canonical nested wallpaper shape'
+);
+select is(
+  public.catalog_wallpaper_detail_v1('30000000-0000-0000-0000-000000000001')
+    -> 'video_default' ->> 'role',
+  'video_default',
+  'detail RPC exposes the canonical playback artifact'
 );
 select is(
   public.catalog_creator_v1('synthetic_studio', null, 24) -> 'creator' ->> 'handle',

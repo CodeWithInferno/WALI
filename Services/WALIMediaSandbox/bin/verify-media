@@ -99,7 +99,7 @@ verify_artifact() {
     fi
     [[ "$observed_numerator" == "$expected_numerator" ]] || emit_failure artifact_mismatch
     [[ "$observed_denominator" == "$expected_denominator" ]] || emit_failure artifact_mismatch
-    [[ "$expected_pixel" == yuv420p && "$expected_color" == bt709 ]] || emit_failure unsafe_track_layout
+    [[ "$expected_pixel" == yuv420p10le && "$expected_color" == bt709 ]] || emit_failure unsafe_track_layout
   else
     [[ "$expected_duration" == 0 && "$expected_numerator" == 0 && "$expected_denominator" == 1 ]] || emit_failure artifact_mismatch
   fi
@@ -107,8 +107,8 @@ verify_artifact() {
 
 verify_artifact thumbnail artifacts/thumbnail.jpg image/jpeg mjpeg
 verify_artifact poster artifacts/poster.jpg image/jpeg mjpeg
-verify_artifact preview artifacts/preview.mp4 video/mp4 h264
-verify_artifact video_default artifacts/video-default.mp4 video/mp4 h264
+verify_artifact preview artifacts/preview.mp4 video/mp4 hevc
+verify_artifact video_default artifacts/video-default.mp4 video/mp4 hevc
 
 for ordinal in 1 2 3 4 5 6 7; do
   frame="$(printf 'frame-%03d.jpg' "$ordinal")"

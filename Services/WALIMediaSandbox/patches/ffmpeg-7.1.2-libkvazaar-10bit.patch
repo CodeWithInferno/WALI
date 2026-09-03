@@ -1,0 +1,33 @@
+--- a/libavcodec/libkvazaar.c
++++ b/libavcodec/libkvazaar.c
+@@ -53,7 +53,7 @@
+ static av_cold int libkvazaar_init(AVCodecContext *avctx)
+ {
+     LibkvazaarContext *const ctx = avctx->priv_data;
+-    const kvz_api *const api = ctx->api = kvz_api_get(8);
++    const kvz_api *const api = ctx->api = kvz_api_get(10);
+     kvz_config *cfg = NULL;
+     kvz_encoder *enc = NULL;
+ 
+@@ -223,9 +223,9 @@
+                 NULL,
+             };
+             int dst_linesizes[4] = {
+-              frame->width,
+-              frame->width / 2,
+-              frame->width / 2,
++              frame->width * 2,
++              frame->width,
++              frame->width,
+               0
+             };
+             av_image_copy2(dst, dst_linesizes,
+@@ -302,7 +302,7 @@
+ }
+ 
+ static const enum AVPixelFormat pix_fmts[] = {
+-    AV_PIX_FMT_YUV420P,
++    AV_PIX_FMT_YUV420P10LE,
+     AV_PIX_FMT_NONE
+ };
+ 

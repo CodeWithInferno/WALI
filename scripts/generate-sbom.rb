@@ -29,7 +29,7 @@ LICENSES = {
   "github.com/jackc/pgservicefile" => "MIT", "github.com/jackc/puddle/v2" => "MIT",
   "golang.org/x/crypto" => "BSD-3-Clause", "golang.org/x/sync" => "BSD-3-Clause",
   "golang.org/x/text" => "BSD-3-Clause", "supabase-swift" => "Apache-2.0",
-  "ffmpeg" => "LGPL-2.1-or-later", "openh264" => "BSD-2-Clause",
+  "ffmpeg" => "LGPL-2.1-or-later", "kvazaar" => "BSD-3-Clause",
   "google/siglip-base-patch16-224" => "Apache-2.0",
   "docker.io/library/debian:bookworm-slim" => "LicenseRef-Debian-Image-Mixed"
 }.freeze
@@ -80,11 +80,11 @@ project.scan(/^\s{2}([^:]+):\n\s+url:\s+([^\s]+)\n\s+version:\s+([^\s]+)/).each 
 end
 
 sandbox = (ROOT / "Services/WALIMediaSandbox/Containerfile").read
-sandbox.scan(/^ARG (FFMPEG|OPENH264)_VERSION=([^\s]+)\nARG \1_SHA256=([a-f0-9]{64})/).each do |name, version, digest|
-  dependency = name == "FFMPEG" ? "ffmpeg" : "openh264"
+sandbox.scan(/^ARG (FFMPEG|KVAZAAR)_VERSION=([^\s]+)\nARG \1_SHA256=([a-f0-9]{64})/).each do |name, version, digest|
+  dependency = name == "FFMPEG" ? "ffmpeg" : "kvazaar"
   packages << package(name: dependency, version: version, ecosystem: "generic", checksum: digest)
 end
-sandbox.scan(/^FROM\s+([^@\s]+)@sha256:([a-f0-9]{64})/).uniq.each do |image, digest|
+sandbox.scan(/^FROM(?:\s+--platform=\S+)?\s+([^@\s]+)@sha256:([a-f0-9]{64})/).uniq.each do |image, digest|
   packages << package(name: image, version: "sha256:#{digest}", ecosystem: "oci", checksum: digest)
 end
 

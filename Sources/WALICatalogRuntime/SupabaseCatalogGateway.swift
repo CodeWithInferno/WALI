@@ -368,7 +368,7 @@ public actor SupabaseCatalogGateway:
             guard let assurance = CreatorAssuranceLevel(rawValue: dto.assuranceLevel),
                   let sessionExpiresAt = try? exactTimestamp(dto.sessionExpiresAt),
                   sessionExpiresAt > .now,
-                  abs(sessionExpiresAt.timeIntervalSince1970 - session.expiresAt) < 2,
+                  abs(sessionExpiresAt.timeIntervalSince1970 - session.expiresAt) < 60,
                   dto.creatorGrantRevision.map(isSafeRevision) ?? true,
                   dto.moderatorGrantRevision.map(isSafeRevision) ?? true,
                   isBoundedCreatorToken(dto.currentCreatorTermsVersion, maximum: 64),

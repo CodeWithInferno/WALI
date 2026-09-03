@@ -24,7 +24,11 @@ Native application behavior follows Apple's macOS Human Interface Guidelines and
 
 ## Signature element — Ambient Edge
 
-The selected wallpaper may extend beneath the sidebar and toolbar so the system material picks up a faint amount of its color. On macOS 26+, native Liquid Glass and background-extension APIs create this response. Earlier systems use system vibrancy/materials.
+The selected wallpaper may extend beneath the sidebar and toolbar so the system material picks up its color. On macOS 26+, the sidebar overlays the detail column (`automaticallyAdjustsSafeAreaInsets`) and the Discover hero **draws the actual artwork under that glass**. Do not use `backgroundExtensionEffect()` for Discover: it mirrors and blurs a copy, which reads as a reflection instead of Liquid Glass. Empty states, Browse/Library grids, settings, and poster tiles stay on the semantic surface.
+
+The Discover hero is a paging carousel. As the featured wallpaper changes, the rest of Discover follows it: a darkened, blurred poster wash behind the collection rows, and the same slide continuing under the sidebar. Wrapping from the last featured wallpaper continues forward instead of rewinding through the strip. The hero dissolve is a dark media scrim that reveals that wash instead of a flat window fill. Reduce Motion keeps paging manual. Reduce Transparency and Increase Contrast keep the page on the semantic window surface.
+
+Earlier systems use system vibrancy/materials.
 
 Ambient Edge is the one expressive visual device. It must never reduce text contrast, stack glass on glass, or become a synthetic gradient. When Reduce Transparency or Increase Contrast is enabled, it becomes an opaque semantic system surface.
 
@@ -108,42 +112,56 @@ Sections:
 6. Downloads
 7. Account
 
-Local importing is available only from Library/Downloads, their empty states,
-and drag and drop. Creator Studio is a distinct marketplace submission flow:
-rights declaration, resumable upload, server processing, and review. It never
-duplicates local import.
+Local importing is available from the sidebar plus control, Library/Downloads
+empty states, drag and drop, and `⌘O`. Creator Studio is a distinct marketplace
+submission flow: rights declaration, resumable upload, server processing, and
+review. It never duplicates local import.
 
 Settings stays in the standard application menu and `⌘,`; it is not a fake sidebar page. Sidebar icon color follows the system accent. Selection, row height, disclosure, and hide/show behavior remain native.
 
 ### Toolbar
 
-- Leading: native sidebar toggle and navigation history when applicable.
-- Center/primary area: search scoped to the current library surface.
-- Trailing: display assignment, active-wallpaper state, and a WALI status button.
-- Display assignment opens a popover that mirrors the connected display geometry
-  reported by macOS. Its centered, proportional monitor tiles are selection
-  controls, not draggable arrangement controls. Tiles show the current wallpaper,
-  display role, and scaling mode; the detail surface's Apply button remains the
-  only commit point for wallpaper changes.
-- The WALI status button opens the same compact status content used by the menu-bar extra: renderer CPU, memory, playback state, and quick controls.
+The shared content header stays empty as the selected sidebar page changes. Search and import live in the sidebar; they are not window-toolbar items. App Store–style chrome keeps that common strip still so nothing jumps when the page changes.
 
-Toolbar items use native grouping. No custom toolbar background is drawn.
+- Leading: native sidebar toggle, owned by the sidebar column, sitting in the same strip as the traffic lights. The sidebar material runs to the top of the window. Do not hide the window toolbar: that splits the lights into a disconnected titlebar. On macOS 26+ WALI pins the system `DefaultToolbarItem(kind: .sidebarToggle)` there and removes the wandering split-view copy. On a marketplace wallpaper page, Back is an extra titlebar control placed immediately after that toggle. It is not a SwiftUI `.navigation` toolbar item (that lands in the detail column) and it must not create a second header.
+- Search is the system `.searchable` field with sidebar placement, always present, with a stable “Search” prompt.
+- Import is a plus control in the sidebar, plus Library/Downloads empty states, drag and drop, and `⌘O`. It is not a window-toolbar button.
+- Display assignment belongs to Apply: the Library inspector already lists displays. There is no display button in the header.
+- Playback and renderer status live in the menu-bar extra, not the window toolbar.
+- Browse sort lives on the Browse page, not the window toolbar.
+- Creator Studio upload lives on that page, not the window toolbar.
+- The split-view tracking separator is hidden with AppKit’s `sidebarTrackingSeparator` / `isHidden` APIs. Liquid Glass grouping on the sidebar toggle uses `sharedBackgroundVisibility(.hidden)` (WWDC 25). Collapse still uses the sidebar toggle.
+- Wallpaper details open in a trailing inspector after selection on Library only. Discover, Browse, Account, and Creator Studio must not show an inspector chevron.
+- Display assignment opens from the inspector when applying a wallpaper. Its centered, proportional monitor tiles are selection
+  controls, not draggable arrangement controls. Tiles show the current wallpaper,
+  display role, and scaling mode; the detail inspector's Apply button remains the
+  only commit point for wallpaper changes.
+
+Toolbar items use native grouping. Do not hide the toolbar background; Liquid Glass and the scroll edge effect own that surface.
 
 ### Wallpaper surfaces
 
-- Artwork dominates each tile; labels and metadata sit below or in a legible system material only when necessary.
-- Default thumbnails use a 16:10 crop because they represent Mac displays.
+- Artwork dominates each tile. Library and Discover lockups keep labels below; Browse masonry tiles are image-only until hover.
+- **Discover** is editorial: a composed **Featured** carousel sits above the collection rows. It gathers unique published wallpapers from Discover home (not a single collection’s first item), **continues under the floating sidebar** as the real artwork (not a mirrored copy), and **dissolves through a dark media scrim into a wash of the current featured wallpaper**. Collection name, wallpaper title, and a View action sit on that scrim, inset from the sidebar. Featured wallpapers page horizontally with a native indicator and auto-advance unless Reduce Motion is on; wrapping from the last slide continues forward instead of rewinding, and the next card does not peek as a rounded tile. Collection rows rest **after the overlay sidebar** (title and first lockup), then continue **under that glass** when scrolled. Those lockups are landscape **16:10** shelves — three across the visible column with 40 pt gutters, matching Apple’s media-catalog rows — not a 2:3 movie-poster crop of a Mac wallpaper. Featured banner paging and the ambient wash crossfade without resizing the page. Remaining Discover chrome uses the standard 12 pt thumbnail radius.
+- **Browse** is the catalog index: searchable and sortable. It is a dense **masonry of native-aspect artwork** (portrait, landscape, and square tiles packed into 3–6 columns with 8 pt gutters), not a second Discover and not a uniform 2:3 poster grid. Tiles are image-first; title and creator appear on hover. Sort stays on the page.
+- Library is a **16:10 grid that fills the column** (2–4 equal tiles), not a 2:3 movie-poster strip. Titles sit under the artwork; hash-prefixed import filenames are shown as readable names. The inspector and preview keep a 16:10 crop because they represent a Mac display.
 - Hovering for 350 ms starts one silent low-resolution preview. Leaving stops and releases it.
 - Only one grid preview may decode at a time.
 - Single click selects. Double click applies. Space opens a Quick Look-style preview.
 - A detail surface shows full preview, title, creator/license, dimensions, duration, file size, per-display targets, scaling, and Apply.
-- A marketplace detail lets the preview fill the whole content plane, including
-  beneath the translucent sidebar/title region. A dark bottom gradient belongs
-  to the media composition—not as decorative chrome—and protects title, creator,
-  rights, license, verified-install count, and primary actions. Reduce Motion
-  replaces the moving hero with its verified poster.
-- Catalog cards may preview on hover, but detail always prefers the bounded
-  preview video over stretching a low-resolution poster. Marketplace counters
+- A marketplace detail opens on a **full-viewport hero**. The canonical
+  playback video fills the
+  window, including under the overlay sidebar and through the unified titlebar
+  to the top of the window. The window toolbar stays for traffic lights and the
+  sidebar toggle; its background is hidden on this page so it does not paint a
+  strip over the artwork. Back sits beside the sidebar toggle in that same
+  titlebar row, not as a floating control on the image and not in a second bar.
+  Title, description, compact specs, and primary actions sit on that image.
+  Scrolling reveals rights, license, and related wallpapers on the semantic
+  surface. Reduce Motion replaces the moving hero with its verified poster.
+- Catalog cards may preview on hover, but detail plays the verified canonical
+  `video_default` master. The cheaper preview rung is for grids only.
+  Marketplace counters
   are server aggregates; WALI never invents a live-viewer count.
 - Scaling is saved with each display assignment: Fill Screen, Fit to Screen, Stretch to Fill, or Center at native size.
 - Imported videos clearly show conversion state.
@@ -153,13 +171,12 @@ Toolbar items use native grouping. No custom toolbar background is drawn.
 - Empty Library: explain how to drag in a video and provide one `Import Video…` action.
 - Loading: preserve layout with neutral placeholders; do not show indefinite decorative animation.
 - Error: name the failed operation and offer the next action. Preserve the source file.
+- Connection and import notices are a single material banner anchored **bottom-trailing** in the window, with a dismiss control. They must not recenter when the sidebar page or inspector changes.
 - Offline catalog: keep local wallpapers usable and label remote content as unavailable.
 
 ## Menu-bar control
 
-The global control belongs in the **macOS menu bar** at the top-right of the screen. It is not technically part of a window title bar.
-
-WALI also exposes a matching status button in the main window toolbar so the controls are available in both contexts.
+The global control belongs in the **macOS menu bar** at the top-right of the screen. It is not technically part of a window title bar. Playback pause/resume and renderer status are not duplicated in the main window header.
 
 Clicking the menu-bar icon opens a compact, popover-like window containing:
 

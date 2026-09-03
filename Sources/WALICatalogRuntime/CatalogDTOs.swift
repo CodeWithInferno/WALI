@@ -145,6 +145,7 @@ public struct CatalogWallpaperDetail: Sendable, Hashable, Identifiable {
     public let height: UInt32
     public let frameRateNumerator: UInt32
     public let frameRateDenominator: UInt32
+    public let videoDefault: CatalogArtifact
     public let related: [CatalogWallpaperSummary]
     public let isFavorite: Bool
     public let favoriteRevision: UInt64
@@ -169,6 +170,7 @@ public struct CatalogWallpaperDetail: Sendable, Hashable, Identifiable {
         height: UInt32,
         frameRateNumerator: UInt32,
         frameRateDenominator: UInt32,
+        videoDefault: CatalogArtifact,
         related: [CatalogWallpaperSummary],
         isFavorite: Bool,
         favoriteRevision: UInt64,
@@ -187,6 +189,7 @@ public struct CatalogWallpaperDetail: Sendable, Hashable, Identifiable {
         self.height = height
         self.frameRateNumerator = frameRateNumerator
         self.frameRateDenominator = frameRateDenominator
+        self.videoDefault = videoDefault
         self.related = related
         self.isFavorite = isFavorite
         self.favoriteRevision = favoriteRevision
@@ -406,6 +409,7 @@ struct WallpaperDetailDTO: Decodable, Sendable {
     let height: UInt32
     let frameRateNumerator: UInt32
     let frameRateDenominator: UInt32
+    let videoDefault: ArtifactSummaryDTO
     let related: [WallpaperSummaryDTO]
     let isFavorite: Bool
     let favoriteRevision: UInt64
@@ -420,6 +424,7 @@ struct WallpaperDetailDTO: Decodable, Sendable {
         case durationMilliseconds = "duration_ms"
         case frameRateNumerator = "frame_rate_numerator"
         case frameRateDenominator = "frame_rate_denominator"
+        case videoDefault = "video_default"
         case isFavorite = "is_favorite"
         case favoriteRevision = "favorite_revision"
         case isSaved = "is_saved"
