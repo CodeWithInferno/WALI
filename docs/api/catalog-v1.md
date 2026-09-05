@@ -258,6 +258,13 @@ and creation time. It never returns assignment, moderator identity, private
 notes, or other reports. Duplicate/rate-limited reports return a stable prior
 result or `rate_limited`.
 
+Native report kinds are `copyright`, `trademark`, `unsafe_content`,
+`misleading_metadata`, `technical_issue`, and `other`. The Edge adapter maps
+`unsafe_content` to the stored `unsafe` category and `misleading_metadata` to
+`misleading`; the other categories keep their identity. Moderator decisions
+are exposed separately through the staff/MFA-gated `resolve-report` function
+documented in `moderation-v1.md`.
+
 ## Canonical manifest v1
 
 The signature covers the exact bytes of `Fixtures/Catalog/manifest-v1.json`.
@@ -360,3 +367,15 @@ has been received. A network failure never rewrites or deletes local state.
 Any incompatible field/ordering/signature change requires a new manifest epoch.
 An additive API change uses a new API version or optional field only after all
 current clients safely ignore it. V1 fields never silently change meaning.
+
+## Native account operation recovery
+
+`account_operation_references_v1()` returns only `subject_id`, the latest
+`export_id`, and `deletion_id` for the authenticated active or deletion-pending
+account. It accepts no subject argument, performs no mutation, and returns no
+signed grants, storage paths, or export contents. Anonymous access is denied.
+
+After sign-in/profile load, the app uses these existing server-owned references
+to refresh status and request a fresh, verified download grant. App restarts,
+reinstalls, and a lost request response do not require another export request.
+No second local database or durable cache of grants is introduced.

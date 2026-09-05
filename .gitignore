@@ -16,6 +16,11 @@ Config/Generated/
 Config/Marketplace.local.xcconfig
 Config/Marketplace.*.local.xcconfig
 Config/Signing.local.xcconfig
+.bundle/
+vendor/bundle/
+fastlane/report.xml
+fastlane/README.md
+fastlane/.env*
 *.profraw
 
 # Python tooling caches

@@ -135,7 +135,7 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         )
     }
 
-    func testTemporaryFailureMapsToOfflineWithoutLeakingServerText() async throws {
+    func testTemporaryFailureDoesNotClaimOfflineOrLeakServerText() async throws {
         let gateway = ScriptedCatalogGateway(homeSteps: [
             .failure(CatalogRemoteError(
                 code: "temporarily_unavailable",
@@ -148,7 +148,10 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         coordinator.loadHome()
         try await Task.sleep(for: .milliseconds(30))
 
-        XCTAssertEqual(coordinator.model.homeState, .offline)
+        guard case let .failed(message) = coordinator.model.homeState else {
+            return XCTFail("A server failure must not claim the network is offline")
+        }
+        XCTAssertFalse(message.contains("sensitive upstream description"))
         XCTAssertTrue(coordinator.model.homeSections.isEmpty)
     }
 

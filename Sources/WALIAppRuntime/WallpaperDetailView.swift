@@ -18,7 +18,7 @@ struct WallpaperDetailView: View {
                     ZStack(alignment: .bottomLeading) {
                         ArtworkThumbnail(
                             imageURL: wallpaper.thumbnailURL,
-                            title: wallpaper.title,
+                            title: displayTitle,
                             cornerRadius: 16
                         )
                         .frame(maxWidth: .infinity)
@@ -33,7 +33,7 @@ struct WallpaperDetailView: View {
 
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(alignment: .firstTextBaseline) {
-                            Text(wallpaper.title)
+                            Text(displayTitle)
                                 .font(.title3.weight(.semibold))
                                 .lineLimit(3)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -220,6 +220,10 @@ struct WallpaperDetailView: View {
 
     private var isReady: Bool {
         if case .ready = wallpaper.availability { true } else { false }
+    }
+
+    private var displayTitle: String {
+        WALILibraryItemTitle.displayName(from: wallpaper.title)
     }
 
     private var hasConnectedDisplaySelection: Bool {

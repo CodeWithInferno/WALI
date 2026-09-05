@@ -894,7 +894,7 @@ RUBY
         "${root}/Sources/WALICatalogRuntime/CatalogRuntime.swift"
     printf 'import SwiftUI\nimport WALIModel\nimport WALIWire\nimport WALIUI\nimport WALICatalogRuntime\n' > \
         "${root}/Sources/WALIAppRuntime/App.swift"
-    printf 'import XCTest\n@testable import WALIAppRuntime\n@testable import WALICatalogRuntime\nimport WALICatalog\n' > \
+    printf 'import XCTest\n@testable import WALIAppRuntime\n@testable import WALICatalogRuntime\nimport WALIUI\nimport WALICatalog\n' > \
         "${root}/Tests/WALIAppTests/WALIAppTests.swift"
     printf 'import XCTest\n@testable import WALICatalogRuntime\nimport WALICatalog\n' > \
         "${root}/Tests/WALICatalogRuntimeTests/CatalogRuntimeTests.swift"
@@ -936,6 +936,7 @@ RUBY
         "${REPOSITORY_ROOT}/docs/adr/0014-marketplace-schema-and-rls.md" \
         "${REPOSITORY_ROOT}/docs/adr/0015-hostile-media-canonicalization.md" \
         "${REPOSITORY_ROOT}/docs/adr/0016-minimal-engagement-and-ranking-data.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0017-marketplace-hevc-main10.md" \
         "${root}/docs/adr/"
 
     printf '%s\n' "${root}"
@@ -1009,6 +1010,7 @@ new_marketplace_fixture() {
         "${REPOSITORY_ROOT}/docs/adr/0014-marketplace-schema-and-rls.md" \
         "${REPOSITORY_ROOT}/docs/adr/0015-hostile-media-canonicalization.md" \
         "${REPOSITORY_ROOT}/docs/adr/0016-minimal-engagement-and-ranking-data.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0017-marketplace-hevc-main10.md" \
         "${root}/docs/adr/"
     cp "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.json" \
         "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.signature" \

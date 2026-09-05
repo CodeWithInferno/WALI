@@ -43,6 +43,14 @@ public struct WALICatalogCardPresentation: Identifiable, Equatable, Sendable {
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
     }
+
+    public func withMedia(from card: Self) -> Self {
+        guard id == card.id else { return self }
+        return Self(id: id, title: title, creator: creator, category: category, tags: tags,
+                    posterURL: card.posterURL ?? posterURL, previewURL: card.previewURL ?? previewURL,
+                    verifiedInstallCount: verifiedInstallCount, favoriteCount: favoriteCount,
+                    saveCount: saveCount, pixelWidth: pixelWidth, pixelHeight: pixelHeight)
+    }
 }
 
 public enum WALICatalogSectionLayout: Equatable, Sendable {
@@ -76,8 +84,8 @@ public struct WALICatalogDetailPresentation: Identifiable, Equatable, Sendable {
     public let creatorHandle: String
     public let description: String
     /// Decoder-ready app-owned files. Remote catalog URLs are never valid here.
-    public let previewURL: URL?
-    public let posterURL: URL?
+    public private(set) var previewURL: URL?
+    public private(set) var posterURL: URL?
     public let attribution: String?
     public let rightsHolder: String
     public let sourceURL: URL?
@@ -97,7 +105,8 @@ public struct WALICatalogDetailPresentation: Identifiable, Equatable, Sendable {
     public var savedRevision: UInt64
     public let currentReleaseID: String
     public let wallpaperRevision: UInt64
-    public let related: [WALICatalogCardPresentation]
+    public private(set) var related: [WALICatalogCardPresentation]
+    public private(set) var isLoadingMedia: Bool
 
     public init(
         id: String,
@@ -126,7 +135,8 @@ public struct WALICatalogDetailPresentation: Identifiable, Equatable, Sendable {
         savedRevision: UInt64,
         currentReleaseID: String,
         wallpaperRevision: UInt64,
-        related: [WALICatalogCardPresentation]
+        related: [WALICatalogCardPresentation],
+        isLoadingMedia: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -155,6 +165,23 @@ public struct WALICatalogDetailPresentation: Identifiable, Equatable, Sendable {
         self.currentReleaseID = currentReleaseID
         self.wallpaperRevision = wallpaperRevision
         self.related = related
+        self.isLoadingMedia = isLoadingMedia
+    }
+
+    public mutating func updateVerifiedPoster(_ url: URL?) {
+        posterURL = url?.isFileURL == true ? url : nil
+    }
+
+    public mutating func updateVerifiedPreview(_ url: URL?) {
+        previewURL = url?.isFileURL == true ? url : nil
+    }
+
+    public mutating func finishLoadingMedia() {
+        isLoadingMedia = false
+    }
+
+    public mutating func updateRelated(_ cards: [WALICatalogCardPresentation]) {
+        related = cards
     }
 }
 
@@ -167,6 +194,50 @@ public enum WALIMarketplaceLoadState: Equatable, Sendable {
     case failed(message: String)
 }
 
+public struct WALICatalogInstallPresentation: Equatable, Sendable, Identifiable {
+    public enum Phase: Equatable, Sendable {
+        case preparing, downloading, verifying, installing, completed, cancelled
+        case failed(String)
+    }
+    public let id: UUID
+    public let wallpaperID: String
+    public let releaseID: String
+    public let title: String
+    public var phase: Phase = .preparing
+    public var receivedBytes: UInt64 = 0
+    public var expectedBytes: UInt64 = 0
+
+    public init(id: UUID, wallpaperID: String, releaseID: String, title: String) {
+        self.id = id
+        self.wallpaperID = wallpaperID
+        self.releaseID = releaseID
+        self.title = title
+    }
+    public var isActive: Bool {
+        switch phase {
+        case .preparing, .downloading, .verifying, .installing: true
+        default: false
+        }
+    }
+    public var canCancel: Bool {
+        switch phase {
+        case .preparing, .downloading, .verifying: true
+        default: false
+        }
+    }
+    public var status: String {
+        switch phase {
+        case .preparing: "Preparing download…"
+        case .downloading: "Downloading…"
+        case .verifying: "Checking download…"
+        case .installing: "Adding to Library…"
+        case .completed: "Added to Library"
+        case .cancelled: "Download cancelled"
+        case let .failed(message): message
+        }
+    }
+}
+
 @MainActor
 @Observable
 public final class WALIMarketplaceModel {
@@ -175,16 +246,19 @@ public final class WALIMarketplaceModel {
     public var searchItems: [WALICatalogCardPresentation]
     public var browseNextCursor: String?
     public var searchNextCursor: String?
+    public var browsePageError: String? = nil
     public var selectedDetail: WALICatalogDetailPresentation?
     public var homeState: WALIMarketplaceLoadState
     public var browseState: WALIMarketplaceLoadState
     public var detailState: WALIMarketplaceLoadState
     public var accountState: WALIAccountPresentation
+    public var authenticationState: WALIMarketplaceActionState
     public var accountProfile: WALIAccountProfilePresentation?
     public var accountProfileState: WALIAccountPrivacyLoadState
     public var accountExportState: WALIAccountExportPresentation
     public var accountDeletionState: WALIAccountDeletionPresentation
     public var actionState: WALIMarketplaceActionState
+    public var catalogInstall: WALICatalogInstallPresentation?
     public var reportState: WALIMarketplaceActionState
 
     public init(
@@ -198,6 +272,7 @@ public final class WALIMarketplaceModel {
         browseState: WALIMarketplaceLoadState = .idle,
         detailState: WALIMarketplaceLoadState = .idle,
         accountState: WALIAccountPresentation = .signedOut,
+        authenticationState: WALIMarketplaceActionState = .idle,
         accountProfile: WALIAccountProfilePresentation? = nil,
         accountProfileState: WALIAccountPrivacyLoadState = .idle,
         accountExportState: WALIAccountExportPresentation = .idle,
@@ -215,6 +290,7 @@ public final class WALIMarketplaceModel {
         self.browseState = browseState
         self.detailState = detailState
         self.accountState = accountState
+        self.authenticationState = authenticationState
         self.accountProfile = accountProfile
         self.accountProfileState = accountProfileState
         self.accountExportState = accountExportState

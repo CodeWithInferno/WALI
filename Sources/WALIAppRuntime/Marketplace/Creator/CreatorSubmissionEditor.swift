@@ -9,8 +9,9 @@ public struct CreatorSubmissionEditor: View {
     private let tags: [CreatorTaxonomyOption]
     private let licenses: [CreatorLicenseOption]
     private let currentTermsVersion: String
-    private let initialProcessingStatus: CreatorProcessingStatus?
-    private let requestProofUpload: () -> Void
+    private let creatorFacingNote: String?
+    private let wallpaperStatus: ModerationWallpaperStatus?
+    private let moderationReasonCodes: [String]
     private let didChange: (CreatorMutationResult) -> Void
 
     @State private var revision: UInt64
@@ -30,6 +31,9 @@ public struct CreatorSubmissionEditor: View {
     @State private var attestsRights: Bool
     @State private var acceptsCurrentTerms: Bool
     @State private var activity: EditorActivity = .idle
+    @State private var processingStatus: CreatorProcessingStatus?
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
 
     public init(
         submission: CreatorSubmission,
@@ -38,7 +42,6 @@ public struct CreatorSubmissionEditor: View {
         tags: [CreatorTaxonomyOption],
         licenses: [CreatorLicenseOption],
         currentTermsVersion: String,
-        requestProofUpload: @escaping () -> Void,
         didChange: @escaping (CreatorMutationResult) -> Void
     ) {
         submissionID = submission.id
@@ -47,8 +50,10 @@ public struct CreatorSubmissionEditor: View {
         self.tags = tags
         self.licenses = licenses
         self.currentTermsVersion = currentTermsVersion
-        initialProcessingStatus = submission.processing
-        self.requestProofUpload = requestProofUpload
+        _processingStatus = State(initialValue: submission.processing)
+        creatorFacingNote = submission.creatorFacingNote
+        wallpaperStatus = submission.wallpaperStatus
+        moderationReasonCodes = submission.moderationReasonCodes
         self.didChange = didChange
         let draft = submission.draft
         _revision = State(initialValue: submission.revision)
@@ -70,11 +75,51 @@ public struct CreatorSubmissionEditor: View {
     }
 
     public var body: some View {
+        VStack(spacing: 0) {
+            WALIPageHeader("Wallpaper Submission") { EmptyView() }
+            submissionForm
+        }
+        .navigationTitle(title.isEmpty ? "Wallpaper Submission" : title)
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await refreshProcessingWhileActive()
+        }
+    }
+
+    private var submissionForm: some View {
         Form {
+            if let restriction = wallpaperStatus?.creatorRestrictionLabel {
+                Section("Marketplace Listing") {
+                    Label(restriction, systemImage: "eye.slash")
+                    Text("This wallpaper is unavailable for new marketplace downloads. Its submission history and existing local Library copies are preserved.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if state == .changesRequested || state == .rejected {
+                Section(state == .changesRequested ? "Changes requested" : "Review feedback") {
+                    if let creatorFacingNote, !creatorFacingNote.isEmpty {
+                        Text(creatorFacingNote)
+                    }
+                    ForEach(moderationReasonCodes, id: \.self) { reason in
+                        Text(reason.replacingOccurrences(of: "_", with: " ").localizedCapitalized)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if state == .processingFailed {
+                Section {
+                    Label("This video couldn’t be prepared", systemImage: "exclamationmark.triangle")
+                    Text("Return to Creator Studio and upload another video to create a new submission.")
+                        .foregroundStyle(.secondary)
+                    Button("Back to Submissions") { dismiss() }
+                }
+            }
             Section("Your wallpaper details") {
                 TextField("Title", text: $title)
+                    .accessibilityLabel("Title")
                     .accessibilityHint("Creator-provided title, maximum 120 characters")
                 TextField("Description", text: $description, axis: .vertical)
+                    .accessibilityLabel("Description")
                     .lineLimit(3...8)
                 Picker("Primary category", selection: $categoryID) {
                     Text("Choose a category").tag(UUID?.none)
@@ -82,7 +127,7 @@ public struct CreatorSubmissionEditor: View {
                         Text(category.name).tag(Optional(category.id))
                     }
                 }
-                Menu("Suggested tags (\(selectedTagIDs.count)/20)") {
+                Menu("Tags (\(selectedTagIDs.count)/20)") {
                     ForEach(tags) { tag in
                         Toggle(tag.name, isOn: Binding(
                             get: { selectedTagIDs.contains(tag.id) },
@@ -97,16 +142,19 @@ public struct CreatorSubmissionEditor: View {
                     }
                 }
                 TextField("Content warning (optional)", text: $contentWarning, axis: .vertical)
+                    .accessibilityLabel("Content warning (optional)")
                     .lineLimit(1...4)
             }
+            .disabled(activity == .working || !canEdit)
 
             if let processing = processingStatus {
                 Section {
-                    ProcessingStatusView(status: processing)
+                ProcessingStatusView(status: processing, state: state)
                 }
             }
 
             modelSuggestions
+                .disabled(activity == .working || !canEdit)
 
             RightsDeclarationView(
                 basis: $rightsBasis,
@@ -118,32 +166,36 @@ public struct CreatorSubmissionEditor: View {
                 attestsRights: $attestsRights,
                 acceptsCurrentTerms: $acceptsCurrentTerms,
                 licenses: licenses,
-                currentTermsVersion: currentTermsVersion,
-                requestProofUpload: requestProofUpload
+                currentTermsVersion: currentTermsVersion
             )
+            .disabled(activity == .working || !canEdit)
 
             Section {
                 HStack {
-                    Text("Revision \(revision) · Generation \(generation)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
                     Spacer()
                     if activity == .working { ProgressView().controlSize(.small) }
                     Button("Save Draft") { Task { await save() } }
-                        .disabled(activity == .working)
+                        .disabled(activity == .working || !canEdit)
                     Button("Submit for Review") { Task { await submit() } }
                         .buttonStyle(.borderedProminent)
                         .disabled(!canSubmit || activity == .working)
                 }
                 if case let .failed(code) = activity {
-                    Label("Couldn’t save: \(code)", systemImage: "exclamationmark.triangle")
+                    Label(failureMessage(for: code), systemImage: "exclamationmark.triangle")
                 } else if activity == .stale {
-                    Label("This submission changed on the server. Reload before editing.", systemImage: "arrow.clockwise.circle")
+                    Label("This submission changed. Reopen it from Creator Studio before editing.", systemImage: "arrow.clockwise.circle")
+                    Button("Back to Submissions") { dismiss() }
+                } else if activity == .saved {
+                    Label("Draft saved", systemImage: "checkmark.circle")
+                } else if activity == .submitted {
+                    Label("Submitted for review", systemImage: "checkmark.circle")
                 }
             }
         }
         .formStyle(.grouped)
-        .navigationTitle(title.isEmpty ? "Wallpaper Submission" : title)
+        .scrollContentBackground(.hidden)
+        .defaultScrollAnchor(.top)
+        .clipped()
     }
 
     @ViewBuilder
@@ -151,7 +203,9 @@ public struct CreatorSubmissionEditor: View {
         let suggestions = processingStatus?.suggestions ?? []
         Section {
             if suggestions.isEmpty {
-                Text("Suggestions appear after WALI verifies the uploaded media.")
+                Text(state == .processing || state == .uploaded || state == .uploading
+                     ? "Suggestions may appear after WALI verifies the uploaded media."
+                     : "No suggestions are available. Add your wallpaper’s details above.")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(suggestions) { suggestion in
@@ -160,7 +214,7 @@ public struct CreatorSubmissionEditor: View {
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(suggestion.value)
-                            Text("WALI suggestion · \(suggestion.modelID) \(suggestion.modelRevision) · \(suggestion.confidence.formatted(.percent))")
+                            Text("Suggested \(suggestion.kind.rawValue)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -172,29 +226,29 @@ public struct CreatorSubmissionEditor: View {
                 }
             }
         } header: {
-            Label("System suggestions — optional", systemImage: "wand.and.stars")
+            Label("Suggestions", systemImage: "wand.and.stars")
         } footer: {
-            Text("Suggestions are model output, not your saved details. Nothing is applied automatically.")
+            Text("Review each suggestion before adding it to your wallpaper.")
         }
     }
 
-    private var processingStatus: CreatorProcessingStatus? {
-        // A parent recreates this editor after polling a newer immutable server projection.
-        initialProcessingStatus
+    private var canEdit: Bool {
+        switch state {
+        case .draft, .readyForSubmission, .changesRequested:
+            activity != .stale
+        default:
+            false
+        }
     }
 
     private var requirements: CreatorRightsRequirements {
-        licenses.first(where: { $0.id == licenseID })?.requirements
-            ?? .init(
-                requiresSourceURL: rightsBasis != .original,
-                requiresAttribution: rightsBasis != .original,
-                requiresProof: rightsBasis == .licensed || rightsBasis == .other
-            )
+        rightsRequirements(basis: rightsBasis, license: licenses.first(where: { $0.id == licenseID }))
     }
 
     private var canSubmit: Bool {
         acceptsCurrentTerms && attestsRights && generation > 0
-            && state == .readyForSubmission
+            && (state == .readyForSubmission || state == .changesRequested) && canEdit && !requirements.requiresProof
+            && (try? makeDraft()) != nil
     }
 
     private func makeDraft() throws -> CreatorDraft {
@@ -227,6 +281,7 @@ public struct CreatorSubmissionEditor: View {
     }
 
     private func save() async {
+        guard activity != .working, canEdit else { return }
         let boundRevision = revision
         let boundGeneration = generation
         activity = .working
@@ -248,25 +303,78 @@ public struct CreatorSubmissionEditor: View {
     }
 
     private func submit() async {
+        guard activity != .working, canSubmit else { return }
         let boundRevision = revision
         let boundGeneration = generation
         activity = .working
         do {
-            _ = try makeDraft()
-            let request = try CreatorSubmitRequest(
+            let saveRequest = try CreatorSaveDraftRequest(
                 submissionID: submissionID,
                 expectedRevision: boundRevision,
+                draft: makeDraft(),
+                creatorTermsVersion: currentTermsVersion,
+                idempotencyKey: UUID().uuidString.lowercased()
+            )
+            let saved = try await gateway.saveDraft(saveRequest)
+            try Task.checkCancellation()
+            guard revision == boundRevision, generation == boundGeneration,
+                  saved.generation == boundGeneration, saved.state == .readyForSubmission
+            else { activity = .stale; return }
+            apply(saved)
+            let request = try CreatorSubmitRequest(
+                submissionID: submissionID,
+                expectedRevision: saved.revision,
                 expectedGeneration: boundGeneration,
                 acceptedCreatorTermsVersion: acceptsCurrentTerms ? currentTermsVersion : "",
                 currentCreatorTermsVersion: currentTermsVersion,
                 idempotencyKey: UUID().uuidString.lowercased()
             )
             let result = try await gateway.submit(request)
-            guard revision == boundRevision, generation == boundGeneration else { return }
+            guard revision == saved.revision, generation == boundGeneration else { return }
             apply(result)
             activity = .submitted
         } catch {
             present(error)
+        }
+    }
+
+    private func refreshProcessingWhileActive() async {
+        while !Task.isCancelled, generation > 0,
+              state == .processing || state == .uploaded {
+            do {
+                let boundRevision = revision
+                let boundGeneration = generation
+                if activity != .working {
+                    let status = try await gateway.processingStatus(submissionID: submissionID, generation: boundGeneration)
+                    try Task.checkCancellation()
+                    if activity != .working, revision == boundRevision, generation == boundGeneration,
+                       status.revision >= revision {
+                        processingStatus = status
+                        revision = status.revision
+                        state = status.state
+                    }
+                }
+                try await Task.sleep(for: .seconds(5))
+            } catch is CancellationError {
+                return
+            } catch {
+                // Keep the editable draft. A transient status failure must not
+                // replace unsaved fields or mark a completed upload as failed.
+                do { try await Task.sleep(for: .seconds(15)) }
+                catch { return }
+            }
+        }
+    }
+
+    private func failureMessage(for code: String) -> String {
+        switch code {
+        case "invalid_request": "Check the title, category, license, and rights declaration, then try again."
+        case "rights_incomplete": "Complete the rights holder, license, required source and attribution, and rights confirmation."
+        case "invalid_remote_response": "WALI couldn’t read the service response. Reopen the submission before trying again."
+        case "creator_terms_stale": "The Creator Terms have changed. Return to Creator Studio and review the current terms."
+        case "creator_access_expired", "creator_terms_required": "Creator access needs to be refreshed. Return to Creator Studio and review your account."
+        case "rate_limited": "Too many requests. Wait a few minutes and try again."
+        default: "The submission couldn’t be updated. Your edits are still here. Try again."
         }
     }
 
@@ -291,7 +399,11 @@ public struct CreatorSubmissionEditor: View {
         case .accessRevoked: activity = .failed("creator_access_expired")
         case .retryable: activity = .failed("temporarily_unavailable")
         case .terminal:
-            activity = .failed((error as? CatalogRemoteError)?.code ?? "invalid_request")
+            if let contractError = error as? CreatorContractError {
+                activity = .failed(contractError.rawValue)
+            } else {
+                activity = .failed((error as? CatalogRemoteError)?.code ?? "temporarily_unavailable")
+            }
         }
     }
 }
@@ -307,25 +419,22 @@ private enum EditorActivity: Equatable {
 
 public struct ProcessingStatusView: View {
     private let status: CreatorProcessingStatus
+    private let state: CreatorSubmissionState
 
-    public init(status: CreatorProcessingStatus) {
+    public init(status: CreatorProcessingStatus, state: CreatorSubmissionState? = nil) {
         self.status = status
+        self.state = state ?? status.state
     }
 
     public var body: some View {
-        GroupBox("Server verification") {
+        GroupBox("Video processing") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Label(status.state.processingLabel, systemImage: "gearshape.2")
-                    Spacer()
-                    Text("Generation \(status.generation) · Revision \(status.revision)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    Label(state.displayName, systemImage: state.symbolName)
                 }
-                if let progress = status.progress {
-                    ProgressView(value: progress)
-                        .accessibilityLabel("Server processing progress")
-                        .accessibilityValue(progress.formatted(.percent))
+                if state == .processing || state == .uploaded {
+                    ProgressView("Preparing your wallpaper…")
+                        .controlSize(.small)
                 }
                 if let facts = status.mediaFacts {
                     LabeledContent("Detected media", value: "\(facts.width) × \(facts.height) · \(facts.codec)")
@@ -338,8 +447,8 @@ public struct ProcessingStatusView: View {
                 ForEach(status.findings) { finding in
                     Label(finding.message, systemImage: finding.severity.processingSymbolName)
                 }
-                if let code = status.safeErrorCode {
-                    Label("Processing stopped: \(code)", systemImage: "exclamationmark.triangle")
+                if status.safeErrorCode != nil {
+                    Label("This video couldn’t be prepared. Try uploading another video.", systemImage: "exclamationmark.triangle")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -359,7 +468,6 @@ public struct RightsDeclarationView: View {
     @Binding private var acceptsCurrentTerms: Bool
     private let licenses: [CreatorLicenseOption]
     private let currentTermsVersion: String
-    private let requestProofUpload: () -> Void
 
     public init(
         basis: Binding<CreatorRightsBasis>,
@@ -371,8 +479,7 @@ public struct RightsDeclarationView: View {
         attestsRights: Binding<Bool>,
         acceptsCurrentTerms: Binding<Bool>,
         licenses: [CreatorLicenseOption],
-        currentTermsVersion: String,
-        requestProofUpload: @escaping () -> Void
+        currentTermsVersion: String
     ) {
         _basis = basis
         _rightsHolder = rightsHolder
@@ -384,7 +491,6 @@ public struct RightsDeclarationView: View {
         _acceptsCurrentTerms = acceptsCurrentTerms
         self.licenses = licenses
         self.currentTermsVersion = currentTermsVersion
-        self.requestProofUpload = requestProofUpload
     }
 
     public var body: some View {
@@ -393,58 +499,52 @@ public struct RightsDeclarationView: View {
                 Text("Original work").tag(CreatorRightsBasis.original)
                 Text("Public domain").tag(CreatorRightsBasis.publicDomain)
             }
-            Text("Licensed and other third-party works are unavailable until private proof scanning is enabled.")
+            Text("Currently accepting original and public-domain works.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             TextField("Rights holder", text: $rightsHolder)
+                .accessibilityLabel("Rights holder")
             Picker("License", selection: $selectedLicenseID) {
                 Text("Choose a license").tag(UUID?.none)
                 ForEach(licenses) { license in
-                    Text("\(license.name) (\(license.code))").tag(Optional(license.id))
+                    Text(license.name).tag(Optional(license.id))
+                        .disabled(license.requirements.requiresProof)
                 }
             }
 
             if requirements.requiresSourceURL {
                 TextField("HTTPS source URL", text: $sourceURL)
+                    .accessibilityLabel("HTTPS source URL")
                     .textContentType(.URL)
             }
             if requirements.requiresAttribution {
                 TextField("Required attribution", text: $attributionText, axis: .vertical)
+                    .accessibilityLabel("Required attribution")
                     .lineLimit(2...5)
             }
             if requirements.requiresProof {
-                HStack {
-                    Label(
-                        proofObjectIDs.isEmpty ? "Rights proof required" : "\(proofObjectIDs.count) proof file(s) attached",
-                        systemImage: proofObjectIDs.isEmpty ? "doc.badge.plus" : "checkmark.shield"
-                    )
-                    Spacer()
-                    Button("Add Proof…", action: requestProofUpload)
-                }
-                Text("PNG, JPEG, or PDF only. Proof remains private and is scanned before review.")
-                    .font(.caption)
+                Label("This rights option isn’t available for submission yet.", systemImage: "info.circle")
                     .foregroundStyle(.secondary)
             }
 
             Toggle("I attest that I have the right to publish this wallpaper", isOn: $attestsRights)
+                .toggleStyle(.checkbox)
             Toggle("I accept Creator Terms \(currentTermsVersion)", isOn: $acceptsCurrentTerms)
+                .toggleStyle(.checkbox)
         }
     }
 
     private var requirements: CreatorRightsRequirements {
-        licenses.first(where: { $0.id == selectedLicenseID })?.requirements
-            ?? CreatorRightsRequirements(
-                requiresSourceURL: basis != .original,
-                requiresAttribution: basis != .original,
-                requiresProof: false
-            )
+        rightsRequirements(basis: basis, license: licenses.first(where: { $0.id == selectedLicenseID }))
     }
 }
 
-private extension CreatorSubmissionState {
-    var processingLabel: String {
-        rawValue.replacingOccurrences(of: "_", with: " ").localizedCapitalized
-    }
+private func rightsRequirements(basis: CreatorRightsBasis, license: CreatorLicenseOption?) -> CreatorRightsRequirements {
+    CreatorRightsRequirements(
+        requiresSourceURL: basis != .original || license?.requirements.requiresSourceURL == true,
+        requiresAttribution: basis != .original || license?.requirements.requiresAttribution == true,
+        requiresProof: basis == .licensed || basis == .other || license?.requirements.requiresProof == true
+    )
 }
 
 private extension CreatorFindingSeverity {

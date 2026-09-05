@@ -3,6 +3,9 @@ import WALIUI
 
 struct DownloadsSurface: View {
     let transfers: [WALITransferPresentation]
+    let catalogInstall: WALICatalogInstallPresentation?
+    let onCancelCatalog: () -> Void
+    let onRetryCatalog: () -> Void
     let onImport: () -> Void
     let onDrop: ([URL]) -> Void
     let onCancel: (UUID) -> Void
@@ -10,34 +13,28 @@ struct DownloadsSurface: View {
     @State private var isDropTargeted = false
 
     var body: some View {
-        Group {
-            if transfers.isEmpty {
+        VStack(spacing: 0) {
+            WALIPageHeader("Downloads") {
+                Text(summary).font(.callout).foregroundStyle(.secondary)
+                Button("Import Video…", systemImage: "plus", action: onImport)
+            }
+            if let catalogInstall, catalogInstall.phase != .completed {
+                CatalogInstallProgressView(install: catalogInstall, onCancel: onCancelCatalog, onRetry: onRetryCatalog)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+            }
+            if transfers.isEmpty && catalogInstall == nil {
                 ContentUnavailableView {
-                    Label("No Recent Imports", systemImage: "arrow.down.circle")
+                    Label("No Downloads or Imports", systemImage: "arrow.down.circle")
                 } description: {
-                    Text("Import a video or drop one here. WALI will show preparation progress on this page.")
+                    Text("Download a wallpaper or import a video to see its progress here.")
                 } actions: {
                     Button("Import Video…", action: onImport)
                         .controlSize(.large)
                 }
-            } else {
+            } else if !transfers.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text("Recent Imports")
-                                .font(.headline)
-
-                            Spacer()
-
-                            Text(summary)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            Button(action: onImport) {
-                                Label("Import Video…", systemImage: "plus")
-                            }
-                        }
-
                         VStack(spacing: 0) {
                             ForEach(Array(transfers.enumerated()), id: \.element.id) { index, transfer in
                                 TransferRow(transfer: transfer, onCancel: { onCancel(transfer.id) })
@@ -62,12 +59,13 @@ struct DownloadsSurface: View {
                             .foregroundStyle(.secondary)
                             .padding(.leading, 4)
                     }
-                    .frame(maxWidth: 720, alignment: .leading)
-                    .padding(24)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 24)
                     .frame(maxWidth: .infinity, alignment: .top)
                 }
-            }
+            } else { Spacer() }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .dropDestination(
             for: URL.self,
             action: { urls, _ in
@@ -91,7 +89,7 @@ struct DownloadsSurface: View {
     }
 
     private var summary: String {
-        let activeCount = transfers.count { transfer in
+        let activeCount = (catalogInstall?.isActive == true ? 1 : 0) + transfers.count { transfer in
             switch transfer.state {
             case .queued, .working: true
             default: false
@@ -101,6 +99,46 @@ struct DownloadsSurface: View {
             return activeCount == 1 ? "1 active" : "\(activeCount) active"
         }
         return transfers.count == 1 ? "1 item" : "\(transfers.count) items"
+    }
+}
+
+struct CatalogInstallProgressView: View {
+    let install: WALICatalogInstallPresentation
+    let onCancel: () -> Void
+    let onRetry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.down.circle")
+                .font(.title2).foregroundStyle(.secondary).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(install.title).font(.body.weight(.medium)).lineLimit(1)
+                Text(install.status).font(.callout).foregroundStyle(.secondary)
+                if install.phase == .downloading, install.expectedBytes > 0 {
+                    ProgressView(value: Double(install.receivedBytes), total: Double(install.expectedBytes))
+                        .accessibilityLabel("Wallpaper download")
+                    Text("\(bytes(install.receivedBytes)) of \(bytes(install.expectedBytes))")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                } else if install.isActive {
+                    ProgressView().controlSize(.small).accessibilityLabel(install.status)
+                }
+            }
+            Spacer(minLength: 8)
+            if install.canCancel {
+                Button("Cancel", role: .cancel, action: onCancel)
+            } else if case .failed = install.phase {
+                Button("Try Again", action: onRetry)
+            } else if install.phase == .cancelled {
+                Button("Try Again", action: onRetry)
+            }
+        }
+        .padding(14)
+        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func bytes(_ value: UInt64) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(clamping: value), countStyle: .file)
     }
 }
 
@@ -122,7 +160,7 @@ private struct TransferRow: View {
             .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(transfer.title)
+                Text(WALILibraryItemTitle.displayName(from: transfer.title))
                     .font(.body.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)

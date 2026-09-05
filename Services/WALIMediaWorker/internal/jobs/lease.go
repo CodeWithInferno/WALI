@@ -28,6 +28,8 @@ var (
 	exportPathPattern     = regexp.MustCompile(`^exports/[0-9a-f-]{36}/[0-9a-f-]{36}/account\.json$`)
 	moderationPathPattern = regexp.MustCompile(`^(rights/[0-9a-f-]{36}/[0-9a-f-]{36}/proof\.[a-z0-9]{2,8}|copyright/[0-9a-f-]{36}/(notice|counter-notice)\.[a-z0-9]{2,8})$`)
 	extensionKeyPattern   = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+	failureCodePattern    = regexp.MustCompile(`^[a-z][a-z0-9_]{1,90}$`)
+	databaseCodePattern   = regexp.MustCompile(`^WALI_[A-Z][A-Z0-9_]{1,90}$`)
 )
 
 type ProcessSubmission struct {
@@ -542,12 +544,29 @@ func (s *SQLAttemptStore) Complete(ctx context.Context, job ProcessSubmission, l
 }
 
 func (s *SQLAttemptStore) Fail(ctx context.Context, job ProcessSubmission, lease Lease, failure Failure) (bool, error) {
+	code, err := databaseFailureCode(failure.SafeCode)
+	if err != nil {
+		return false, err
+	}
 	var current bool
-	err := s.database.QueryRowContext(ctx,
+	err = s.database.QueryRowContext(ctx,
 		`select wali.worker_fail_attempt($1, $2, $3, $4)`,
-		job.AttemptID, job.Generation, lease.Owner, failure.SafeCode,
+		job.AttemptID, job.Generation, lease.Owner, code,
 	).Scan(&current)
 	return current, err
+}
+
+// Worker diagnostics use lowercase tokens; persisted failures use the bounded
+// WALI_* database contract. Keep that translation at the SQL boundary for every
+// queue so recording a permanent failure cannot itself leave a job leased.
+func databaseFailureCode(code string) (string, error) {
+	if databaseCodePattern.MatchString(code) {
+		return code, nil
+	}
+	if !failureCodePattern.MatchString(code) {
+		return "", errors.New("invalid worker failure code")
+	}
+	return "WALI_" + strings.ToUpper(code), nil
 }
 
 func (s *SQLAttemptStore) ReadClassificationInput(ctx context.Context, job ProcessSubmission, lease Lease) (ClassificationInput, error) {
@@ -627,10 +646,14 @@ func (s *SQLAttemptStore) CompleteExport(ctx context.Context, job ExportJob, lea
 }
 
 func (s *SQLAttemptStore) FailExport(ctx context.Context, job ExportJob, lease Lease, safeCode string) (bool, error) {
+	code, err := databaseFailureCode(safeCode)
+	if err != nil {
+		return false, err
+	}
 	var current bool
-	err := s.database.QueryRowContext(ctx,
+	err = s.database.QueryRowContext(ctx,
 		`select wali.worker_fail_export($1, $2, $3, $4)`,
-		job.ExportID, job.UserID, lease.Owner, safeCode,
+		job.ExportID, job.UserID, lease.Owner, code,
 	).Scan(&current)
 	return current, err
 }
@@ -693,9 +716,13 @@ func (s *SQLAttemptStore) CompletePromotion(ctx context.Context, job PromotionJo
 }
 
 func (s *SQLAttemptStore) FailPromotion(ctx context.Context, job PromotionJob, lease Lease, safeCode string) (bool, error) {
+	code, err := databaseFailureCode(safeCode)
+	if err != nil {
+		return false, err
+	}
 	var current bool
-	err := s.database.QueryRowContext(ctx, `select wali.worker_fail_promotion($1, $2, $3)`,
-		job.PromotionID, lease.Owner, safeCode).Scan(&current)
+	err = s.database.QueryRowContext(ctx, `select wali.worker_fail_promotion($1, $2, $3)`,
+		job.PromotionID, lease.Owner, code).Scan(&current)
 	return current, err
 }
 
@@ -738,8 +765,12 @@ func (s *SQLAttemptStore) CompleteCleanup(ctx context.Context, job CleanupJob, l
 }
 
 func (s *SQLAttemptStore) FailCleanup(ctx context.Context, job CleanupJob, lease Lease, safeCode string) (bool, error) {
+	code, err := databaseFailureCode(safeCode)
+	if err != nil {
+		return false, err
+	}
 	var current bool
-	err := s.database.QueryRowContext(ctx, `select wali.worker_fail_cleanup($1, $2, $3)`, job.CleanupID, lease.Owner, safeCode).Scan(&current)
+	err = s.database.QueryRowContext(ctx, `select wali.worker_fail_cleanup($1, $2, $3)`, job.CleanupID, lease.Owner, code).Scan(&current)
 	return current, err
 }
 
@@ -814,8 +845,12 @@ func (s *SQLAttemptStore) CompleteBackupVerification(ctx context.Context, job Ba
 }
 
 func (s *SQLAttemptStore) FailBackupVerification(ctx context.Context, job BackupVerificationJob, lease Lease, safeCode string) (bool, error) {
+	code, err := databaseFailureCode(safeCode)
+	if err != nil {
+		return false, err
+	}
 	var current bool
-	err := s.database.QueryRowContext(ctx, `select wali.worker_fail_backup_verification($1, $2, $3)`, job.RunID, lease.Owner, safeCode).Scan(&current)
+	err = s.database.QueryRowContext(ctx, `select wali.worker_fail_backup_verification($1, $2, $3)`, job.RunID, lease.Owner, code).Scan(&current)
 	return current, err
 }
 
@@ -854,9 +889,13 @@ func (s *SQLAttemptStore) CompleteAccountDeletion(ctx context.Context, job Accou
 }
 
 func (s *SQLAttemptStore) FailAccountDeletion(ctx context.Context, job AccountDeletionJob, lease Lease, safeCode string) (bool, error) {
+	code, err := databaseFailureCode(safeCode)
+	if err != nil {
+		return false, err
+	}
 	var current bool
-	err := s.database.QueryRowContext(ctx, `select wali.worker_fail_account_deletion($1, $2, $3, $4)`,
-		job.DeletionID, job.UserID, lease.Owner, safeCode).Scan(&current)
+	err = s.database.QueryRowContext(ctx, `select wali.worker_fail_account_deletion($1, $2, $3, $4)`,
+		job.DeletionID, job.UserID, lease.Owner, code).Scan(&current)
 	return current, err
 }
 

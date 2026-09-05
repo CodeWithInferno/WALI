@@ -17,6 +17,7 @@ public final class AppleSignInCoordinator: NSObject {
     }
 
     public func signIn(presentingFrom window: NSWindow) async throws -> CatalogAuthState {
+        try Task.checkCancellation()
         guard continuation == nil else { throw CatalogRequestError.invalidRequest }
         let nonce = try Self.makeNonce()
         rawNonce = nonce
@@ -30,8 +31,12 @@ public final class AppleSignInCoordinator: NSObject {
         controller.presentationContextProvider = self
         authorizationController = controller
 
-        let credentials = try await withTaskCancellationHandler {
+        let credentials: (String, String) = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
                 self.continuation = continuation
                 controller.performRequests()
             }
@@ -40,6 +45,7 @@ public final class AppleSignInCoordinator: NSObject {
                 self?.finish(.failure(CancellationError()))
             }
         }
+        try Task.checkCancellation()
         return try await sessionStore.signInWithApple(
             idToken: credentials.0,
             nonce: credentials.1
@@ -80,6 +86,7 @@ extension AppleSignInCoordinator: ASAuthorizationControllerDelegate {
         controller: ASAuthorizationController,
         didCompleteWithAuthorization authorization: ASAuthorization
     ) {
+        guard controller === authorizationController else { return }
         guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
               let token = credential.identityToken,
               let idToken = String(data: token, encoding: .utf8),
@@ -99,6 +106,11 @@ extension AppleSignInCoordinator: ASAuthorizationControllerDelegate {
         controller: ASAuthorizationController,
         didCompleteWithError error: any Error
     ) {
+        guard controller === authorizationController else { return }
+        if (error as? ASAuthorizationError)?.code == .canceled {
+            finish(.failure(CancellationError()))
+            return
+        }
         finish(.failure(CatalogRemoteError(
             code: "authentication_failed",
             safeMessage: nil,

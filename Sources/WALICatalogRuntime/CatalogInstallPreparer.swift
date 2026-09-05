@@ -42,7 +42,8 @@ public struct CatalogInstallPreparer: Sendable {
         grant: CatalogInstallGrant,
         expectedWallpaperID: String,
         expectedReleaseID: String,
-        security: CatalogSecuritySnapshot
+        security: CatalogSecuritySnapshot,
+        progress: (@Sendable (UInt64, UInt64) -> Void)? = nil
     ) async throws -> PreparedCatalogInstall {
         guard !grant.manifestBody.isEmpty,
               grant.manifestBody.count <= 65_536,
@@ -80,9 +81,11 @@ public struct CatalogInstallPreparer: Sendable {
         else {
             throw CatalogValidationError.invalidManifest
         }
+        progress?(0, artifact.byteCount)
         let quarantineURL = try await downloader.download(
             artifact: artifact,
-            quarantineDirectory: quarantineDirectory
+            quarantineDirectory: quarantineDirectory,
+            progress: progress
         )
         let quarantineSuffix = ".wali-quarantine.mp4"
         let quarantineName = quarantineURL.lastPathComponent

@@ -15,6 +15,17 @@ public struct CatalogTransportDownload: @unchecked Sendable {
 
 public protocol CatalogDownloadTransport: Sendable {
     func download(_ url: URL) async throws -> CatalogTransportDownload
+    func download(_ url: URL, maximumByteCount: UInt64) async throws -> CatalogTransportDownload
+    func download(_ url: URL, maximumByteCount: UInt64, progress: @escaping @Sendable (UInt64, UInt64) -> Void) async throws -> CatalogTransportDownload
+}
+
+public extension CatalogDownloadTransport {
+    func download(_ url: URL, maximumByteCount: UInt64) async throws -> CatalogTransportDownload {
+        try await download(url)
+    }
+    func download(_ url: URL, maximumByteCount: UInt64, progress: @escaping @Sendable (UInt64, UInt64) -> Void) async throws -> CatalogTransportDownload {
+        try await download(url, maximumByteCount: maximumByteCount)
+    }
 }
 
 public protocol AccountExportDownloadTransport: Sendable {
@@ -56,17 +67,26 @@ private final class BoundedDownloadOperation:
     private var session: URLSession?
     private var task: URLSessionDownloadTask?
     private var finished = false
+    private let progress: (@Sendable (UInt64, UInt64) -> Void)?
+    private var lastProgress = ContinuousClock.now
 
-    init(configuration: URLSessionConfiguration, expectedURL: URL, maximumByteCount: Int64) {
+    init(configuration: URLSessionConfiguration, expectedURL: URL, maximumByteCount: Int64,
+         progress: (@Sendable (UInt64, UInt64) -> Void)? = nil) {
         self.configuration = configuration
         self.expectedURL = expectedURL
         self.maximumByteCount = maximumByteCount
+        self.progress = progress
     }
 
     func run() async throws -> CatalogTransportDownload {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 lock.lock()
+                guard !finished else {
+                    lock.unlock()
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
                 self.continuation = continuation
                 let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
                 self.session = session
@@ -90,6 +110,10 @@ private final class BoundedDownloadOperation:
         if totalBytesWritten > maximumByteCount || totalBytesExpectedToWrite > maximumByteCount {
             downloadTask.cancel()
             finish(.failure(AccountExportDownloadError.unexpectedLength))
+        } else if totalBytesWritten >= 0,
+                  lastProgress.duration(to: .now) >= .milliseconds(200) || totalBytesWritten == maximumByteCount {
+            lastProgress = .now
+            progress?(UInt64(totalBytesWritten), UInt64(maximumByteCount))
         }
     }
 
@@ -106,7 +130,7 @@ private final class BoundedDownloadOperation:
             return
         }
         let destination = FileManager.default.temporaryDirectory.appending(
-            path: "wali-account-export-\(UUID().uuidString.lowercased()).download",
+            path: "wali-verified-download-\(UUID().uuidString.lowercased()).download",
             directoryHint: .notDirectory
         )
         do {
@@ -148,6 +172,9 @@ private final class BoundedDownloadOperation:
         lock.lock()
         guard !finished else {
             lock.unlock()
+            if case let .success(download) = result {
+                try? FileManager.default.removeItem(at: download.temporaryFileURL)
+            }
             return
         }
         finished = true
@@ -171,26 +198,26 @@ public final class URLSessionCatalogDownloadTransport: CatalogDownloadTransport,
     }
 
     public func download(_ url: URL) async throws -> CatalogTransportDownload {
-        let delegate = RejectRedirectDelegate()
-        let session = URLSession(configuration: configuration)
-        defer { session.finishTasksAndInvalidate() }
-        let (temporaryURL, response) = try await session.download(for: URLRequest(url: url), delegate: delegate)
-        guard let http = response as? HTTPURLResponse else {
+        try await download(url, maximumByteCount: CatalogArtifact.maximumByteCount)
+    }
+
+    public func download(_ url: URL, maximumByteCount: UInt64) async throws -> CatalogTransportDownload {
+        try await download(url, maximumByteCount: maximumByteCount, progress: { _, _ in })
+    }
+
+    public func download(_ url: URL, maximumByteCount: UInt64,
+                         progress: @escaping @Sendable (UInt64, UInt64) -> Void) async throws -> CatalogTransportDownload {
+        guard maximumByteCount > 0, maximumByteCount <= CatalogArtifact.maximumByteCount else {
+            throw CatalogDownloadError.unexpectedLength
+        }
+        do {
+            return try await BoundedDownloadOperation(configuration: configuration,
+                expectedURL: url, maximumByteCount: Int64(maximumByteCount), progress: progress).run()
+        } catch AccountExportDownloadError.unexpectedLength {
+            throw CatalogDownloadError.unexpectedLength
+        } catch AccountExportDownloadError.invalidResponse {
             throw CatalogDownloadError.invalidResponse
         }
-        return CatalogTransportDownload(temporaryFileURL: temporaryURL, response: http)
-    }
-}
-
-private final class RejectRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        willPerformHTTPRedirection response: HTTPURLResponse,
-        newRequest request: URLRequest,
-        completionHandler: @escaping (URLRequest?) -> Void
-    ) {
-        completionHandler(nil)
     }
 }
 
@@ -342,14 +369,16 @@ public struct CatalogDownloader: Sendable {
 
     public func download(
         artifact: CatalogArtifact,
-        quarantineDirectory: URL
+        quarantineDirectory: URL,
+        progress: (@Sendable (UInt64, UInt64) -> Void)? = nil
     ) async throws -> URL {
         try await downloadVerified(
             url: artifact.url,
             sha256: artifact.sha256,
             byteCount: artifact.byteCount,
             mediaType: artifact.mediaType,
-            quarantineDirectory: quarantineDirectory
+            quarantineDirectory: quarantineDirectory,
+            progress: progress
         )
     }
 
@@ -358,7 +387,8 @@ public struct CatalogDownloader: Sendable {
         sha256: String,
         byteCount: UInt64,
         mediaType: String,
-        quarantineDirectory: URL
+        quarantineDirectory: URL,
+        progress: (@Sendable (UInt64, UInt64) -> Void)? = nil
     ) async throws -> URL {
         guard url.host.map({ approvedHosts.contains($0.lowercased()) }) == true else {
             throw CatalogDownloadError.unapprovedHost
@@ -368,7 +398,8 @@ public struct CatalogDownloader: Sendable {
               (1...CatalogArtifact.maximumByteCount).contains(byteCount),
               ["video/mp4", "image/avif", "image/jpeg", "image/png"].contains(mediaType)
         else { throw CatalogDownloadError.invalidResponse }
-        let transfer = try await transport.download(url)
+        let transfer = try await transport.download(url, maximumByteCount: byteCount, progress: progress ?? { _, _ in })
+        defer { try? FileManager.default.removeItem(at: transfer.temporaryFileURL) }
         let destination = quarantineDirectory.appending(
             path: "\(UUID().uuidString.lowercased()).wali-quarantine.\(fileExtension(for: mediaType))",
             directoryHint: .notDirectory

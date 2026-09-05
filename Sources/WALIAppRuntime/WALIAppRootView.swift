@@ -15,6 +15,9 @@ public struct WALIAppRootView: View {
 
     @State private var route: AppRoute = .library
     @State private var catalogPath: [String] = []
+    @State private var creatorPath: [CreatorSubmission] = []
+    @State private var reviewPath: [ModerationQueueItem] = []
+    @State private var reportPath: [ModerationReport] = []
     @State private var selectedWallpaperID: UUID?
     @State private var selectedDisplayIDs: Set<String> = []
     @State private var hasInitializedDisplaySelection = false
@@ -42,7 +45,7 @@ public struct WALIAppRootView: View {
     }
 
     public var body: some View {
-        inspectedNavigation
+        navigation
             .navigationTitle(catalogPath.isEmpty ? route.title : "")
             .fileImporter(
                 isPresented: $showsImporter,
@@ -96,23 +99,28 @@ public struct WALIAppRootView: View {
             .onChange(of: searchText) { _, value in
                 if route == .browse { marketplace.search(value) }
             }
+            .onChange(of: catalogPath) { previous, current in
+                guard previous.last != current.last else { return }
+                if let wallpaperID = previous.last {
+                    marketplace.cancelDetail(wallpaperID: wallpaperID)
+                }
+                if let wallpaperID = current.last {
+                    marketplace.loadDetail(wallpaperID: wallpaperID)
+                }
+            }
             .onChange(of: model.snapshot.wallpapers) { _, _ in synchronizeWallpaperSelection() }
             .onChange(of: model.settingsPresentationRequest) { _, _ in showsSettings = true }
+            .onChange(of: marketplace.model.accountState) { _, _ in
+                reviewPath.removeAll()
+                reportPath.removeAll()
+                creatorPath.removeAll()
+            }
+            .onChange(of: marketplace.creatorContext.canShowModeratorTools) { _, allowed in
+                if !allowed { reviewPath.removeAll(); reportPath.removeAll() }
+            }
             .background(keyboardCommands)
+            .focusedSceneValue(\.waliSettingsAction, { showsSettings = true })
             .accessibilityIdentifier("WALI.MainWindow")
-    }
-
-    @ViewBuilder
-    private var inspectedNavigation: some View {
-        if route == .library {
-            navigation
-                .inspector(isPresented: libraryInspectorPresented) {
-                    libraryInspector
-                        .inspectorColumnWidth(min: 280, ideal: 340, max: 420)
-                }
-        } else {
-            navigation
-        }
     }
 
     private var navigation: some View {
@@ -136,17 +144,30 @@ public struct WALIAppRootView: View {
                             onRetry: { marketplace.loadDetail(wallpaperID: wallpaperID) },
                             onOpenRelated: openCatalogWallpaper,
                             onInstall: { marketplace.installSelectedWallpaper() },
+                            onCancelInstall: { marketplace.cancelCatalogInstall() },
+                            onRetryInstall: { marketplace.retryCatalogInstall() },
+                            installedReleaseIDs: Set(model.snapshot.wallpapers.map { $0.id.uuidString.lowercased() }),
+                            onOpenLibrary: {
+                                guard let releaseID = marketplace.model.selectedDetail?.currentReleaseID,
+                                      let itemID = UUID(uuidString: releaseID) else { return }
+                                route = .library
+                                selectedWallpaperID = itemID
+                            },
                             onFavorite: { marketplace.toggleFavorite() },
                             onSave: { marketplace.toggleSaved() },
                             onReport: marketplace.reportSelectedWallpaper
                         )
-                        .task { marketplace.loadDetail(wallpaperID: wallpaperID) }
                     } else {
                         content
                     }
                 } else {
                     content
                 }
+            }
+            .background(Color(nsColor: .windowBackgroundColor))
+            .inspector(isPresented: libraryInspectorPresented) {
+                libraryInspector
+                    .inspectorColumnWidth(min: 280, ideal: 300, max: 320)
             }
             .toolbar(WALIChromeLayout.hidesWindowToolbar ? .hidden : .automatic)
             .waliHiddenWindowToolbarBackground(
@@ -164,7 +185,10 @@ public struct WALIAppRootView: View {
     }
 
     private var showsCatalogBack: Bool {
-        WALIChromeLayout.catalogBackLivesBesideSidebarToggle && !catalogPath.isEmpty
+        WALIChromeLayout.catalogBackLivesBesideSidebarToggle
+            && (route == .creatorStudio ? !creatorPath.isEmpty
+                : route == .reviewQueue ? !reviewPath.isEmpty
+                : route == .reports ? !reportPath.isEmpty : !catalogPath.isEmpty)
     }
 
     private var sidebarToolbarSharedBackground: Visibility {
@@ -202,6 +226,7 @@ public struct WALIAppRootView: View {
         .onChange(of: route) { _, newRoute in
             if newRoute != .library && newRoute != .browse { searchText = "" }
             catalogPath.removeAll()
+            creatorPath.removeAll()
         }
         .accessibilityIdentifier("WALI.Sidebar")
     }
@@ -260,7 +285,13 @@ public struct WALIAppRootView: View {
                 marketplace: marketplace.model,
                 sort: $browseSort,
                 query: searchText,
-                onLoad: { marketplace.loadBrowse(sort: $0) },
+                onLoad: { sort in
+                    if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        marketplace.loadBrowse(sort: sort)
+                    } else {
+                        marketplace.search(searchText)
+                    }
+                },
                 onOpen: openCatalogWallpaper,
                 onLoadMore: marketplace.loadNextBrowsePage
             )
@@ -280,6 +311,9 @@ public struct WALIAppRootView: View {
         case .downloads:
             DownloadsSurface(
                 transfers: model.snapshot.transfers,
+                catalogInstall: marketplace.model.catalogInstall,
+                onCancelCatalog: { marketplace.cancelCatalogInstall() },
+                onRetryCatalog: { marketplace.retryCatalogInstall() },
                 onImport: { showsImporter = true },
                 onDrop: importVideos,
                 onCancel: { transferID in
@@ -289,10 +323,14 @@ public struct WALIAppRootView: View {
         case .account:
             AccountView(
                 account: marketplace.model.accountState,
+                authenticationState: marketplace.model.authenticationState,
                 profile: marketplace.model.accountProfile,
                 profileState: marketplace.model.accountProfileState,
                 exportState: marketplace.model.accountExportState,
                 deletionState: marketplace.model.accountDeletionState,
+                moderatorAccess: marketplace.moderatorAccess,
+                hasModeratorRole: marketplace.creatorContext.moderationModel?.authorization.moderatorGrantRevision != nil,
+                isModerationUnlocked: marketplace.creatorContext.moderationModel?.canShowReviewQueue == true,
                 onSignIn: marketplace.signIn,
                 onSignOut: marketplace.signOut,
                 onRefresh: marketplace.refreshAccountPrivacy,
@@ -309,28 +347,29 @@ public struct WALIAppRootView: View {
                let upload = marketplace.creatorContext.uploadCoordinator,
                let metadata = marketplace.creatorContext.metadata,
                let gateway = marketplace.creatorGateway {
-                CreatorStudioView(
-                    model: studioModel,
-                    upload: upload,
-                    categories: metadata.categories,
-                    tags: metadata.tags,
-                    licenses: metadata.licenses,
-                    accessState: marketplace.creatorContext.state,
-                    lastFailureCode: marketplace.creatorContext.lastFailureCode,
-                    onAcceptTerms: marketplace.acceptCreatorTerms
-                ) { submission in
-                    CreatorSubmissionEditor(
-                        submission: submission,
-                        gateway: gateway,
+                NavigationStack(path: $creatorPath) {
+                    CreatorStudioView(
+                        model: studioModel,
+                        upload: upload,
                         categories: metadata.categories,
                         tags: metadata.tags,
                         licenses: metadata.licenses,
-                        currentTermsVersion: metadata.currentCreatorTermsVersion,
-                        requestProofUpload: {},
-                        didChange: { _ in
-                            Task { await studioModel.loadSubmissions() }
-                        }
-                    )
+                        accessState: marketplace.creatorContext.state,
+                        lastFailureCode: marketplace.creatorContext.lastFailureCode,
+                        onAcceptTerms: marketplace.acceptCreatorTerms
+                    ) { submission in
+                        CreatorSubmissionEditor(
+                            submission: submission,
+                            gateway: gateway,
+                            categories: metadata.categories,
+                            tags: metadata.tags,
+                            licenses: metadata.licenses,
+                            currentTermsVersion: metadata.currentCreatorTermsVersion,
+                            didChange: { _ in
+                                Task { await studioModel.loadSubmissions() }
+                            }
+                        )
+                    }
                 }
             } else {
                 ContentUnavailableView(
@@ -343,12 +382,13 @@ public struct WALIAppRootView: View {
             if let moderationModel = marketplace.creatorContext.moderationModel,
                let moderationMetadata = marketplace.creatorContext.moderationMetadata,
                marketplace.creatorContext.canShowModeratorTools {
-                ReviewQueueView(model: moderationModel) { item in
-                    SubmissionReviewView(
-                        item: item,
-                        model: moderationModel,
-                        moderationMetadata: moderationMetadata
-                    )
+                NavigationStack(path: $reviewPath) {
+                    ReviewQueueView(model: moderationModel)
+                        .navigationDestination(for: ModerationQueueItem.self) { item in
+                            SubmissionReviewView(item: item, model: moderationModel,
+                                                 moderationMetadata: moderationMetadata)
+                                .navigationBarBackButtonHidden(WALIChromeLayout.catalogBackLivesBesideSidebarToggle)
+                        }
                 }
             } else {
                 protectedModeratorUnavailable
@@ -356,7 +396,13 @@ public struct WALIAppRootView: View {
         case .reports:
             if let moderationModel = marketplace.creatorContext.moderationModel,
                marketplace.creatorContext.canShowModeratorTools {
-                ReportQueueView(model: moderationModel)
+                NavigationStack(path: $reportPath) {
+                    ReportQueueView(model: moderationModel)
+                        .navigationDestination(for: ModerationReport.self) { report in
+                            ReportReviewView(report: report, model: moderationModel)
+                                .navigationBarBackButtonHidden(WALIChromeLayout.catalogBackLivesBesideSidebarToggle)
+                        }
+                }
             } else {
                 protectedModeratorUnavailable
             }
@@ -400,8 +446,6 @@ public struct WALIAppRootView: View {
                 actions.send(.setPaused(!model.snapshot.renderer.state.isPaused))
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
-            Button("Settings") { showsSettings = true }
-                .keyboardShortcut(",", modifiers: .command)
             Button("Back") { popCatalogPath() }
                 .keyboardShortcut("[", modifiers: .command)
                 .disabled(!showsCatalogBack)
@@ -598,6 +642,18 @@ public struct WALIAppRootView: View {
     }
 
     private func popCatalogPath() {
+        if route == .reports, !reportPath.isEmpty {
+            reportPath.removeLast()
+            return
+        }
+        if route == .reviewQueue, !reviewPath.isEmpty {
+            reviewPath.removeLast()
+            return
+        }
+        if route == .creatorStudio, !creatorPath.isEmpty {
+            creatorPath.removeLast()
+            return
+        }
         guard !catalogPath.isEmpty else { return }
         catalogPath.removeLast()
     }
@@ -683,6 +739,10 @@ private struct WindowTitlebarSeparatorHider: NSViewRepresentable {
         nsView.onCatalogBack = onCatalogBack
         nsView.applyChrome()
     }
+
+    static func dismantleNSView(_ nsView: WindowAccessView, coordinator: ()) {
+        nsView.removeChrome()
+    }
 }
 
 private final class WindowAccessView: NSView {
@@ -693,7 +753,12 @@ private final class WindowAccessView: NSView {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+    }
+
+    func removeChrome() {
+        NotificationCenter.default.removeObserver(self)
         catalogBackButton.removeFromSuperview()
+        catalogBackButton.onBack = nil
     }
 
     override func viewDidMoveToWindow() {
@@ -755,7 +820,8 @@ private final class WindowAccessView: NSView {
 
     private func findSplitViewController(from controller: NSViewController?) -> NSSplitViewController? {
         guard let controller else { return nil }
-        if let split = controller as? NSSplitViewController {
+        if let split = controller as? NSSplitViewController,
+           split.splitViewItems.contains(where: { $0.behavior == .sidebar }) {
             return split
         }
         for child in controller.children {
@@ -769,7 +835,8 @@ private final class WindowAccessView: NSView {
     private func findSplitViewController(in view: NSView) -> NSSplitViewController? {
         var responder: NSResponder? = view.nextResponder
         while let current = responder {
-            if let split = current as? NSSplitViewController {
+            if let split = current as? NSSplitViewController,
+               split.splitViewItems.contains(where: { $0.behavior == .sidebar }) {
                 return split
             }
             responder = current.nextResponder

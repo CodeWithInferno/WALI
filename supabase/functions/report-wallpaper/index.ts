@@ -64,7 +64,11 @@ export async function handleReportWallpaper(
         idempotency_key: envelope.idempotencyKey,
         wallpaper_id: wallpaperID,
         release_id: releaseID,
-        report_kind: kind,
+        report_kind: kind === "unsafe_content"
+          ? "unsafe"
+          : kind === "misleading_metadata"
+          ? "misleading"
+          : kind,
         detail,
       },
     );

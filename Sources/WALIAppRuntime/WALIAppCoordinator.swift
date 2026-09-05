@@ -40,7 +40,8 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
         if quitObserver == nil {
             quitObserver = DistributedNotificationCenter.default().addObserver(
                 forName: Notification.Name("com.wali.quitAll"),
-                object: nil,
+                object: Bundle.main.object(forInfoDictionaryKey: "WALIControlServiceName") as? String
+                    ?? Bundle.main.bundleIdentifier,
                 queue: .main
             ) { _ in
                 Task { @MainActor in
@@ -51,7 +52,8 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
         if settingsObserver == nil {
             settingsObserver = DistributedNotificationCenter.default().addObserver(
                 forName: Notification.Name("com.wali.openSettings"),
-                object: nil,
+                object: Bundle.main.object(forInfoDictionaryKey: "WALIControlServiceName") as? String
+                    ?? Bundle.main.bundleIdentifier,
                 queue: .main
             ) { [weak self] _ in
                 Task { @MainActor in

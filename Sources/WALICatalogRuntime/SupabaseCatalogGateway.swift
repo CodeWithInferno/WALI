@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import Supabase
 import WALICatalog
 
@@ -10,13 +11,16 @@ public actor SupabaseCatalogGateway:
     CreatorAuthorizationGateway,
     ModerationGateway
 {
+    private static let logger = Logger(subsystem: "com.wali.catalog", category: "Gateway")
     private nonisolated let client: SupabaseClient
     private let mapper: CatalogMapper
     private let remoteURLPolicy: CatalogRemoteURLPolicy
     private let accountExportDownloader: AccountExportDownloader
-
     public init(environment: CatalogEnvironment) throws {
-        let session = CatalogURLSessionFactory.redirectRejecting()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForResource = 30
+        let session = CatalogURLSessionFactory.redirectRejecting(configuration: configuration)
         let keychainService = try CatalogAuthKeychainNamespace.service(
             bundleIdentifier: Bundle.main.bundleIdentifier,
             supabaseURL: environment.supabaseURL
@@ -65,7 +69,7 @@ public actor SupabaseCatalogGateway:
                 case ratingCeiling = "rating_ceiling"
             }
         }
-        return try await safely {
+        return try await safelyReading {
             let dto: CatalogHomeDTO = try await client
                 .rpc(
                     "catalog_home_v1",
@@ -106,7 +110,7 @@ public actor SupabaseCatalogGateway:
                 try container.encode(limit, forKey: .limit)
             }
         }
-        return try await safely {
+        return try await safelyReading {
             let dto: CatalogPageDTO = try await client
                 .rpc(
                     "catalog_browse_v1",
@@ -162,7 +166,7 @@ public actor SupabaseCatalogGateway:
                 try container.encode(limit, forKey: .limit)
             }
         }
-        return try await safely {
+        return try await safelyReading {
             let dto: CatalogSearchPageDTO = try await client
                 .rpc(
                     "catalog_search_v1",
@@ -191,7 +195,7 @@ public actor SupabaseCatalogGateway:
             let wallpaperID: String
             enum CodingKeys: String, CodingKey { case wallpaperID = "wallpaper_id" }
         }
-        return try await safely {
+        return try await safelyReading {
             let dto: WallpaperDetailDTO = try await client
                 .rpc("catalog_wallpaper_detail_v1", params: Parameters(wallpaperID: wallpaperID))
                 .execute()
@@ -252,7 +256,7 @@ public actor SupabaseCatalogGateway:
             expectedWallpaperRevision: expectedWallpaperRevision
         )
         return try await safely {
-            let envelope: CatalogFunctionEnvelope<InstallGrantDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<InstallGrantDTO> = try await invokeFunction(
                 "request-install",
                 options: FunctionInvokeOptions(body: request)
             )
@@ -291,8 +295,8 @@ public actor SupabaseCatalogGateway:
             apiVersion: "catalog.v1",
             requestID: requestID
         )
-        return try await safely {
-            let envelope: CatalogFunctionEnvelope<CatalogSecurityStateDTO> = try await client.functions.invoke(
+        return try await safelyReading {
+            let envelope: CatalogFunctionEnvelope<CatalogSecurityStateDTO> = try await invokeFunction(
                 "catalog-security-state",
                 options: FunctionInvokeOptions(body: request)
             )
@@ -317,9 +321,10 @@ public actor SupabaseCatalogGateway:
             detail: request.detail
         )
         return try await safely {
-            let envelope: CatalogFunctionEnvelope<ReportWallpaperResponseDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<ReportWallpaperResponseDTO> = try await invokeFunction(
                 "report-wallpaper",
-                options: FunctionInvokeOptions(body: payload)
+                options: FunctionInvokeOptions(body: payload),
+                retryInterrupted: true
             )
             let response = try mapper.payload(
                 envelope,
@@ -340,7 +345,7 @@ public actor SupabaseCatalogGateway:
     }
 
     public func accountProfile() async throws -> MarketplaceAccountProfile {
-        try await safely {
+        try await safelyReading {
             let dto: AccountProfileDTO = try await client
                 .from("my_profile_v1")
                 .select("id,handle,display_name,status,revision")
@@ -358,7 +363,7 @@ public actor SupabaseCatalogGateway:
     }
 
     public func authorizationSnapshot() async throws -> CreatorAuthorizationSnapshot {
-        try await safely {
+        try await safelyReading {
             let session = try await client.auth.session
             let subjectID = session.user.id.uuidString.lowercased()
             let dto: CreatorAuthorizationDTO = try await client
@@ -390,7 +395,7 @@ public actor SupabaseCatalogGateway:
     }
 
     public func creatorMetadata() async throws -> CreatorMetadata {
-        try await safely {
+        try await safelyReading {
             let dto: CreatorMetadataDTO = try await client
                 .rpc("creator_metadata_v1", params: EmptyParameters())
                 .execute()
@@ -450,9 +455,10 @@ public actor SupabaseCatalogGateway:
             guard sessionBefore.user.id.uuidString.lowercased() == expectedSubjectID,
                   sessionBefore.expiresAt > Date.now.timeIntervalSince1970
             else { throw CatalogMappingError.invalidResponse }
-            let envelope: CatalogFunctionEnvelope<CreatorEnrollmentResponseDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<CreatorEnrollmentResponseDTO> = try await invokeFunction(
                 "creator-command",
-                options: FunctionInvokeOptions(body: body)
+                options: FunctionInvokeOptions(body: body),
+                retryInterrupted: true
             )
             let response = try mapper.payload(
                 envelope,
@@ -471,7 +477,7 @@ public actor SupabaseCatalogGateway:
     }
 
     public func moderationMetadata() async throws -> ModerationMetadata {
-        try await safely {
+        try await safelyReading {
             let dto: ModerationMetadataDTO = try await client
                 .rpc("moderation_metadata_v1", params: EmptyParameters())
                 .execute()
@@ -517,7 +523,7 @@ public actor SupabaseCatalogGateway:
                 case pageLimit = "page_limit"
             }
         }
-        return try await safely {
+        return try await safelyReading {
             let dto: CreatorSubmissionPageDTO = try await client
                 .rpc(
                     "my_creator_submissions_v1",
@@ -550,7 +556,7 @@ public actor SupabaseCatalogGateway:
         guard generation > 0, isSafeRevision(generation) else {
             throw CreatorContractError.invalidRequest
         }
-        return try await safely {
+        return try await safelyReading {
             let dto: CreatorProcessingStatusDTO = try await client
                 .rpc(
                     "creator_processing_status_v1",
@@ -573,7 +579,7 @@ public actor SupabaseCatalogGateway:
         let requestID = UUID().uuidString.lowercased()
         let body = CreatorCreateUploadRequestDTO(requestID: requestID, request: request)
         return try await safely {
-            let envelope: CatalogFunctionEnvelope<CreatorUploadSessionDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<CreatorUploadSessionDTO> = try await invokeFunction(
                 "create-upload",
                 options: FunctionInvokeOptions(body: body)
             )
@@ -637,31 +643,16 @@ public actor SupabaseCatalogGateway:
     }
 
     public func queue(_ request: ModerationQueueRequest) async throws -> ModerationQueuePage {
-        struct Parameters: Encodable {
-            let queueStatus: String
-            let queueSort: String
-            let cursor: String?
-            let pageLimit: Int
-            enum CodingKeys: String, CodingKey {
-                case cursor
-                case queueStatus = "queue_status"
-                case queueSort = "queue_sort"
-                case pageLimit = "page_limit"
-            }
-        }
+        let requestID = UUID().uuidString.lowercased()
+        let body = ModerationReadRequestDTO(
+            requestID: requestID, operation: "queue", status: request.status,
+            sort: request.sort.rawValue, cursor: request.cursor, limit: request.limit
+        )
         return try await safely {
-            let dto: ModerationQueuePageDTO = try await client
-                .rpc(
-                    "moderation_queue_v1",
-                    params: Parameters(
-                        queueStatus: request.status,
-                        queueSort: request.sort.rawValue,
-                        cursor: request.cursor,
-                        pageLimit: request.limit
-                    )
-                )
-                .execute()
-                .value
+            let envelope: CatalogFunctionEnvelope<ModerationQueuePageDTO> = try await invokeFunction(
+                "moderate-submission", options: FunctionInvokeOptions(body: body), retryInterrupted: true
+            )
+            let dto = try mapper.payload(envelope, apiVersion: "moderation.v1", expectedRequestID: requestID)
             guard dto.items.count <= request.limit else { throw CatalogMappingError.invalidResponse }
             return ModerationQueuePage(
                 items: try dto.items.map(moderationQueueItem),
@@ -671,38 +662,71 @@ public actor SupabaseCatalogGateway:
     }
 
     public func reports(_ request: ModerationReportQueueRequest) async throws -> ModerationReportPage {
-        struct Parameters: Encodable {
-            let cursor: String?
-            let pageLimit: Int
-            enum CodingKeys: String, CodingKey {
-                case cursor
-                case pageLimit = "page_limit"
-            }
-        }
+        let requestID = UUID().uuidString.lowercased()
+        let body = ModerationReadRequestDTO(
+            requestID: requestID, operation: "reports", status: nil,
+            sort: nil, cursor: request.cursor, limit: request.limit
+        )
         return try await safely {
-            let dto: ModerationReportPageDTO = try await client
-                .rpc(
-                    "moderation_reports_v1",
-                    params: Parameters(cursor: request.cursor, pageLimit: request.limit)
-                )
-                .execute()
-                .value
+            let envelope: CatalogFunctionEnvelope<ModerationReportPageDTO> = try await invokeFunction(
+                "moderate-submission", options: FunctionInvokeOptions(body: body), retryInterrupted: true
+            )
+            let dto = try mapper.payload(envelope, apiVersion: "moderation.v1", expectedRequestID: requestID)
             guard dto.items.count <= request.limit else { throw CatalogMappingError.invalidResponse }
             let items = try dto.items.map { item -> ModerationReport in
                 guard let id = canonicalUUID(item.reportID),
-                      isSafeRevision(item.revision),
+                      item.revision > 0, isSafeRevision(item.revision),
                       isBoundedCreatorToken(item.reasonCode, maximum: 96),
-                      isPlainCreatorText(item.safeSummary, maximum: 500)
+                      isPlainCreatorText(item.safeSummary, maximum: 2_000),
+                      let status = ModerationReportStatus(rawValue: item.status), status != .closed,
+                      let wallpaperID = canonicalUUID(item.wallpaperID),
+                      item.wallpaperRevision > 0, isSafeRevision(item.wallpaperRevision),
+                      isPlainCreatorText(item.wallpaperTitle, maximum: 120),
+                      let wallpaperStatus = ModerationWallpaperStatus(rawValue: item.wallpaperStatus),
+                      item.releaseID.map({ canonicalUUID($0) != nil }) ?? true,
+                      (item.releaseID == nil) == (item.edition == nil),
+                      item.edition.map({ $0 > 0 && isSafeRevision($0) }) ?? true,
+                      item.canonicalArtifacts.count <= 3,
+                      Set(item.canonicalArtifacts.map(\.role)).count == item.canonicalArtifacts.count
                 else { throw CatalogMappingError.invalidResponse }
                 return ModerationReport(
                     id: id,
                     revision: item.revision,
                     reasonCode: item.reasonCode,
                     safeSummary: item.safeSummary,
-                    createdAt: try exactTimestamp(item.createdAt)
+                    createdAt: try exactTimestamp(item.createdAt),
+                    status: status, wallpaperID: wallpaperID, wallpaperRevision: item.wallpaperRevision,
+                    wallpaperTitle: item.wallpaperTitle, wallpaperStatus: wallpaperStatus,
+                    releaseID: item.releaseID.flatMap(canonicalUUID), edition: item.edition,
+                    canonicalArtifacts: try item.canonicalArtifacts.map(moderationArtifact)
                 )
             }
             return ModerationReportPage(items: items, nextCursor: try canonicalOptionalCursor(dto.nextCursor))
+        }
+    }
+
+    public func resolveReport(_ request: ModerationReportResolutionRequest) async throws -> ModerationReportResolution {
+        let requestID = UUID().uuidString.lowercased()
+        let body = ResolveReportRequestDTO(requestID: requestID, request: request)
+        return try await safely {
+            let envelope: CatalogFunctionEnvelope<ResolveReportResponseDTO> = try await invokeFunction(
+                "resolve-report", options: FunctionInvokeOptions(body: body), retryInterrupted: true
+            )
+            let dto = try mapper.payload(envelope, apiVersion: "moderation.v1", expectedRequestID: requestID)
+            guard let reportID = canonicalUUID(dto.reportID), reportID == request.reportID,
+                  dto.revision > request.expectedRevision, isSafeRevision(dto.revision),
+                  dto.action == request.action.rawValue,
+                  let status = ModerationReportStatus(rawValue: dto.status),
+                  status == (request.action == .hidePendingReview ? .triaged : .closed),
+                  let wallpaperID = canonicalUUID(dto.wallpaperID), wallpaperID == request.wallpaperID,
+                  dto.wallpaperRevision >= request.expectedWallpaperRevision, isSafeRevision(dto.wallpaperRevision),
+                  let wallpaperStatus = ModerationWallpaperStatus(rawValue: dto.wallpaperStatus),
+                  request.action != .delist || wallpaperStatus == .removed,
+                  request.action != .hidePendingReview || wallpaperStatus != .published
+            else { throw CatalogMappingError.invalidResponse }
+            return ModerationReportResolution(reportID: reportID, revision: dto.revision, status: status,
+                action: request.action, wallpaperID: wallpaperID, wallpaperRevision: dto.wallpaperRevision,
+                wallpaperStatus: wallpaperStatus)
         }
     }
 
@@ -710,9 +734,10 @@ public actor SupabaseCatalogGateway:
         let requestID = UUID().uuidString.lowercased()
         let body = ModerateSubmissionRequestDTO(requestID: requestID, request: request)
         return try await safely {
-            let envelope: CatalogFunctionEnvelope<ModerationDecisionResponseDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<ModerationDecisionResponseDTO> = try await invokeFunction(
                 "moderate-submission",
-                options: FunctionInvokeOptions(body: body)
+                options: FunctionInvokeOptions(body: body),
+                retryInterrupted: true
             )
             let response = try mapper.payload(
                 envelope,
@@ -736,6 +761,29 @@ public actor SupabaseCatalogGateway:
         }
     }
 
+    public func publish(_ request: PublishReleaseRequest) async throws -> PublishedRelease {
+        let requestID = UUID().uuidString.lowercased()
+        let body = PublishReleaseRequestDTO(requestID: requestID, request: request)
+        return try await safely {
+            let envelope: CatalogFunctionEnvelope<PublishedReleaseDTO> = try await invokeFunction(
+                "publish-release", options: FunctionInvokeOptions(body: body), retryInterrupted: true
+            )
+            let dto = try mapper.payload(envelope, apiVersion: "moderation.v1", expectedRequestID: requestID)
+            guard let wallpaperID = canonicalUUID(dto.wallpaperID),
+                  let releaseID = canonicalUUID(dto.releaseID),
+                  dto.edition > 0, isSafeRevision(dto.edition),
+                  dto.wallpaperRevision > request.expectedWallpaperRevision,
+                  isSafeRevision(dto.wallpaperRevision),
+                  dto.manifestDigest.utf8.count == 64,
+                  dto.manifestDigest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+                  isBoundedCreatorToken(dto.keyID, maximum: 128)
+            else { throw CatalogMappingError.invalidResponse }
+            return PublishedRelease(wallpaperID: wallpaperID, releaseID: releaseID, edition: dto.edition,
+                                    wallpaperRevision: dto.wallpaperRevision,
+                                    publishedAt: try exactTimestamp(dto.publishedAt))
+        }
+    }
+
     public func requestAccountExport(idempotencyKey: String) async throws -> AccountExportSnapshot {
         try validateIdempotencyKey(idempotencyKey)
         let requestID = UUID().uuidString.lowercased()
@@ -749,9 +797,10 @@ public actor SupabaseCatalogGateway:
         return try await safely {
             let sessionBefore = try await client.auth.session
             let expectedSubjectID = sessionBefore.user.id.uuidString.lowercased()
-            let envelope: CatalogFunctionEnvelope<AccountExportResponseDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<AccountExportResponseDTO> = try await invokeFunction(
                 "request-account-export",
-                options: FunctionInvokeOptions(body: request)
+                options: FunctionInvokeOptions(body: request),
+                retryInterrupted: true
             )
             let response = try mapper.payload(
                 envelope,
@@ -762,7 +811,8 @@ public actor SupabaseCatalogGateway:
             guard sessionAfter.user.id.uuidString.lowercased() == expectedSubjectID,
                   sessionAfter.expiresAt > Date.now.timeIntervalSince1970
             else { throw CatalogMappingError.invalidResponse }
-            return try accountExportSnapshot(response, expectedSubjectID: expectedSubjectID)
+            let snapshot = try accountExportSnapshot(response, expectedSubjectID: expectedSubjectID)
+            return snapshot
         }
     }
 
@@ -780,9 +830,10 @@ public actor SupabaseCatalogGateway:
         return try await safely {
             let sessionBefore = try await client.auth.session
             let expectedSubjectID = sessionBefore.user.id.uuidString.lowercased()
-            let envelope: CatalogFunctionEnvelope<AccountExportResponseDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<AccountExportResponseDTO> = try await invokeFunction(
                 "request-account-export",
-                options: FunctionInvokeOptions(body: request)
+                options: FunctionInvokeOptions(body: request),
+                retryInterrupted: true
             )
             let response = try mapper.payload(
                 envelope,
@@ -793,7 +844,35 @@ public actor SupabaseCatalogGateway:
             guard sessionAfter.user.id.uuidString.lowercased() == expectedSubjectID,
                   sessionAfter.expiresAt > Date.now.timeIntervalSince1970
             else { throw CatalogMappingError.invalidResponse }
-            return try accountExportSnapshot(response, expectedSubjectID: expectedSubjectID)
+            let snapshot = try accountExportSnapshot(response, expectedSubjectID: expectedSubjectID)
+            return snapshot
+        }
+    }
+
+    public func accountOperationReferences() async throws -> AccountPrivacyOperationReferences? {
+        struct ReferencesDTO: Decodable, Sendable {
+            let subjectID: String
+            let exportID: String?
+            let deletionID: String?
+            enum CodingKeys: String, CodingKey {
+                case subjectID = "subject_id"
+                case exportID = "export_id"
+                case deletionID = "deletion_id"
+            }
+        }
+        return try await safelyReading {
+            let session = try await client.auth.session
+            let subjectID = session.user.id.uuidString.lowercased()
+            let dto: ReferencesDTO = try await client
+                .rpc("account_operation_references_v1", params: EmptyParameters())
+                .execute().value
+            let currentSession = try await client.auth.session
+            guard dto.subjectID == subjectID,
+                  currentSession.user.id.uuidString.lowercased() == subjectID
+            else { throw CatalogMappingError.invalidResponse }
+            return try AccountPrivacyOperationReferences(
+                subjectID: dto.subjectID, exportID: dto.exportID, deletionID: dto.deletionID
+            )
         }
     }
 
@@ -824,9 +903,10 @@ public actor SupabaseCatalogGateway:
         return try await safely {
             let sessionBefore = try await client.auth.session
             let expectedSubjectID = sessionBefore.user.id.uuidString.lowercased()
-            let envelope: CatalogFunctionEnvelope<AccountDeletionResponseDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<AccountDeletionResponseDTO> = try await invokeFunction(
                 "request-account-deletion",
-                options: FunctionInvokeOptions(body: request)
+                options: FunctionInvokeOptions(body: request),
+                retryInterrupted: true
             )
             let response = try mapper.payload(
                 envelope,
@@ -837,11 +917,12 @@ public actor SupabaseCatalogGateway:
             guard sessionAfter.user.id.uuidString.lowercased() == expectedSubjectID,
                   sessionAfter.expiresAt > Date.now.timeIntervalSince1970
             else { throw CatalogMappingError.invalidResponse }
-            return try accountDeletionSnapshot(
+            let snapshot = try accountDeletionSnapshot(
                 response,
                 expectedSubjectID: expectedSubjectID,
                 usesProcessingStatus: true
             )
+            return snapshot
         }
     }
 
@@ -861,9 +942,10 @@ public actor SupabaseCatalogGateway:
         return try await safely {
             let sessionBefore = try await client.auth.session
             let expectedSubjectID = sessionBefore.user.id.uuidString.lowercased()
-            let envelope: CatalogFunctionEnvelope<AccountDeletionResponseDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<AccountDeletionResponseDTO> = try await invokeFunction(
                 "request-account-deletion",
-                options: FunctionInvokeOptions(body: request)
+                options: FunctionInvokeOptions(body: request),
+                retryInterrupted: true
             )
             let response = try mapper.payload(
                 envelope,
@@ -874,11 +956,12 @@ public actor SupabaseCatalogGateway:
             guard sessionAfter.user.id.uuidString.lowercased() == expectedSubjectID,
                   sessionAfter.expiresAt > Date.now.timeIntervalSince1970
             else { throw CatalogMappingError.invalidResponse }
-            return try accountDeletionSnapshot(
+            let snapshot = try accountDeletionSnapshot(
                 response,
                 expectedSubjectID: expectedSubjectID,
                 usesProcessingStatus: false
             )
+            return snapshot
         }
     }
 
@@ -909,7 +992,7 @@ public actor SupabaseCatalogGateway:
             result: "verified_installed"
         )
         try await safely {
-            let envelope: CatalogFunctionEnvelope<RecordInstallAcknowledgementDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<RecordInstallAcknowledgementDTO> = try await invokeFunction(
                 "record-install",
                 options: FunctionInvokeOptions(body: request)
             )
@@ -1027,9 +1110,10 @@ public actor SupabaseCatalogGateway:
         requestID: String
     ) async throws -> CreatorMutationResult {
         try await safely {
-            let envelope: CatalogFunctionEnvelope<CreatorMutationResponseDTO> = try await client.functions.invoke(
+            let envelope: CatalogFunctionEnvelope<CreatorMutationResponseDTO> = try await invokeFunction(
                 function,
-                options: FunctionInvokeOptions(body: body)
+                options: FunctionInvokeOptions(body: body),
+                retryInterrupted: true
             )
             let response = try mapper.payload(
                 envelope,
@@ -1060,8 +1144,14 @@ public actor SupabaseCatalogGateway:
     }
 
     private func creatorSubmission(_ value: CreatorSubmissionDTO) throws -> CreatorSubmission {
+        let wallpaperID = try canonicalOptionalUUID(value.wallpaperID)
+        let wallpaperStatus = try value.wallpaperStatus.map { raw in
+            guard wallpaperID != nil, let status = ModerationWallpaperStatus(rawValue: raw) else {
+                throw CatalogMappingError.invalidResponse
+            }
+            return status
+        }
         guard let id = canonicalUUID(value.submissionID),
-              let wallpaperID = try canonicalOptionalUUID(value.wallpaperID),
               isSafeRevision(value.revision),
               value.generation > 0,
               isSafeRevision(value.generation),
@@ -1088,11 +1178,13 @@ public actor SupabaseCatalogGateway:
             moderationReasonCodes: value.moderationReasonCodes,
             creatorFacingNote: value.creatorFacingNote,
             createdAt: try exactTimestamp(value.createdAt),
-            updatedAt: try exactTimestamp(value.updatedAt)
+            updatedAt: try exactTimestamp(value.updatedAt),
+            wallpaperStatus: wallpaperStatus
         )
     }
 
     private func creatorDraft(_ value: CreatorDraftDTO) throws -> CreatorDraft {
+        let sourceURL = try validatedOptionalHTTPSURL(value.rights.sourceURL)
         guard let categoryID = canonicalUUID(value.primaryCategoryID),
               let licenseID = canonicalUUID(value.rights.licenseID),
               let basis = CreatorRightsBasis(rawValue: value.rights.basis),
@@ -1101,8 +1193,7 @@ public actor SupabaseCatalogGateway:
               Set(tagIDs).count == tagIDs.count,
               value.rights.proofObjectIDs.count <= 5,
               let proofIDs = try? value.rights.proofObjectIDs.map(requiredCanonicalUUID),
-              Set(proofIDs).count == proofIDs.count,
-              let sourceURL = try validatedOptionalHTTPSURL(value.rights.sourceURL)
+              Set(proofIDs).count == proofIDs.count
         else { throw CatalogMappingError.invalidResponse }
         let requirements = CreatorRightsRequirements(
             requiresSourceURL: value.rights.requirements.requiresSourceURL,
@@ -1196,7 +1287,28 @@ public actor SupabaseCatalogGateway:
         )
     }
 
+    private func moderationArtifact(_ artifact: CreatorCanonicalArtifactDTO) throws -> CreatorCanonicalArtifact {
+        guard let role = CreatorArtifactRole(rawValue: artifact.role),
+              [.poster, .preview, .videoDefault].contains(role),
+              let url = URL(string: artifact.url),
+              remoteURLPolicy.allowsSignedModeratorArtifact(url)
+        else { throw CatalogMappingError.invalidResponse }
+        return try CreatorCanonicalArtifact(
+            role: role, url: url, sha256: artifact.sha256, byteCount: artifact.byteCount,
+            mediaType: artifact.mediaType, width: artifact.width, height: artifact.height,
+            durationMilliseconds: artifact.durationMilliseconds, remoteURLPolicy: remoteURLPolicy
+        )
+    }
+
     private func moderationQueueItem(_ value: ModerationQueueItemDTO) throws -> ModerationQueueItem {
+        let sourceURL = try validatedOptionalHTTPSURL(value.sourceURL)
+        let state = value.state.flatMap(CreatorSubmissionState.init(rawValue:)) ?? .underReview
+        let wallpaperID = value.wallpaperID.flatMap(canonicalUUID)
+        guard value.state.map({ ["submitted", "under_review", "approved"].contains($0) }) ?? true,
+              value.wallpaperID == nil || wallpaperID != nil,
+              value.wallpaperRevision.map(isSafeRevision) ?? true,
+              state != .approved || (wallpaperID != nil && value.wallpaperRevision != nil)
+        else { throw CatalogMappingError.invalidResponse }
         guard let submissionID = canonicalUUID(value.submissionID),
               let creatorID = canonicalUUID(value.creator.id),
               isSafeRevision(value.revision),
@@ -1211,30 +1323,13 @@ public actor SupabaseCatalogGateway:
               value.tagNames.allSatisfy({ isPlainCreatorText($0, maximum: 80) }),
               ["everyone", "teen", "mature"].contains(value.contentRating),
               value.attributionText.map({ isPlainCreatorText($0, maximum: 1_000) }) ?? true,
-              let sourceURL = try validatedOptionalHTTPSURL(value.sourceURL),
               isPlainCreatorText(value.rightsSummary, maximum: 300),
               let proofStatus = CreatorProofStatus(rawValue: value.proofStatus),
               value.canonicalArtifacts.count <= 10,
               value.findings.count <= 100,
               value.modelSuggestions.count <= 100
         else { throw CatalogMappingError.invalidResponse }
-        let artifacts = try value.canonicalArtifacts.map { artifact -> CreatorCanonicalArtifact in
-            guard let role = CreatorArtifactRole(rawValue: artifact.role),
-                  let url = URL(string: artifact.url),
-                  remoteURLPolicy.allowsSignedModeratorArtifact(url)
-            else { throw CatalogMappingError.invalidResponse }
-            return try CreatorCanonicalArtifact(
-                role: role,
-                url: url,
-                sha256: artifact.sha256,
-                byteCount: artifact.byteCount,
-                mediaType: artifact.mediaType,
-                width: artifact.width,
-                height: artifact.height,
-                durationMilliseconds: artifact.durationMilliseconds,
-                remoteURLPolicy: remoteURLPolicy
-            )
-        }
+        let artifacts = try value.canonicalArtifacts.map(moderationArtifact)
         let processing = CreatorProcessingStatusDTO(
             submissionID: value.submissionID,
             revision: value.revision,
@@ -1271,7 +1366,10 @@ public actor SupabaseCatalogGateway:
             mediaFacts: mapped.mediaFacts,
             findings: mapped.findings,
             modelSuggestions: mapped.suggestions,
-            submittedAt: try exactTimestamp(value.submittedAt)
+            submittedAt: try exactTimestamp(value.submittedAt),
+            state: state,
+            wallpaperID: wallpaperID,
+            wallpaperRevision: value.wallpaperRevision
         )
     }
 
@@ -1283,14 +1381,115 @@ public actor SupabaseCatalogGateway:
         }
     }
 
-    private func safely<Value: Sendable>(
+    private func invokeFunction<Payload: Decodable & Sendable>(
+        _ name: String,
+        options: FunctionInvokeOptions,
+        retryInterrupted: Bool = false
+    ) async throws -> CatalogFunctionEnvelope<Payload> {
+        do {
+            if retryInterrupted {
+                // The caller opts in only for reads or server-deduplicated
+                // commands. Reuse exactly the same body and idempotency key.
+                return try await retryConnectionLoss {
+                    try await client.functions.invoke(name, options: options)
+                }
+            }
+            return try await client.functions.invoke(name, options: options)
+        } catch let FunctionsError.httpError(status, body) {
+            // The SDK throws before decoding non-2xx responses. Keep the same
+            // envelope validation (including request ID and API version) at the
+            // call site, without exposing arbitrary SDK errors or response text.
+            guard (400...599).contains(status) else { throw CatalogMappingError.invalidResponse }
+            if body.count <= 16_384,
+               let envelope = try? JSONDecoder().decode(
+                    CatalogFunctionEnvelope<Payload>.self, from: body
+               ) {
+                guard envelope.data == nil, envelope.error != nil else { throw CatalogMappingError.invalidResponse }
+                return envelope
+            }
+            if body.count <= 16_384,
+               let fields = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+               fields["api_version"] != nil || fields["request_id"] != nil {
+                throw CatalogMappingError.invalidResponse
+            }
+            // A gateway or proxy may return no WALI envelope at all. Preserve
+            // retryability so temporary outages can use verified cached state.
+            if status == 408 || status == 429 || (500...599).contains(status) {
+                throw CatalogRemoteError(
+                    code: status == 429 ? "rate_limited" : "temporarily_unavailable",
+                    safeMessage: nil, retryable: true
+                )
+            }
+            throw CatalogMappingError.invalidResponse
+        }
+    }
+
+    /// These RPCs read state but travel as POST requests, so URLSession cannot
+    /// infer that retrying a dropped connection is safe. Retry once only for
+    /// explicitly read-only operations; mutations keep their own recovery rules.
+    private func safelyReading<Value: Sendable>(
+        context: StaticString = #function,
+        _ operation: () async throws -> Value
+    ) async throws -> Value {
+        try await safely(context: context) {
+            try await retryConnectionLoss(context: context, operation)
+        }
+    }
+
+    private func retryConnectionLoss<Value: Sendable>(
+        context: StaticString = #function,
         _ operation: () async throws -> Value
     ) async throws -> Value {
         do {
             return try await operation()
+        } catch let error as URLError where error.code == .networkConnectionLost {
+            try Task.checkCancellation()
+            Self.logger.notice("Retrying interrupted replay-safe request; operation=\(String(describing: context), privacy: .public)")
+            try await Task.sleep(for: .milliseconds(250))
+            return try await operation()
+        }
+    }
+
+    private func safely<Value: Sendable>(
+        context: StaticString = #function,
+        _ operation: () async throws -> Value
+    ) async throws -> Value {
+        do {
+            let result = try await operation()
+            try Task.checkCancellation()
+            return result
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch where Task.isCancelled {
+            throw CancellationError()
+        } catch let error as URLError {
+            if error.code == .cancelled { throw CancellationError() }
+            Self.logger.error("Catalog transport failed; operation=\(String(describing: context), privacy: .public) code=\(error.code.rawValue, privacy: .public)")
+            throw CatalogRemoteError(
+                code: error.code == .notConnectedToInternet ? "network_unavailable" : (error.code == .timedOut ? "request_timed_out" : "temporarily_unavailable"),
+                safeMessage: nil, retryable: true
+            )
+        } catch let error as PostgrestError {
+            let providerCode = error.code ?? "unknown"
+            let safeCode = providerCode.utf8.count <= 16 && providerCode.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) }) ? providerCode : "unknown"
+            Self.logger.error("Catalog RPC failed; operation=\(String(describing: context), privacy: .public) code=\(safeCode, privacy: .public)")
+            if error.message.hasPrefix("WALI_") {
+                let token = String(error.message.dropFirst(5))
+                if (1...64).contains(token.utf8.count), token.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || $0 == 95 }) {
+                    throw CatalogRemoteError(code: token.lowercased(), safeMessage: nil, retryable: false)
+                }
+            }
+            if providerCode == "PGRST301" || providerCode == "PGRST303" {
+                throw CatalogRemoteError(code: "session_expired", safeMessage: nil, retryable: false)
+            }
+            throw CatalogRemoteError(code: "temporarily_unavailable", safeMessage: nil, retryable: true)
+        } catch is DecodingError {
+            Self.logger.error("Catalog response decoding failed; operation=\(String(describing: context), privacy: .public)")
+            throw CatalogMappingError.invalidResponse
         } catch let error as CatalogRemoteError {
             throw error
         } catch let error as CatalogMappingError {
+            Self.logger.error("Catalog response validation failed; operation=\(String(describing: context), privacy: .public)")
             throw error
         } catch let error as CatalogRequestError {
             throw error
@@ -1302,6 +1501,35 @@ public actor SupabaseCatalogGateway:
                 retryable: true
             )
         }
+    }
+}
+
+private struct ModerationReadRequestDTO: Encodable {
+    let requestID: String
+    let operation: String
+    let status: String?
+    let sort: String?
+    let cursor: String?
+    let limit: Int
+
+    enum CodingKeys: String, CodingKey {
+        case apiVersion = "api_version"
+        case requestID = "request_id"
+        case idempotencyKey = "idempotency_key"
+        case operation, status, sort, cursor, limit
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("moderation.v1", forKey: .apiVersion)
+        try container.encode(requestID, forKey: .requestID)
+        try container.encode(requestID, forKey: .idempotencyKey)
+        try container.encode(operation, forKey: .operation)
+        try container.encodeIfPresent(status, forKey: .status)
+        try container.encodeIfPresent(sort, forKey: .sort)
+        if let cursor { try container.encode(cursor, forKey: .cursor) }
+        else { try container.encodeNil(forKey: .cursor) }
+        try container.encode(limit, forKey: .limit)
     }
 }
 
@@ -1593,6 +1821,7 @@ private struct CreatorSubmissionPageDTO: Decodable, Sendable {
 private struct CreatorSubmissionDTO: Decodable, Sendable {
     let submissionID: String
     let wallpaperID: String?
+    let wallpaperStatus: String?
     let revision: UInt64
     let generation: UInt64
     let state: String
@@ -1607,6 +1836,7 @@ private struct CreatorSubmissionDTO: Decodable, Sendable {
         case revision, generation, state, draft, processing
         case submissionID = "submission_id"
         case wallpaperID = "wallpaper_id"
+        case wallpaperStatus = "wallpaper_status"
         case moderationReasonCodes = "moderation_reason_codes"
         case creatorFacingNote = "creator_facing_note"
         case createdAt = "created_at"
@@ -1929,6 +2159,9 @@ private struct ModerationQueueItemDTO: Decodable, Sendable {
     let submissionID: String
     let revision: UInt64
     let generation: UInt64
+    let state: String?
+    let wallpaperID: String?
+    let wallpaperRevision: UInt64?
     let creator: CreatorPublicIdentityDTO
     let proposedTitle: String
     let proposedDescription: String
@@ -1946,7 +2179,9 @@ private struct ModerationQueueItemDTO: Decodable, Sendable {
     let submittedAt: String
 
     enum CodingKeys: String, CodingKey {
-        case revision, generation, creator, findings
+        case revision, generation, creator, findings, state
+        case wallpaperID = "wallpaper_id"
+        case wallpaperRevision = "wallpaper_revision"
         case submissionID = "submission_id"
         case proposedTitle = "proposed_title"
         case proposedDescription = "proposed_description"
@@ -2007,12 +2242,78 @@ private struct ModerationReportDTO: Decodable, Sendable {
     let reasonCode: String
     let safeSummary: String
     let createdAt: String
+    let status: String
+    let wallpaperID: String
+    let wallpaperRevision: UInt64
+    let wallpaperTitle: String
+    let wallpaperStatus: String
+    let releaseID: String?
+    let edition: UInt64?
+    let canonicalArtifacts: [CreatorCanonicalArtifactDTO]
     enum CodingKeys: String, CodingKey {
-        case revision
+        case revision, status, edition
         case reportID = "report_id"
         case reasonCode = "reason_code"
         case safeSummary = "safe_summary"
         case createdAt = "created_at"
+        case wallpaperID = "wallpaper_id"
+        case wallpaperRevision = "wallpaper_revision"
+        case wallpaperTitle = "wallpaper_title"
+        case wallpaperStatus = "wallpaper_status"
+        case releaseID = "release_id"
+        case canonicalArtifacts = "canonical_artifacts"
+    }
+}
+
+private struct ResolveReportRequestDTO: Encodable, Sendable {
+    let apiVersion = "moderation.v1"
+    let requestID: String
+    let idempotencyKey: String
+    let reportID: String
+    let expectedRevision: UInt64
+    let expectedWallpaperRevision: UInt64
+    let action: String
+    let reasonCode: String
+    let privateNote: String
+
+    init(requestID: String, request: ModerationReportResolutionRequest) {
+        self.requestID = requestID
+        idempotencyKey = request.idempotencyKey
+        reportID = request.reportID.uuidString.lowercased()
+        expectedRevision = request.expectedRevision
+        expectedWallpaperRevision = request.expectedWallpaperRevision
+        action = request.action.rawValue
+        reasonCode = request.reasonCode
+        privateNote = request.privateNote
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case action
+        case apiVersion = "api_version"
+        case requestID = "request_id"
+        case idempotencyKey = "idempotency_key"
+        case reportID = "report_id"
+        case expectedRevision = "expected_revision"
+        case expectedWallpaperRevision = "expected_wallpaper_revision"
+        case reasonCode = "reason_code"
+        case privateNote = "private_note"
+    }
+}
+
+private struct ResolveReportResponseDTO: Decodable, Sendable {
+    let reportID: String
+    let revision: UInt64
+    let status: String
+    let action: String
+    let wallpaperID: String
+    let wallpaperRevision: UInt64
+    let wallpaperStatus: String
+    enum CodingKeys: String, CodingKey {
+        case revision, status, action
+        case reportID = "report_id"
+        case wallpaperID = "wallpaper_id"
+        case wallpaperRevision = "wallpaper_revision"
+        case wallpaperStatus = "wallpaper_status"
     }
 }
 
@@ -2066,6 +2367,49 @@ private struct ModerationDecisionResponseDTO: Decodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case revision, generation, state, decision
         case submissionID = "submission_id"
+    }
+}
+
+private struct PublishReleaseRequestDTO: Encodable, Sendable {
+    let apiVersion = "moderation.v1"
+    let requestID: String
+    let idempotencyKey: String
+    let submissionID: String
+    let expectedRevision: UInt64
+    let expectedGeneration: UInt64
+    let expectedWallpaperRevision: UInt64
+    let manifestSchema = ["epoch": 1, "revision": 0]
+
+    init(requestID: String, request: PublishReleaseRequest) {
+        self.requestID = requestID
+        idempotencyKey = request.idempotencyKey
+        submissionID = request.submissionID.uuidString.lowercased()
+        expectedRevision = request.expectedRevision
+        expectedGeneration = request.expectedGeneration
+        expectedWallpaperRevision = request.expectedWallpaperRevision
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case apiVersion = "api_version", requestID = "request_id", idempotencyKey = "idempotency_key"
+        case submissionID = "submission_id", expectedRevision = "expected_revision"
+        case expectedGeneration = "expected_generation", expectedWallpaperRevision = "expected_wallpaper_revision"
+        case manifestSchema = "manifest_schema"
+    }
+}
+
+private struct PublishedReleaseDTO: Decodable, Sendable {
+    let wallpaperID: String
+    let releaseID: String
+    let edition: UInt64
+    let wallpaperRevision: UInt64
+    let manifestDigest: String
+    let keyID: String
+    let publishedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case edition
+        case wallpaperID = "wallpaper_id", releaseID = "release_id", wallpaperRevision = "wallpaper_revision"
+        case manifestDigest = "manifest_digest", keyID = "key_id", publishedAt = "published_at"
     }
 }
 

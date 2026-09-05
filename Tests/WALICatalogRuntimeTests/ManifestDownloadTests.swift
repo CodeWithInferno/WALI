@@ -79,9 +79,13 @@ final class ManifestDownloadTests: XCTestCase {
             transport: FakeDownloadTransport(file: source, response: response),
             approvedHosts: ["catalog.wali.example"]
         )
-        let cache = try CatalogPresentationMediaCache(root: cacheRoot, downloader: downloader)
+        let cache = try CatalogPresentationMediaCache(
+            root: cacheRoot, downloader: downloader,
+            maximumByteCount: UInt64(bytes.count), maximumFileCount: 1
+        )
+        var lease: CatalogMediaLease? = CatalogMediaLease()
 
-        let output = try await cache.localURL(for: artifact)
+        let output = try await cache.localURL(for: artifact, retaining: XCTUnwrap(lease))
 
         XCTAssertTrue(output.isFileURL)
         XCTAssertEqual(output.deletingLastPathComponent().standardizedFileURL, cacheRoot.standardizedFileURL)
@@ -90,6 +94,24 @@ final class ManifestDownloadTests: XCTestCase {
             (try FileManager.default.attributesOfItem(atPath: output.path)[.posixPermissions] as? NSNumber)?.intValue,
             0o400
         )
+
+        let other = try CatalogArtifact(
+            role: .poster, url: remoteURL, sha256: artifact.sha256,
+            byteCount: artifact.byteCount, mediaType: "image/png",
+            width: 1, height: 1, durationMilliseconds: 0
+        )
+        do {
+            _ = try await cache.localURL(for: other, retaining: CatalogMediaLease())
+            XCTFail("A live presentation must survive cache pressure")
+        } catch let error as CatalogPresentationMediaCacheError {
+            XCTAssertEqual(error, .capacityExceeded)
+        }
+        XCTAssertEqual(try Data(contentsOf: output), bytes)
+        lease = nil
+        try bytes.write(to: source)
+        let replacement = try await cache.localURL(for: other, retaining: CatalogMediaLease())
+        XCTAssertEqual(try Data(contentsOf: replacement), bytes)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
     }
 
     func testPresentationMediaCacheAcceptsCanonicalPlaybackArtifact() async throws {
@@ -194,6 +216,7 @@ final class ManifestDownloadTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: output), bytes)
         XCTAssertTrue(output.lastPathComponent.hasSuffix(".wali-quarantine.jpg"))
         XCTAssertFalse(output.lastPathComponent.contains("poster"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path), "The transport temporary copy must be removed after verification")
     }
 
     func testVideoDownloadUsesAVFoundationRecognizableMP4Extension() async throws {

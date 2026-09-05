@@ -1,0 +1,29 @@
+[Unit]
+Description=Prepare WALI rootless container namespace
+Before=wali-media-worker.service
+PartOf=wali-media-worker.service
+X-WALI-Managed=true
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=wali-worker
+Group=wali-worker
+Environment=HOME=/var/lib/wali-worker
+Environment=XDG_RUNTIME_DIR=/run/wali-media-worker
+Environment=CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf
+WorkingDirectory=/
+RuntimeDirectory=wali-media-worker
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+StateDirectory=wali-worker
+StateDirectoryMode=0700
+UMask=0077
+# Only the fixed namespace bootstrap may use the subordinate-ID helpers.
+# It receives no database credentials and never processes uploaded files.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+AmbientCapabilities=
+NoNewPrivileges=no
+ExecStart=/usr/bin/podman unshare /bin/true
+TimeoutStartSec=30s
+TasksMax=64

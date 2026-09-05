@@ -16,8 +16,9 @@ end.parse!
 required = %i[configuration label bundle_identifier team app_group]
 missing = required.reject { |key| options.key?(key) }
 abort("signature metadata validator missing options: #{missing.join(', ')}") if missing.any?
-abort("signature metadata validator only accepts Development metadata") unless options[:configuration] == "Development"
-abort("Development signature metadata requires a nonempty team") if options[:team].to_s.empty?
+configuration = options[:configuration]
+abort("signature metadata validator requires Development or Release") unless %w[Development Release].include?(configuration)
+abort("#{configuration} signature metadata requires a nonempty team") if options[:team].to_s.empty?
 
 begin
   metadata = JSON.parse($stdin.read)
@@ -31,6 +32,7 @@ expected_application_identifier = "#{team}.#{options.fetch(:bundle_identifier)}"
 expected_group = options.fetch(:app_group)
 entitlements = metadata["entitlements"]
 entitlements = {} unless entitlements.is_a?(Hash)
+authority_prefix = configuration == "Release" ? "Developer ID Application:" : "Apple Development:"
 
 failure =
   if metadata["sealed"] != true
@@ -38,13 +40,17 @@ failure =
   elsif metadata["strict_valid"] != true
     "#{label} failed strict code-signature validation"
   elsif metadata["signature"] == "adhoc"
-    "Development verification rejects ad-hoc signature for #{label}"
-  elsif !Array(metadata["authorities"]).any? { |authority| authority.start_with?("Apple Development:") }
-    "#{label} must be signed by an Apple Development: authority"
+    "#{configuration} verification rejects ad-hoc signature for #{label}"
+  elsif !Array(metadata["authorities"]).any? { |authority| authority.start_with?(authority_prefix) }
+    "#{label} must be signed by an #{authority_prefix} authority"
   elsif metadata["team_identifier"] != team
     "#{label} TeamIdentifier must equal DEVELOPMENT_TEAM #{team}"
   elsif metadata["runtime"] != true
     "#{label} signed configuration is missing hardened runtime"
+  elsif configuration == "Release" && metadata["timestamp"].to_s.empty?
+    "#{label} Release signature requires a secure timestamp"
+  elsif configuration == "Release" && entitlements["com.apple.security.get-task-allow"] == true
+    "#{label} Release signature must not allow debugger attachment"
   end
 
 team_entitlement = entitlements["com.apple.developer.team-identifier"]
@@ -81,4 +87,4 @@ elsif failure.nil?
 end
 
 abort(failure) if failure
-puts "Validated #{label} Development signature metadata"
+puts "Validated #{label} #{configuration} signature metadata"

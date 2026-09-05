@@ -4,11 +4,13 @@ WALI is an open-source, native macOS live-wallpaper system focused on efficient 
 
 > **Status:** functional local pre-release. The native library, per-display
 > renderer, background Engine host, local XPC boundaries, durable storage, and
-> video import/transcode path are implemented. A secure marketplace foundation
-> is under active integration and public creator uploads remain disabled.
-> Distribution is still gated on
-> real-team signing, notarization, and physical-hardware endurance and Spaces
-> verification; this is not yet a supported public release.
+> video import/transcode path are implemented. Native staging verification now
+> covers creator agreement/upload/submission, moderator approval/publication,
+> report removal, account export, and catalog installation with Cancel/Retry.
+> Public release remains gated on deletion and interrupted-job verification,
+> moderation policy, legal approval, recovery/capacity evidence, distribution signing,
+> notarization, and physical-hardware checks. See the dated
+> [evidence ledger](docs/release/marketplace-public-beta-evidence.md).
 
 ## Product direction
 
@@ -20,12 +22,12 @@ WALI is an open-source, native macOS live-wallpaper system focused on efficient 
 - Control playback and inspect WALI CPU/memory from the menu bar.
 - Offer a native SwiftUI library following macOS interaction and accessibility conventions.
 - Browse an optional signed catalog whose downloads remain playable offline.
-- Plan a future creator flow for explicitly licensed media through a hostile-media pipeline.
+- Upload creator media through a bounded processing and human-review pipeline.
 - Support the current user's session lock screen only through tested, version-gated compatibility adapters.
 
 WALI cannot and will not bypass FileVault preboot, SIP, protected login UI, or another user's consent.
 Lock Screen continuity is an opt-in private compatibility adapter currently
-limited to verified macOS build 25F80. Apple may change this format at any
+limited to fixture-backed macOS builds 25F80 and 25G83. Apple may change this format at any
 update; WALI then fails closed until a new fixture-backed epoch is accepted.
 Because macOS protects the current-user wallpaper store, the marketplace plan
 isolates this optional permission in a narrow `WALILockScreenHelper`; the app,
@@ -39,7 +41,7 @@ Desktop and Lock Screen playback timelines are independent.
 Current implementation:
 
 ```text
-WALI.app              native library, public marketplace, basic account shell, settings, and XPC client
+WALI.app              native library, marketplace, creator/moderation/account routes, settings, XPC client
 WALIAgent.app         Engine, renderer, menu-bar, persistence, import/install authority
 WALITranscoder.xpc    agent-private HEVC/HEIC media worker with a bounded XPC contract
 WALILockScreenHelper  optional fixed-operation Lock Screen compatibility helper
@@ -48,12 +50,12 @@ WALIWire              bounded versioned app/agent and agent/worker DTOs and code
 WALIEngine            revisioned, idempotent use cases and orchestration policy
 WALIUI                reusable native presentation models and status panel
 WALICatalog           canonical manifest, trust, revocation, and identifier contract
-WALICatalogRuntime    foreground auth/catalog/report/install/download adapter
+WALICatalogRuntime    foreground auth/catalog/creator/moderation/account/download adapters
 ```
 
 The foreground process sends intentions and presents snapshots; the agent owns
 mutable runtime state, display reconciliation, playback, import jobs, and local
-storage. Imported videos are inspected and converted to silent HEVC playback
+storage through atomic JSON snapshots and content-addressed files. Imported videos are inspected and converted to silent HEVC playback
 variants plus an HEIC poster by the embedded worker, then independently
 verified and published into the agent's content-addressed store. The checked-in
 renderer uses native AppKit wallpaper windows and AVFoundation playback and
@@ -120,11 +122,11 @@ isolated restore, signed helper lifecycle, and notarization remain explicit
 environment gates; see the
 [public-beta checklist](docs/release/marketplace-public-beta-checklist.md).
 
-Debug verification permits credential-free, unsealed app, agent, and XPC
-wrappers, but Lock Screen continuity stays unavailable because an ad-hoc peer
-cannot be authenticated strongly enough for Full Disk Access. Linker-produced
-ad-hoc signatures on Mach-O payloads are not treated as cryptographically
-signed wrappers. Debug compiles the UI-test target
+`make build` seals Debug app, agent, and XPC bundles with credential-free ad-hoc
+signatures so macOS can register the background agent. Lock Screen continuity
+stays unavailable because an ad-hoc peer cannot be authenticated strongly enough
+for Full Disk Access. Hostless test builds may remain unsealed; linker-produced
+Mach-O signatures alone do not seal an app bundle. Debug compiles the UI-test target
 and runs every hostless unit suite, but it uses `com.wali.debug.*`, omits
 app-group entitlements, and cannot validate shared-container behavior.
 Development uses `com.wali.development.*`, automatic Apple Development signing,
@@ -143,19 +145,21 @@ and intentionally fails until `Config/Signing.local.xcconfig` is configured.
 - Complete physical-hardware endurance runs for sustained playback and imports,
   sleep/wake and lock/unlock, low-power and thermal states, display hot-plug and
   scale changes, and multiple Spaces/full-screen configurations.
-- Complete marketplace Gates A–E, including counsel approval, dedicated worker
-  deployment, hosted staging canary, restore proof, key rotation, and
-  exact-candidate SBOM/vulnerability evidence.
-- Keep creator uploads disabled until rights-proof policy is either implemented
-  or explicitly excluded, creator/moderator production gateways are composed,
-  and publication/revocation pass the hosted signing canary.
-- Do not expose account export/deletion until native request/status/retrieval,
-  private export download, session revocation, and Auth identity cleanup are
-  complete and exercised end to end.
+- Complete marketplace Gates A–E, including counsel approval, redistribution
+  rights, restore proof, key rotation, capacity, and exact-candidate
+  SBOM/vulnerability evidence. The dedicated staging worker and original-media
+  canary are recorded in the evidence ledger.
+- Complete moderation policy and rights screening, post-publication object and
+  copyright handling, and technical revocation checks before enabling public
+  creator submissions. The original staging canary passed moderator MFA,
+  review/revision, publication, and report hiding/removal.
+- Finish native deletion/session
+  revocation/Auth cleanup verification. The staging export check does not prove
+  the deletion path.
 
-Credential-free Debug builds prove the project graph and hostless behavior
-only. They do not prove authenticated helper IPC, external signing,
-notarization, or real display/window-server behavior above.
+Credential-free Debug builds support local app interaction and hostless checks.
+They do not prove team-authenticated helper IPC, external signing, notarization,
+or the hardware and lifecycle release gates above.
 
 ## Principles
 

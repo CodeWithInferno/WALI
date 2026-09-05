@@ -206,7 +206,7 @@ final class CatalogInstallTests: XCTestCase {
         let router = AgentCommandRouter(
             catalogInstallHandler: { _, _, _ in
                 await calls.increment()
-                return Self.engineItem(for: fixture.request)
+                return CatalogInstallResult(item: Self.engineItem(for: fixture.request))
             },
             effectHandler: { _, _ in .unchanged }
         )
@@ -230,7 +230,7 @@ final class CatalogInstallTests: XCTestCase {
         let router = AgentCommandRouter(
             catalogInstallHandler: { _, _, _ in
                 await calls.increment()
-                return Self.engineItem(for: fixture.request)
+                return CatalogInstallResult(item: Self.engineItem(for: fixture.request))
             },
             effectHandler: { _, _ in .unchanged }
         )
@@ -260,7 +260,7 @@ final class CatalogInstallTests: XCTestCase {
         let router = AgentCommandRouter(
             catalogInstallHandler: { request, _, _ in
                 await calls.increment()
-                return Self.engineItem(for: request)
+                return CatalogInstallResult(item: Self.engineItem(for: request))
             },
             effectHandler: { _, _ in .unchanged }
         )

@@ -1,9 +1,10 @@
 [Unit]
 Description=WALI marketplace media worker
 Documentation=file:/usr/share/doc/wali-worker/media-worker.md
-After=network-online.target
+After=network-online.target wali-podman-namespace.service
+Requires=wali-podman-namespace.service
 Wants=network-online.target
-ConditionPathIsExecutable=/opt/wali-worker/current/wali-media-worker
+ConditionFileIsExecutable=/opt/wali-worker/current/wali-media-worker
 ConditionPathExists=/etc/wali-worker/worker.env
 X-WALI-Managed=true
 
@@ -25,6 +26,7 @@ UMask=0077
 
 RuntimeDirectory=wali-media-worker
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 StateDirectory=wali-worker
 StateDirectoryMode=0700
 CacheDirectory=wali-worker
@@ -34,16 +36,19 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
+BindPaths=/dev/fuse
+DeviceAllow=/dev/fuse rw
 PrivateMounts=yes
 NoNewPrivileges=yes
 RestrictSUIDSGID=yes
 ProtectClock=yes
-ProtectHostname=yes
+# The OCI runtime sets the hostname inside its private UTS namespace.
+# Host hostname changes still require capabilities this service does not have.
 ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectProc=invisible
-ProcSubset=pid
+ProcSubset=all
 LockPersonality=yes
 SystemCallArchitectures=native
 MemoryDenyWriteExecute=yes

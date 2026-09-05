@@ -97,6 +97,13 @@ and timestamps. It never contains lease owners, private moderator notes,
 rights-proof path, worker credentials, model raw JSON, another creator, or
 internal exception text.
 
+The optional `wallpaper_status` field reports the logical listing's current
+visibility (`draft`, `published`, `hidden`, `suspended`, or `removed`). It is
+separate from the submission's historical `state`: removing a published
+listing does not rewrite its review/publication history. Creator Studio shows
+that restriction in its list and submission details. No private report or
+moderator decision note is included.
+
 Page limits and cursor behavior follow `catalog-v1.md`. A missing creator grant
 returns `creator_role_required`; it is not represented as an empty list.
 
@@ -150,9 +157,12 @@ not enqueue again. Additional errors: `upload_incomplete`, `upload_changed`,
 `save-submission-draft` is a bounded creator RPC/Edge command accepting
 submission ID, expected revision, idempotency key, and only the creator fields
 listed above. It is allowed in `draft`, `ready_for_submission`, and
-`changes_requested`. Changes after a review snapshot increment revision and
-return to `changes_requested` or `draft`; media replacement requires a new
-upload session/generation. It never mutates a published release.
+`changes_requested`. Saving requested metadata corrections increments revision,
+resets the rights declaration to pending review, and returns to
+`ready_for_submission` only when the current generation has a completed attempt
+and all four verified artifacts still exist. The creator can then submit the
+new revision for another review. Media replacement requires a new upload
+session/generation. It never mutates a published release.
 
 Response contains the normalized stored proposal, new revision, generation,
 state, and any safe field validation errors. Invalid fields are returned as

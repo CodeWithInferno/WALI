@@ -19,9 +19,33 @@ struct LibrarySurface: View {
     @State private var hoveringID: UUID?
 
     var body: some View {
+        VStack(spacing: 0) {
+            WALIPageHeader("Library") {
+                Text(wallpapers.count == 1 ? "1 wallpaper" : "\(wallpapers.count) wallpapers")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            libraryContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .dropDestination(for: URL.self) { urls, _ in
+            let movieURLs = urls.filter(\.isFileURL)
+            guard !movieURLs.isEmpty else { return false }
+            onDrop(movieURLs)
+            return true
+        }
+        .onDisappear {
+            previewTask?.cancel()
+            hoveringID = nil
+        }
+        .accessibilityIdentifier("WALI.Library")
+    }
+
+    private var libraryContent: some View {
         Group {
             if wallpapers.isEmpty {
                 emptyState
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 GeometryReader { geometry in
                     let columnCount = WALILibraryLayout.columnCount(forAvailableWidth: geometry.size.width)
@@ -59,17 +83,8 @@ struct LibrarySurface: View {
                 }
             }
         }
-        .dropDestination(for: URL.self) { urls, _ in
-            let movieURLs = urls.filter(\.isFileURL)
-            guard !movieURLs.isEmpty else { return false }
-            onDrop(movieURLs)
-            return true
-        }
-        .onDisappear {
-            previewTask?.cancel()
-            hoveringID = nil
-        }
-        .accessibilityIdentifier("WALI.Library")
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
     }
 
     private var emptyState: some View {

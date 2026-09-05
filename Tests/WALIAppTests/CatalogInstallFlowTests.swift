@@ -88,7 +88,7 @@ final class CatalogInstallFlowTests: XCTestCase {
         XCTAssertEqual(received?.wallpaperID, Self.wallpaperID)
         XCTAssertEqual(received?.releaseID, Self.releaseID)
         XCTAssertNotNil(received?.quarantineReference)
-        XCTAssertEqual(coordinator.model.actionState, .idle)
+        XCTAssertEqual(coordinator.model.actionState, .succeeded(message: "Added to Library"))
         let recordedEvents = await events.values
         XCTAssertEqual(recordedEvents, ["security", "agent", "metric"])
     }

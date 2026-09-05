@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OSLog
 import WALICatalog
 
 public actor CatalogCache {
@@ -176,6 +177,15 @@ public struct CatalogRemoteURLPolicy: Sendable, Hashable {
 }
 
 final class RejectCatalogRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private static let logger = Logger(subsystem: "com.wali.catalog", category: "Transport")
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        guard let last = metrics.transactionMetrics.last else { return }
+        let protocolName = ["h2", "h3", "http/1.1"].contains(last.networkProtocolName ?? "")
+            ? last.networkProtocolName! : "other"
+        Self.logger.debug("Catalog transport: protocol=\(protocolName, privacy: .public) reused=\(last.isReusedConnection, privacy: .public) durationMs=\(Int(metrics.taskInterval.duration * 1_000), privacy: .public) status=\((last.response as? HTTPURLResponse)?.statusCode ?? 0, privacy: .public)")
+    }
+
     func urlSession(
         _ session: URLSession,
         task: URLSessionTask,

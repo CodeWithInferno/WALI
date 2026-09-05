@@ -68,8 +68,10 @@ metadata = {
     line.delete_prefix("Authority=") if line.start_with?("Authority=")
   end.compact,
   "team_identifier" => detail_value.call("TeamIdentifier"),
+  "timestamp" => detail_value.call("Timestamp"),
   "runtime" => details.any? do |line|
-    line.start_with?("flags=") && line.match?(/\bruntime\b/)
+    flags = line.match(/\bflags=0x([0-9a-fA-F]+)/)
+    flags && (flags[1].to_i(16) & 0x10000) != 0
   end,
   "entitlements" => entitlements
 }

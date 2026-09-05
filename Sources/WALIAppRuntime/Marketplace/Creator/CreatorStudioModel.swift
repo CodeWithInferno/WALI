@@ -18,6 +18,13 @@ public final class CreatorStudioModel {
     public private(set) var authorization: CreatorAuthorizationSnapshot
     public private(set) var submissions: [CreatorSubmission] = []
     public private(set) var loadState: CreatorStudioLoadState = .idle
+    public private(set) var nextCursor: String?
+    public private(set) var isLoadingMore = false
+    public private(set) var pageError: String?
+
+    public var hasProcessingSubmissions: Bool {
+        submissions.contains { $0.state == .processing || $0.state == .uploaded }
+    }
 
     public var canUseCreatorStudio: Bool {
         !locallyRestricted && authorization.canAccessCreatorStudio(at: .now)
@@ -36,12 +43,17 @@ public final class CreatorStudioModel {
     }
 
     public func updateAuthorization(_ value: CreatorAuthorizationSnapshot) {
+        guard authorization != value || locallyRestricted else { return }
         let subjectChanged = authorization.subjectID != value.subjectID
         authorization = value
         locallyRestricted = false
         loadGeneration &+= 1
+        if loadState == .loading { loadState = .idle }
+        isLoadingMore = false
+        pageError = nil
         if subjectChanged {
             submissions = []
+            nextCursor = nil
             loadState = .idle
         }
         guard canUseCreatorStudio else {
@@ -59,21 +71,89 @@ public final class CreatorStudioModel {
             return
         }
         loadGeneration &+= 1
+        isLoadingMore = false
+        pageError = nil
+        nextCursor = nil
         let generation = loadGeneration
         let grantRevision = authorization.creatorGrantRevision
         loadState = .loading
         do {
             let request = try CreatorListRequest()
             let page = try await gateway.submissions(request)
+            try Task.checkCancellation()
             guard generation == loadGeneration,
                   grantRevision == authorization.creatorGrantRevision,
                   canUseCreatorStudio
             else { return }
             submissions = page.items
+            nextCursor = page.nextCursor
             loadState = page.items.isEmpty ? .empty : .ready
+        } catch is CancellationError {
+            return
         } catch {
             guard generation == loadGeneration else { return }
             handle(error)
+        }
+    }
+
+    public func loadNextPage() async {
+        guard canUseCreatorStudio, !isLoadingMore, let cursor = nextCursor else { return }
+        let generation = loadGeneration
+        isLoadingMore = true
+        pageError = nil
+        defer { if generation == loadGeneration { isLoadingMore = false } }
+        do {
+            let page = try await gateway.submissions(CreatorListRequest(cursor: cursor))
+            try Task.checkCancellation()
+            guard generation == loadGeneration, canUseCreatorStudio else { return }
+            let existingIDs = Set(submissions.map(\.id))
+            submissions.append(contentsOf: page.items.filter { !existingIDs.contains($0.id) })
+            nextCursor = page.nextCursor
+        } catch is CancellationError {
+            return
+        } catch {
+            guard generation == loadGeneration else { return }
+            if CreatorRemoteFailureDisposition(error: error) == .accessRevoked {
+                restrictLocally()
+            } else {
+                pageError = "More submissions couldn’t be loaded. Try again."
+            }
+        }
+    }
+
+    public func refreshProcessingSubmissions() async {
+        let generation = loadGeneration
+        for submission in submissions where submission.state == .processing || submission.state == .uploaded {
+            guard !Task.isCancelled, canUseCreatorStudio, generation == loadGeneration else { return }
+            do {
+                let status = try await gateway.processingStatus(submissionID: submission.id, generation: submission.generation)
+                try Task.checkCancellation()
+                guard generation == loadGeneration, canUseCreatorStudio,
+                      let index = submissions.firstIndex(where: { $0.id == submission.id }),
+                      submissions[index].revision == submission.revision,
+                      status.revision >= submission.revision
+                else { continue }
+                submissions[index] = CreatorSubmission(
+                    id: submission.id, wallpaperID: submission.wallpaperID,
+                    revision: status.revision, generation: status.generation, state: status.state,
+                    draft: submission.draft, processing: status,
+                    moderationReasonCodes: submission.moderationReasonCodes,
+                    creatorFacingNote: submission.creatorFacingNote,
+                    createdAt: submission.createdAt, updatedAt: submission.updatedAt,
+                    wallpaperStatus: submission.wallpaperStatus
+                )
+                pageError = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled, generation == loadGeneration else { return }
+                if CreatorRemoteFailureDisposition(error: error) == .accessRevoked {
+                    restrictLocally()
+                    return
+                }
+                pageError = "Processing status couldn’t be refreshed. Try again in a moment."
+                return
+            }
         }
     }
 
@@ -113,11 +193,19 @@ public final class CreatorStudioModel {
         case .accessRevoked:
             restrictLocally()
         case .retryable:
-            submissions = []
-            loadState = .offline
+            if submissions.isEmpty {
+                loadState = (error as? CatalogRemoteError)?.code == "network_unavailable" ? .offline : .failed
+            } else {
+                loadState = .ready
+                pageError = "Submissions couldn’t be refreshed. Try again in a moment."
+            }
         case .stale, .terminal:
-            submissions = []
-            loadState = .failed
+            if submissions.isEmpty {
+                loadState = .failed
+            } else {
+                loadState = .ready
+                pageError = "Submissions couldn’t be refreshed. Try again in a moment."
+            }
         }
     }
 
@@ -125,6 +213,9 @@ public final class CreatorStudioModel {
         locallyRestricted = true
         loadGeneration &+= 1
         submissions = []
+        isLoadingMore = false
+        pageError = nil
+        nextCursor = nil
         loadState = .restricted
     }
 }

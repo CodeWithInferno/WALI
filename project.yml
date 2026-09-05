@@ -76,6 +76,7 @@ targets:
           CODE_SIGN_ENTITLEMENTS: Config/WALI.entitlements
         Release:
           CODE_SIGN_ENTITLEMENTS: Config/WALI.entitlements
+          PROVISIONING_PROFILE_SPECIFIER: "$(WALI_APP_PROVISIONING_PROFILE)"
     dependencies:
       - target: WALIAppRuntime
       - sdk: AVKit.framework
@@ -168,6 +169,7 @@ targets:
           CODE_SIGN_ENTITLEMENTS: Config/WALIAgent.entitlements
         Release:
           CODE_SIGN_ENTITLEMENTS: Config/WALIAgent.entitlements
+          PROVISIONING_PROFILE_SPECIFIER: "$(WALI_AGENT_PROVISIONING_PROFILE)"
     dependencies:
       - target: WALIAgentRuntime
       - target: WALITranscoder
@@ -229,6 +231,7 @@ targets:
           CODE_SIGN_ENTITLEMENTS: Config/WALILockScreenHelper.entitlements
         Release:
           CODE_SIGN_ENTITLEMENTS: Config/WALILockScreenHelper.entitlements
+          PROVISIONING_PROFILE_SPECIFIER: "$(WALI_HELPER_PROVISIONING_PROFILE)"
     dependencies:
       - target: WALILockScreenHelperRuntime
 

@@ -5,10 +5,14 @@ import WALIUI
 
 struct AccountView: View {
     let account: WALIAccountPresentation
+    let authenticationState: WALIMarketplaceActionState
     let profile: WALIAccountProfilePresentation?
     let profileState: WALIAccountPrivacyLoadState
     let exportState: WALIAccountExportPresentation
     let deletionState: WALIAccountDeletionPresentation
+    let moderatorAccess: ModeratorAccessModel?
+    let hasModeratorRole: Bool
+    let isModerationUnlocked: Bool
     let onSignIn: () -> Void
     let onSignOut: () -> Void
     let onRefresh: () -> Void
@@ -25,6 +29,19 @@ struct AccountView: View {
     @State private var mfaCode = ""
 
     var body: some View {
+        VStack(spacing: 0) {
+            WALIPageHeader("Account") { EmptyView() }
+            accountForm
+        }
+        .font(.body)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .accessibilityIdentifier("WALI.Marketplace.Account")
+        .sheet(isPresented: $showsDeletionConfirmation) {
+            deletionConfirmationSheet
+        }
+    }
+
+    private var accountForm: some View {
         Form {
                 Section {
                     HStack(spacing: 16) {
@@ -43,7 +60,7 @@ struct AccountView: View {
                                     Text("@\(handle)")
                                         .foregroundStyle(.secondary)
                                 }
-                                Text("This is your marketplace profile. Sign in with Apple only proves the account; it does not turn your email into this name or @handle.")
+                                Text("Your public marketplace profile")
                                     .font(.caption)
                                     .foregroundStyle(.tertiary)
                             }
@@ -69,6 +86,33 @@ struct AccountView: View {
                             Button("Refresh", action: onRefresh)
                             Button("Sign Out", action: onSignOut)
                         }
+                        .disabled(authenticationState == .working)
+                    }
+
+                    if authenticationState == .working {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text(accountIsSignedIn ? "Signing out…" : "Signing in…")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if case let .failed(message) = authenticationState {
+                        Label(message, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("WALI.Account.AuthenticationError")
+                    }
+                    if case let .failed(message) = profileState {
+                        Label(message, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if hasModeratorRole, let moderatorAccess, let profile {
+                    Section("Review Access") {
+                        ModeratorAccessView(
+                            model: moderatorAccess,
+                            subjectID: profile.userID,
+                            isUnlocked: isModerationUnlocked
+                        )
                     }
                 }
 
@@ -81,7 +125,7 @@ struct AccountView: View {
 
                         HStack {
                             Button(exportButtonTitle, action: exportButtonAction)
-                                .disabled(profile == nil || exportState == .working)
+                                .disabled(profile == nil || exportIsBusy)
                             if exportCanRefresh {
                                 Button("Refresh Status", action: onRefreshExport)
                             }
@@ -129,12 +173,8 @@ struct AccountView: View {
                 }
         }
         .formStyle(.grouped)
-        .font(.body)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .accessibilityIdentifier("WALI.Marketplace.Account")
-        .sheet(isPresented: $showsDeletionConfirmation) {
-            deletionConfirmationSheet
-        }
+        .scrollContentBackground(.hidden)
+        .clipped()
     }
 
     @ViewBuilder
@@ -142,10 +182,17 @@ struct AccountView: View {
         if #available(macOS 26.0, *) {
             Button("Sign in with Apple", systemImage: "apple.logo", action: onSignIn)
                 .buttonStyle(.glassProminent)
+                .disabled(authenticationState == .working)
         } else {
             Button("Sign in with Apple", systemImage: "apple.logo", action: onSignIn)
                 .buttonStyle(.borderedProminent)
+                .disabled(authenticationState == .working)
         }
+    }
+
+    private var accountIsSignedIn: Bool {
+        if case .signedIn = account { return true }
+        return false
     }
 
     @ViewBuilder
@@ -172,8 +219,19 @@ struct AccountView: View {
     }
 
     private var exportButtonTitle: String {
-        if case .ready = exportState { return "Save Export…" }
-        return "Request Export"
+        switch exportState {
+        case .ready: "Save Export…"
+        case .queued: "Export Queued"
+        case .processing: "Preparing Export…"
+        default: "Request Export"
+        }
+    }
+
+    private var exportIsBusy: Bool {
+        switch exportState {
+        case .working, .queued, .processing: true
+        default: false
+        }
     }
 
     private func exportButtonAction() {

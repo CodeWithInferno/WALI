@@ -4,10 +4,11 @@ Status: accepted contract under ADRs 0011, 0014, 0015, and 0016. Common JSON,
 envelope, ID, revision, idempotency, and safe-error rules are inherited from
 `catalog-v1.md`.
 
-Implementation status: bounded moderation/publication/revocation server
-contracts exist and are tested locally. The native moderator gateway and route,
-hosted signing boundary, production keys, and staging lifecycle are not
-configured. Rights-proof review is deferred and unavailable.
+Implementation status: bounded moderation/publication/revocation contracts and
+native review routes exist. The staging private media projection includes full
+video for human review; a poster or 30-second teaser is insufficient. Production
+keys, full native moderation lifecycle evidence, and rights-proof review remain
+release gates.
 
 ## Authorization
 
@@ -27,12 +28,12 @@ carry a server request ID and append an audit or moderation-action record.
 
 The private moderator RPC `moderation_queue_v1(status, cursor, limit)` returns:
 
-- submission ID, revision, and current processing generation;
+- submission ID, revision, current processing generation, state, and the logical wallpaper ID/revision;
 - creator public identity plus conflict-of-interest ID check;
 - proposed title, description, category, tags, rating, attribution, and source;
 - rights declaration basis/license/attestation and proof status, currently
   limited to no-proof `original` and `public_domain` declarations;
-- canonical poster/preview only, served from verified output;
+- canonical poster, 30-second preview, and full `video_default`, served from verified output;
 - deterministic media facts, duplicate signal, safe scanner/policy findings;
 - normalized model suggestions labelled as suggestions;
 - prior creator-facing decisions and append-only action summary.
@@ -41,7 +42,7 @@ It never returns service keys, queue credentials, worker lease secrets, raw
 upload bytes, raw classifier output, another user's unrelated data, claimant
 contact outside an assigned case, or arbitrary object paths.
 
-Queue filters are controlled status/reason/category values. Sort is exactly
+Queue status is `pending`, `under_review`, or `approved`. Approved submissions remain in the private queue until publication, so operators can finish or retry publication after restarting the app. Queue filters are controlled values. Sort is exactly
 `oldest_submitted`, `newest_submitted`, or `risk_priority`; arbitrary SQL is
 rejected. A queue cursor includes the complete stable timestamp/UUID tuple.
 
@@ -71,9 +72,7 @@ returns the original result. Additional errors: `mfa_required`,
 
 Local implementation includes private staging, digest-verified promotion,
 canonical signing/finalization, and client verification. This section defines
-the accepted contract, not an available production operation: native operator
-composition, hosted signing keys/boundary, exact-release deployment, and a
-staging publish/install canary remain release gates.
+the accepted contract. The native Ready to Publish queue exposes explicit publication and retries the same idempotent request while verified media promotion completes. Hosted production signing keys, exact-release deployment, and a staging publish/install canary remain release gates.
 
 Requires moderator or admin at AAL2. Request:
 
@@ -101,17 +100,43 @@ Additional errors: `publication_not_approved`, `publication_generation_stale`,
 
 ## Report and copyright case operations
 
-`moderation_reports_v1` returns assigned/open report projections without other
-users' unrelated reports. `resolve-report` accepts report ID, expected revision,
-controlled resolution/action codes, and bounded private/public notes. Supported
-actions are no action, hide pending review, suspend, delist, or escalate to a
-copyright/security case. A report alone never issues a critical revocation.
+`moderation_reports_v1` returns open, triaged, and appealed reports that are
+unassigned or assigned to the current reviewer; admins can see other assignments.
+Both the reporter and the wallpaper creator are excluded from reviewing their
+own case. The response includes the report's real revision, full bounded report
+text, wallpaper identity/title/status/revision, reported release/edition, and
+verified canonical media claims. The Edge read operation signs five-minute
+private artifact grants for that exact reported edition. Staff authorization and
+assignment are also enforced by the storage read policy. Native report pages
+support bounded pagination and verified full-video playback.
 
-Copyright cases store claimant/contact and notice/counter-notice objects only in
-private records/buckets. Case commands record statutory/event dates, assignment,
-delist/restore action, strike outcome, and retention hold. Contact fields are
-redacted from logs and never appear in catalog/creator APIs. Legal policy and
-human review—not a model—determine case outcome.
+`resolve-report` accepts `report_id`, `expected_revision`,
+`expected_wallpaper_revision`, `action`, `reason_code`, and a required private
+decision note of 1–2,000 characters, within the `moderation.v1` command envelope.
+The server rechecks active staff grants, AAL2, assignment, no-self-review, and
+both locked revisions. Identical idempotency keys replay the recorded decision;
+changed content under an existing key is rejected. Decisions append moderation
+and audit events. The report revision advances through the existing row trigger.
+
+Implemented actions:
+
+- `close_no_action`: requires `no_violation`; closes the report and preserves
+  current wallpaper visibility, including any earlier hide.
+- `hide_pending_review`: hides a published listing and keeps the assigned report
+  triaged. It never restores an already suspended or removed wallpaper.
+- `delist`: marks the wallpaper removed and closes the report.
+
+Hide/remove prevent new marketplace install authorizations. Existing library
+copies and previously issued public artifact URLs are not erased. Policy reports
+never issue a critical technical revocation. Restoration, automatic escalation,
+and removal of hosted public artifacts require separate operator workflows;
+they are not implemented by this endpoint.
+
+Copyright-case storage exists for claimant/contact and private notice objects.
+The complete notice/counter-notice, deadlines, restoration, strikes, and retention
+workflow remains a release gate; there is no native case-management flow yet.
+Contact fields must remain outside catalog/creator APIs and logs. Legal policy
+and human review determine case outcomes.
 
 ## Security revocation
 

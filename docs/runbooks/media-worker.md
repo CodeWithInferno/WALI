@@ -1,11 +1,11 @@
 # Media worker deployment and rebuild
 
-**Implementation status:** deployment bundle and isolation checks are verified
-locally only. No remote deployment is claimed. A dedicated encrypted VM,
-immutable signed release images, Cosign/SBOM evidence, scoped database and
-Storage credentials, provider firewall/disk evidence, staging attempt, and
-rollback drill remain external release gates. Never use these instructions on
-the existing shared VM.
+**Implementation status:** the dedicated staging worker has processed an original
+video through canonical encoding, independent verification, immutable Storage,
+and native creator submission. Its signed image and rootless service were checked
+on September 4, 2026. Production network controls, recovery drills, capacity,
+and an exact release candidate remain gates; see the release evidence ledger.
+Never use these instructions on a shared VM.
 
 The Linux worker is disposable compute. Supabase remains authoritative; the VM
 must never become a second product database or public API. These instructions
@@ -115,7 +115,12 @@ tokens, object URLs, creator text, filenames, or claim bodies.
 5. Run `/usr/local/sbin/wali-worker-verify`. It checks the dedicated identity,
    protected secret file, rootless runtime, immutable local images, systemd
    resource controls, absence of TCP/UDP listeners, Unix health/metrics,
-   scratch cleanup, and networkless decoder/classifier probes.
+   scratch cleanup, and networkless rejection probes in a transient service with
+   the worker's containment settings. The empty-input probe verifies startup,
+   mounts, policy validation and rejection reporting; it does not exercise FFmpeg.
+   The original-video canary separately supplies decode/encode evidence. Failed
+   probes retain only a bounded root-only diagnostic at
+   `/var/log/wali-worker-verification-last.log`.
 6. Submit one generated staging upload. Confirm exactly one terminal generation,
    immutable artifact digests, no residual container, and no stale scratch.
 7. Stop the worker mid-attempt, wait for lease expiry, restart it, and confirm
@@ -134,11 +139,29 @@ isolated restore drill before passing the deployment gate.
 ## Rollback
 
 `sudo deploy/worker/deploy.sh --rollback --environment staging --supabase-project-ref <ref>`
-atomically swaps the WALI-owned
-`current` and `previous` release links, restarts only
-`wali-media-worker.service`, and runs quick verification. Database migrations,
-Supabase configuration, other systemd units, host networks, and other
-containers are never changed by rollback.
+restores a complete immutable snapshot: binary, protected environment, both WALI
+units, Storage configuration, verification script, public verification key, SBOMs,
+and runbooks. Snapshot identity hashes all of these inputs. The environment and
+manifest remain root-only. Both the host binding and snapshot must match the
+explicit environment and project. Legacy binary-only releases cannot be selected
+for rollback; the next successful deployment captures the actual installed files
+as its complete baseline.
+
+Activation is serialized with a host lock. It records a durable pending
+transaction before changing live files, restarts the worker and its namespace
+dependency, and verifies the installed snapshot before advancing `previous`.
+Failure restores the baseline files, links and unit state. An interrupted pending
+transaction is recovered on the next invocation. Failed recovery stops the worker
+and retains the transaction for inspection. An identical deployment is a verified
+no-op that preserves the rollback target. `--rollback --dry-run` validates the
+target without mutating the host.
+
+Run a deployment/rollback/redeployment drill in staging for the exact candidate.
+Retain root-only snapshots securely: they include scoped credentials. Rotate keys
+with awareness that an old snapshot may contain credentials that have since been
+revoked. A Podman storage-layout change requires a separate migration. Database
+migrations, Supabase configuration, unrelated units, host networks, and unrelated
+containers are outside this rollback boundary.
 
 If verification fails, stop the WALI unit, preserve logs and attempt metadata,
 and follow `worker-compromise.md` when compromise cannot be excluded.

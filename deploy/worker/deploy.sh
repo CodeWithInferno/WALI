@@ -86,20 +86,8 @@ validate_host_binding() {
   }
 }
 
-rollback() {
-  [[ "$(id -u)" == 0 ]] || { echo 'rollback must run as root on the worker host' >&2; exit 77; }
-  [[ -L /opt/wali-worker/current && -L /opt/wali-worker/previous ]] || { echo 'both current and previous WALI releases are required' >&2; exit 69; }
-  local current previous swap
-  current="$(readlink /opt/wali-worker/current)"
-  previous="$(readlink /opt/wali-worker/previous)"
-  [[ "$current" == releases/* && "$previous" == releases/* ]] || { echo 'release links are outside the WALI release root' >&2; exit 65; }
-  swap=/opt/wali-worker/.rollback-link
-  ln -s -- "$previous" "$swap"
-  mv -Tf -- "$swap" /opt/wali-worker/current
-  ln -sfn -- "$current" /opt/wali-worker/previous
-  systemctl restart wali-media-worker.service
-  "$SCRIPT_ROOT/verify.sh" --quick
-}
+# Full deployment snapshots and crash-recoverable activation.
+source "$SCRIPT_ROOT/releases.sh"
 
 dry_run=false
 rollback_requested=false
@@ -123,7 +111,20 @@ done
 
 if $rollback_requested; then
   validate_host_binding
-  rollback
+  [[ "$(id -u)" == 0 ]] || { echo 'rollback inspection must run as root' >&2; exit 77; }
+  if $dry_run; then
+    [[ ! -e "$TRANSACTION" ]] || release_fail 'pending transaction requires recovery before rollback'
+    target="$(release_link previous)"
+    validate_release "$target"
+    printf 'would restore complete WALI snapshot %s and verify it; no mutation performed\n' "$target"
+    exit
+  fi
+  lock_releases
+  target="$(release_link previous)"
+  validate_release "$target"
+  capture_baseline
+  baseline="$staged_release"
+  activate_release "$target" "$baseline"
   exit
 fi
 for value in worker_binary environment_file media_sbom verifier_sbom cosign_key; do
@@ -154,8 +155,7 @@ elif [[ -n "$classifier_sbom" ]]; then
   exit 65
 fi
 
-release_id="$(file_digest "$worker_binary")"
-release_root="/opt/wali-worker/releases/$release_id"
+release_root="/opt/wali-worker/releases/<complete-snapshot-sha256>"
 if $dry_run; then
   printf 'would bind deployment to %s/%s\n' "$deployment_environment" "$supabase_project_ref"
   printf 'would install worker at %s/wali-media-worker\n' "$release_root"
@@ -165,7 +165,7 @@ if $dry_run; then
   else
     printf 'would verify two immutable images and SBOMs with cosign\n'
   fi
-  printf 'would run systemctl restart wali-media-worker.service only\n'
+  printf 'would run systemctl restart wali-media-worker.service with its WALI namespace dependency\n'
   exit
 fi
 
@@ -189,26 +189,65 @@ if id -nG wali-worker | tr ' ' '\n' | grep -Eq '^(sudo|wheel|docker|adm)$'; then
   exit 65
 fi
 grep -q '^wali-worker:' /etc/subuid && grep -q '^wali-worker:' /etc/subgid || { echo 'rootless subordinate UID/GID ranges are missing' >&2; exit 69; }
-for command in cosign install podman runuser systemctl; do command -v "$command" >/dev/null || { echo "required host command is missing: $command" >&2; exit 69; }; done
+for command in cosign install podman runuser systemctl flock sha256sum sync; do command -v "$command" >/dev/null || { echo "required host command is missing: $command" >&2; exit 69; }; done
 if systemctl cat wali-media-worker.service >/dev/null 2>&1 && ! systemctl cat wali-media-worker.service | grep -q '^X-WALI-Managed=true$'; then
   echo 'service name is already occupied by a non-WALI unit' >&2
   exit 65
 fi
+if systemctl cat wali-podman-namespace.service >/dev/null 2>&1 && ! systemctl cat wali-podman-namespace.service | grep -q '^X-WALI-Managed=true$'; then
+  echo 'namespace service name is already occupied by a non-WALI unit' >&2
+  exit 65
+fi
 
-install -d -o root -g wali-worker -m 0750 /etc/wali-worker
+lock_releases
+capture_baseline
+baseline="$staged_release"
+stage_release
+target="$staged_release"
+validate_release "$target"
+validate_release "$baseline"
+if [[ "$target" == "$baseline" ]]; then
+  /usr/local/sbin/wali-worker-verify --quick
+  echo 'identical WALI deployment already installed; rollback target preserved'
+  exit
+fi
+
+# Changing an initialized storage layout is a separate migration, never a deploy.
+snapshot_root="$RELEASE_BASE/$target/payload"
+environment_file="$snapshot_root/environment"
+cosign_key="$snapshot_root/cosign"
+media_image="$(read_env_value WALI_MEDIA_IMAGE "$environment_file")"
+verifier_image="$(read_env_value WALI_VERIFIER_IMAGE "$environment_file")"
+classifier_image="$(read_optional_env_value WALI_CLASSIFIER_IMAGE "$environment_file")"
+for image in "$media_image" "$verifier_image"; do
+  [[ "$image" =~ $IMAGE_PATTERN ]] || release_fail 'snapshot image is not immutable'
+  validate_sbom "$image" "$snapshot_root/sbom/${image##*@sha256:}.spdx.json"
+done
+if [[ -n "$classifier_image" ]]; then
+  [[ "$classifier_image" =~ $IMAGE_PATTERN ]] || release_fail 'snapshot image is not immutable'
+  validate_sbom "$classifier_image" "$snapshot_root/sbom/${classifier_image##*@sha256:}.spdx.json"
+fi
+if [[ -f /etc/wali-worker/storage.conf ]] && ! cmp -s "$snapshot_root/storage" /etc/wali-worker/storage.conf; then
+  echo 'Podman storage configuration differs; migrate it explicitly before deployment' >&2
+  exit 65
+fi
 install -d -o wali-worker -g wali-worker -m 0700 /var/lib/wali-worker/attempts /var/lib/wali-worker/containers /var/lib/wali-worker/volumes /run/wali-media-worker
-install -o root -g root -m 0644 "$SCRIPT_ROOT/storage.conf" /etc/wali-worker/storage.conf
+preflight_storage="$(mktemp /run/wali-storage-preflight.XXXXXX)"
+install -o root -g root -m 0644 "$snapshot_root/storage" "$preflight_storage"
+trap 'rm -f -- "$preflight_storage"' EXIT
 
 images=("$media_image" "$verifier_image")
 [[ -z "$classifier_image" ]] || images+=("$classifier_image")
 for image in "${images[@]}"; do
   cosign verify --key "$cosign_key" "$image" >/dev/null
-  runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman pull "$image" >/dev/null
-  runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman image inspect "$image" >/dev/null
+  if ! runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman image exists "$image"; then
+    runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman pull "$image" >/dev/null
+  fi
+  runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman image inspect "$image" >/dev/null
 done
 if [[ -n "$classifier_image" ]]; then
   classifier_label() {
-    runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf \
+    runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" \
       podman image inspect --format "{{ index .Labels \"$1\" }}" "$classifier_image"
   }
   [[ "$(classifier_label com.wali.classifier.production)" == true ]] || { echo 'classifier image is not a verified production build' >&2; exit 65; }
@@ -218,38 +257,6 @@ if [[ -n "$classifier_image" ]]; then
   [[ "$(classifier_label com.wali.classifier.taxonomy-revision)" == wali-taxonomy-v1 ]] || { echo 'classifier taxonomy differs from the reviewed contract' >&2; exit 65; }
 fi
 
-install -d -o root -g root -m 0755 /opt/wali-worker /opt/wali-worker/releases "$release_root" /usr/share/doc/wali-worker/sbom
-install -o root -g root -m 0555 "$worker_binary" "$release_root/wali-media-worker"
-install -o root -g wali-worker -m 0640 "$environment_file" /etc/wali-worker/worker.env
-install -o root -g root -m 0644 "$SCRIPT_ROOT/wali-media-worker.service" /etc/systemd/system/wali-media-worker.service
-install -o root -g root -m 0555 "$SCRIPT_ROOT/verify.sh" /usr/local/sbin/wali-worker-verify
-install -o root -g root -m 0444 "$cosign_key" /etc/wali-worker/cosign.pub
-install -o root -g root -m 0444 "$media_sbom" "/usr/share/doc/wali-worker/sbom/${media_image##*@sha256:}.spdx.json"
-install -o root -g root -m 0444 "$verifier_sbom" "/usr/share/doc/wali-worker/sbom/${verifier_image##*@sha256:}.spdx.json"
-if [[ -n "$classifier_image" ]]; then
-  install -o root -g root -m 0444 "$classifier_sbom" "/usr/share/doc/wali-worker/sbom/${classifier_image##*@sha256:}.spdx.json"
-fi
-install -o root -g root -m 0444 "$SCRIPT_ROOT/../../docs/runbooks/media-worker.md" /usr/share/doc/wali-worker/media-worker.md
-install -o root -g root -m 0444 "$SCRIPT_ROOT/../../docs/runbooks/worker-compromise.md" /usr/share/doc/wali-worker/worker-compromise.md
-
-if [[ -L /opt/wali-worker/current ]]; then
-  current="$(readlink /opt/wali-worker/current)"
-  [[ "$current" == releases/* ]] || { echo 'current release link is outside the WALI root' >&2; exit 65; }
-  ln -sfn -- "$current" /opt/wali-worker/previous
-fi
-ln -s -- "releases/$release_id" /opt/wali-worker/.current-link
-mv -Tf -- /opt/wali-worker/.current-link /opt/wali-worker/current
-systemctl daemon-reload
-systemctl enable wali-media-worker.service >/dev/null
-systemctl restart wali-media-worker.service
-if ! /usr/local/sbin/wali-worker-verify --quick; then
-  echo 'new WALI release failed verification' >&2
-  if [[ -L /opt/wali-worker/previous ]]; then
-    rollback
-    echo 'previous WALI release restored; deployment remains failed' >&2
-  else
-    systemctl stop wali-media-worker.service
-    echo 'no rollback release exists; WALI worker stopped' >&2
-  fi
-  exit 1
-fi
+rm -f -- "$preflight_storage"
+trap - EXIT
+activate_release "$target" "$baseline"

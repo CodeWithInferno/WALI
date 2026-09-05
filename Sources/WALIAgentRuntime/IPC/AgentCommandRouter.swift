@@ -24,7 +24,7 @@ public typealias CatalogInstallHandler = @Sendable (
     AgentCatalogInstallRequest,
     UUID,
     EngineRevision
-) async throws -> EngineLibraryItem
+) async throws -> CatalogInstallResult
 
 public typealias CatalogRevocationHandler = @Sendable (
     AgentCatalogRevocationUpdate
@@ -123,13 +123,13 @@ public actor AgentCommandRouter {
                             actual: snapshot.revision.rawValue
                         )
                     }
-                    let item = try await catalogInstallHandler(
+                    let installed = try await catalogInstallHandler(
                         install,
                         request.idempotencyKey,
                         snapshot.revision
                     )
                     let transaction = try await engine.perform(
-                        .installCatalogItem(item),
+                        .installCatalogItem(installed.item, completedImport: installed.completedImport),
                         idempotencyKey: request.idempotencyKey,
                         expectedRevision: request.expectedRevision
                     )
@@ -237,7 +237,8 @@ public actor AgentCommandRouter {
                 await MainActor.run {
                     DistributedNotificationCenter.default().postNotificationName(
                         Notification.Name("com.wali.quitAll"),
-                        object: nil,
+                        object: Bundle.main.object(forInfoDictionaryKey: "WALIControlServiceName") as? String
+                            ?? Bundle.main.bundleIdentifier,
                         userInfo: nil,
                         deliverImmediately: true
                     )

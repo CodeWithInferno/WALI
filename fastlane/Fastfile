@@ -1,0 +1,123 @@
+require "digest"
+require "bundler"
+require "fileutils"
+require "json"
+require "shellwords"
+
+opt_out_usage
+default_platform(:mac)
+
+WALI_ROOT = File.expand_path("..", __dir__)
+WALI_RELEASE = File.join(WALI_ROOT, ".build", "release")
+
+def wali_team
+  team = ENV.fetch("DEVELOPMENT_TEAM", "")
+  UI.user_error!("Set DEVELOPMENT_TEAM to your Apple Developer team.") unless team.match?(/\A[A-Z0-9]{10}\z/)
+  team
+end
+
+def wali_verify(app, configuration)
+  Bundler.with_unbundled_env do
+    sh("env", "CONFIGURATION=#{configuration}", File.join(WALI_ROOT, "scripts", "verify-bundle.sh"), app)
+  end
+end
+
+platform :mac do
+  desc "Build the signed staging app for native user-journey testing"
+  lane :development do
+    wali_team
+    Bundler.with_unbundled_env do
+      Dir.chdir(WALI_ROOT) { sh("env", "CONFIGURATION=Development", "./scripts/build.sh") }
+    end
+    app = File.join(WALI_ROOT, ".build", "xcode", "DerivedData", "Build", "Products", "Development", "WALI.app")
+    wali_verify(app, "Development")
+  end
+
+  desc "Run architecture and bundle checks on an existing build"
+  lane :verify do |options|
+    configuration = options.fetch(:configuration, "Development")
+    UI.user_error!("Unsupported configuration") unless %w[Debug Development Release].include?(configuration)
+    Bundler.with_unbundled_env do
+      Dir.chdir(WALI_ROOT) { sh("./scripts/check-architecture.sh") }
+    end
+    app = options[:app] || File.join(
+      WALI_ROOT, ".build", "xcode", "DerivedData", "Build", "Products", configuration, "WALI.app"
+    )
+    wali_verify(File.expand_path(app), configuration)
+  end
+
+  desc "Archive a universal Developer ID app; requires Release signing and provisioning"
+  lane :archive do
+    team = wali_team
+    identity = ENV.fetch("WALI_CODE_SIGN_IDENTITY", "Developer ID Application")
+    UI.user_error!("Use a Developer ID Application certificate.") unless identity.start_with?("Developer ID Application")
+    FileUtils.mkdir_p(WALI_RELEASE)
+    Dir.chdir(WALI_ROOT) { sh("./scripts/generate.sh") }
+    arguments = {
+      "WALI_DEVELOPMENT_TEAM" => team,
+      "WALI_CODE_SIGN_IDENTITY" => identity,
+      "CODE_SIGNING_ALLOWED" => "YES",
+      "CODE_SIGNING_REQUIRED" => "YES",
+      "ONLY_ACTIVE_ARCH" => "NO"
+    }
+    %w[MARKETING_VERSION CURRENT_PROJECT_VERSION].each do |key|
+      arguments[key] = ENV[key] unless ENV[key].to_s.empty?
+    end
+    app = Bundler.with_unbundled_env do
+      build_mac_app(
+      project: File.join(WALI_ROOT, "WALI.xcodeproj"),
+      scheme: "WALI",
+      configuration: "Release",
+      destination: "generic/platform=macOS",
+      archive_path: File.join(WALI_RELEASE, "WALI.xcarchive"),
+      derived_data_path: File.join(WALI_RELEASE, "DerivedData"),
+      cloned_source_packages_path: File.join(WALI_ROOT, ".build", "xcode", "DerivedData", "SourcePackages"),
+      output_directory: File.join(WALI_RELEASE, "candidate"),
+      buildlog_path: File.join(WALI_RELEASE, "logs"),
+      export_method: "developer-id",
+      skip_package_pkg: true,
+      xcodebuild_formatter: "",
+      xcargs: arguments.map { |key, value| "#{key}=#{Shellwords.escape(value)}" }.join(" ")
+      )
+    end
+    wali_verify(app, "Release")
+    UI.success("Signed candidate: #{app}")
+    UI.message("Native journeys and the final release review must pass before publication.")
+  end
+
+  desc "Notarize and staple an existing candidate, then produce a verified distribution ZIP"
+  lane :notarize_candidate do |options|
+    wali_team
+    profile = ENV.fetch("WALI_NOTARY_KEYCHAIN_PROFILE", "")
+    UI.user_error!("Set WALI_NOTARY_KEYCHAIN_PROFILE to an existing notarytool Keychain profile.") if profile.empty?
+    app = File.expand_path(options[:app] || File.join(WALI_RELEASE, "candidate", "WALI.app"))
+    wali_verify(app, "Release")
+    FileUtils.mkdir_p(WALI_RELEASE)
+    submission = File.join(WALI_RELEASE, "WALI-notary-submission.zip")
+    sh("/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, submission)
+    response = sh(
+      "/usr/bin/xcrun", "notarytool", "submit", submission,
+      "--keychain-profile", profile, "--wait", "--timeout", "30m", "--output-format", "json",
+      log: false
+    )
+    receipt = JSON.parse(response)
+    File.write(File.join(WALI_RELEASE, "notarization.json"), JSON.pretty_generate(receipt))
+    UI.user_error!("Notarization was not accepted; inspect .build/release/notarization.json.") unless receipt["status"] == "Accepted"
+    sh("/usr/bin/xcrun", "stapler", "staple", app)
+    sh("/usr/bin/xcrun", "stapler", "validate", app)
+    sh("/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=2", app)
+    wali_verify(app, "Release")
+    version = sh("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", File.join(app, "Contents", "Info.plist"), log: false).strip
+    build = sh("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleVersion", File.join(app, "Contents", "Info.plist"), log: false).strip
+    output = File.join(WALI_RELEASE, "WALI-#{version}-#{build}-macOS.zip")
+    sh("/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, output)
+    File.write("#{output}.sha256", "#{Digest::SHA256.file(output).hexdigest}  #{File.basename(output)}\n")
+    UI.success("Notarized distribution package: #{output}")
+  end
+
+  desc "Build and notarize a release package without publishing it"
+  lane :release do
+    archive
+    notarize_candidate
+  end
+end

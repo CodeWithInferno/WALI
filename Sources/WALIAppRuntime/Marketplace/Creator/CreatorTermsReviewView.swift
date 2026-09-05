@@ -76,9 +76,7 @@ struct CreatorTermsReviewView: View {
 
             if accessState == .failed {
                 Label(
-                    lastFailureCode == "request_timed_out"
-                        ? "WALI couldn’t record your acceptance in time. Try again."
-                        : "WALI couldn’t record your acceptance. Check your connection and try again.",
+                    failureMessage,
                     systemImage: "exclamationmark.triangle"
                 )
                 .font(.callout)
@@ -107,5 +105,26 @@ struct CreatorTermsReviewView: View {
             }
         }
         .padding(20)
+    }
+
+    private var failureMessage: String {
+        switch lastFailureCode {
+        case "request_timed_out":
+            "Enabling Creator Studio took too long. Try again."
+        case "auth_required", "authentication_required", "invalid_session", "session_expired":
+            "Your session has expired. Close this sheet and sign in again."
+        case "creator_terms_required":
+            "The Creator Terms have changed. Close this sheet and refresh your account to review them."
+        case "account_suspended", "account_inactive":
+            "Creator Studio is unavailable for this account. Contact support for help."
+        case "creator_role_required", "forbidden":
+            "This account doesn’t have creator access. Contact support for help."
+        case "rate_limited":
+            "Too many attempts. Wait a few minutes before trying again."
+        case "invalid_request", "unsupported_api_version":
+            "The service couldn’t accept this request. Check for a WALI update and try again."
+        default:
+            "Creator Studio couldn’t be enabled. Try again in a moment."
+        }
     }
 }

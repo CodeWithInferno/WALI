@@ -689,11 +689,14 @@ update wali.submissions set status = 'under_review'
  where id = '92000000-0000-4000-8000-000000000003';
 
 select is(
-  jsonb_array_length(public.moderation_queue_v1(
-    '00000000-0000-0000-0000-000000000004', 'aal2',
-    'pending', 'oldest_submitted', null, 24
-  ) -> 'items' -> 0 -> 'canonical_artifacts'),
-  4, 'moderation queue exposes only canonical artifacts from the current processing generation'
+  array(select artifact ->> 'role' from jsonb_array_elements(
+    public.moderation_queue_v1(
+      '00000000-0000-0000-0000-000000000004', 'aal2',
+      'pending', 'oldest_submitted', null, 24
+    ) -> 'items' -> 0 -> 'canonical_artifacts'
+  ) artifact order by artifact ->> 'role'),
+  array['poster', 'preview', 'video_default'],
+  'moderation queue exposes the current poster, preview, and full review video'
 );
 select is(
   jsonb_typeof(public.moderation_reports_v1(

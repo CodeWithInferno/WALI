@@ -110,9 +110,12 @@ struct CatalogMapper: Sendable {
             throw CatalogMappingError.invalidResponse
         }
         if let error = envelope.error {
+            guard !error.code.isEmpty, error.code.utf8.count <= 64,
+                  error.code.utf8.allSatisfy({ (97...122).contains($0) || (48...57).contains($0) || $0 == 95 })
+            else { throw CatalogMappingError.invalidResponse }
             throw CatalogRemoteError(
                 code: error.code,
-                safeMessage: error.message,
+                safeMessage: nil,
                 retryable: error.retryable
             )
         }

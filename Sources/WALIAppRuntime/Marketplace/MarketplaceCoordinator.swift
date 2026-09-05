@@ -186,6 +186,7 @@ public final class MarketplaceCoordinator {
     public let model: WALIMarketplaceModel
     public let creatorContext: MarketplaceCreatorContext
     public let creatorGateway: (any CreatorStudioGateway)?
+    public let moderatorAccess: ModeratorAccessModel?
     private let gateway: (any CatalogGateway)?
     private let reportGateway: (any CatalogReportGateway)?
     private let accountGateway: (any AccountPrivacyGateway)?
@@ -196,6 +197,10 @@ public final class MarketplaceCoordinator {
     private let appleSignIn: AppleSignInCoordinator?
     private let installPreparer: CatalogInstallPreparer?
     private let presentationMediaCache: (any CatalogPresentationMediaCaching)?
+    private var homeMediaLease = CatalogMediaLease()
+    private var browseMediaLease = CatalogMediaLease()
+    private var searchMediaLease = CatalogMediaLease()
+    private var detailMediaLease = CatalogMediaLease()
     private let securityStore: CatalogSecurityStateStore?
     private let installHandler: (@MainActor (PreparedCatalogInstall) async throws -> Void)?
     private let securityHandler: (@MainActor (CatalogSecuritySnapshot) async throws -> Void)?
@@ -206,9 +211,13 @@ public final class MarketplaceCoordinator {
     private var homeTask: Task<Void, Never>?
     private var browseTask: Task<Void, Never>?
     private var detailTask: Task<Void, Never>?
+    private var detailTargetID: String?
     private var actionTask: Task<Void, Never>?
+    private var installTask: Task<Void, Never>?
+    private var retryableInstall: WALICatalogDetailPresentation?
     private var reportTask: Task<Void, Never>?
     private var accountTask: Task<Void, Never>?
+    private var authenticationTask: Task<Void, Never>?
     private var accountExportPollTask: Task<Void, Never>?
     private var accountDeletionPollTask: Task<Void, Never>?
     private var accountMFATask: Task<Void, Never>?
@@ -221,6 +230,8 @@ public final class MarketplaceCoordinator {
     private var retryableReport: CatalogReportRequest?
     private var accountExportSnapshot: AccountExportSnapshot?
     private var accountDeletionSnapshot: AccountDeletionSnapshot?
+    private var accountExportRecoveryID: String?
+    private var accountDeletionRecoveryID: String?
     private var accountExportRequestKey: String?
     private var accountDeletionRequestKey: String?
     private var accountMFAFactorID: String?
@@ -279,6 +290,7 @@ public final class MarketplaceCoordinator {
         )
         self.authStore = authStore
         self.mfaStore = mfaStore
+        moderatorAccess = mfaStore.map { ModeratorAccessModel(store: $0) }
         self.appleSignIn = appleSignIn
         self.installPreparer = installPreparer
         self.presentationMediaCache = presentationMediaCache
@@ -286,6 +298,10 @@ public final class MarketplaceCoordinator {
         self.installHandler = installHandler
         self.securityHandler = securityHandler
         self.creatorRequestTimeout = creatorRequestTimeout
+        moderatorAccess?.onVerified = { [weak self] in
+            guard let self, case let .signedIn(subjectID) = model.accountState else { return }
+            loadCreatorContext(for: subjectID)
+        }
     }
 
     public static func configured(
@@ -336,6 +352,7 @@ public final class MarketplaceCoordinator {
     }
 
     public func start() {
+        Self.logger.info("Marketplace lifecycle started")
         if model.homeState == .idle { loadHome() }
         observeAccount()
         securityTask?.cancel()
@@ -345,6 +362,10 @@ public final class MarketplaceCoordinator {
     }
 
     public func stop() {
+        Self.logger.info("Marketplace lifecycle stopped")
+        installTask?.cancel()
+        moderatorAccess?.cancel()
+        authenticationTask?.cancel()
         homeTask?.cancel()
         browseTask?.cancel()
         detailTask?.cancel()
@@ -364,6 +385,7 @@ public final class MarketplaceCoordinator {
         homeTask?.cancel()
         homeGeneration &+= 1
         let generation = homeGeneration
+        let started = Date()
         model.homeState = .loading
         guard let gateway else {
             model.homeState = .empty
@@ -377,10 +399,11 @@ public final class MarketplaceCoordinator {
                 )
                 try Task.checkCancellation()
                 guard let self, generation == self.homeGeneration else { return }
-                self.model.homeSections = await self.presentationSections(home.sections)
-                try Task.checkCancellation()
-                guard generation == self.homeGeneration else { return }
+                self.homeMediaLease = CatalogMediaLease()
+                self.model.homeSections = self.presentationSections(home.sections)
                 self.model.homeState = home.sections.isEmpty ? .empty : .ready
+                Self.logger.info("Discover metadata ready; durationMs=\(Int(Date().timeIntervalSince(started) * 1_000), privacy: .public)")
+                await self.hydrateHome(home.sections, generation: generation)
             } catch is CancellationError {
                 return
             } catch {
@@ -398,10 +421,13 @@ public final class MarketplaceCoordinator {
         browseTask?.cancel()
         browseGeneration &+= 1
         let generation = browseGeneration
+        let started = Date()
         currentBrowseCategory = category
         currentBrowseTags = tags
         currentBrowseSort = sort
         currentSearchQuery = nil
+        isLoadingMore = false
+        model.browsePageError = nil
         model.browseNextCursor = nil
         model.browseState = .loading
         guard let gateway else {
@@ -414,11 +440,12 @@ public final class MarketplaceCoordinator {
                 let page = try await gateway.browse(request)
                 try Task.checkCancellation()
                 guard let self, generation == self.browseGeneration else { return }
-                self.model.browseItems = await self.presentationCards(page.items)
-                try Task.checkCancellation()
-                guard generation == self.browseGeneration else { return }
+                self.browseMediaLease = CatalogMediaLease()
+                self.model.browseItems = page.items.map { Self.card($0) }
                 self.model.browseNextCursor = page.nextCursor
                 self.model.browseState = page.items.isEmpty ? .empty : .ready
+                Self.logger.info("Browse metadata ready; durationMs=\(Int(Date().timeIntervalSince(started) * 1_000), privacy: .public)")
+                await self.hydrateBrowse(page.items, generation: generation, searching: false)
             } catch is CancellationError {
                 return
             } catch {
@@ -429,14 +456,17 @@ public final class MarketplaceCoordinator {
     }
 
     public func search(_ query: String) {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         browseTask?.cancel()
+        isLoadingMore = false
+        model.browsePageError = nil
         browseGeneration &+= 1
         let generation = browseGeneration
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard !query.isEmpty else {
             currentSearchQuery = nil
             model.searchItems = []
             model.searchNextCursor = nil
-            model.browseState = .idle
+            loadBrowse(category: currentBrowseCategory, tags: currentBrowseTags, sort: currentBrowseSort)
             return
         }
         currentSearchQuery = query
@@ -452,11 +482,11 @@ public final class MarketplaceCoordinator {
                 let response = try await gateway.search(CatalogSearchRequest(query: query))
                 try Task.checkCancellation()
                 guard let self, generation == self.browseGeneration else { return }
-                self.model.searchItems = await self.presentationCards(response.page.items)
-                try Task.checkCancellation()
-                guard generation == self.browseGeneration else { return }
+                self.searchMediaLease = CatalogMediaLease()
+                self.model.searchItems = response.page.items.map { Self.card($0) }
                 self.model.searchNextCursor = response.page.nextCursor
                 self.model.browseState = response.page.items.isEmpty ? .empty : .ready
+                await self.hydrateBrowse(response.page.items, generation: generation, searching: true)
             } catch is CancellationError {
                 return
             } catch {
@@ -473,13 +503,16 @@ public final class MarketplaceCoordinator {
         guard let cursor, let gateway else { return }
 
         isLoadingMore = true
+        model.browsePageError = nil
         browseGeneration &+= 1
         let generation = browseGeneration
         browseTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                browseTask = nil
-                isLoadingMore = false
+                if generation == browseGeneration {
+                    browseTask = nil
+                    isLoadingMore = false
+                }
             }
             do {
                 if let searchQuery {
@@ -487,11 +520,9 @@ public final class MarketplaceCoordinator {
                     let response = try await gateway.search(request)
                     try Task.checkCancellation()
                     guard generation == browseGeneration else { return }
-                    let cards = await presentationCards(response.page.items)
-                    try Task.checkCancellation()
-                    guard generation == browseGeneration else { return }
-                    model.searchItems = appendUnique(model.searchItems, cards)
+                    model.searchItems = appendUnique(model.searchItems, response.page.items.map { Self.card($0) })
                     model.searchNextCursor = response.page.nextCursor
+                    await hydrateBrowse(response.page.items, generation: generation, searching: true)
                 } else {
                     let request = try CatalogBrowseRequest(
                         category: currentBrowseCategory,
@@ -502,25 +533,27 @@ public final class MarketplaceCoordinator {
                     let response = try await gateway.browse(request)
                     try Task.checkCancellation()
                     guard generation == browseGeneration else { return }
-                    let cards = await presentationCards(response.items)
-                    try Task.checkCancellation()
-                    guard generation == browseGeneration else { return }
-                    model.browseItems = appendUnique(model.browseItems, cards)
+                    model.browseItems = appendUnique(model.browseItems, response.items.map { Self.card($0) })
                     model.browseNextCursor = response.nextCursor
+                    await hydrateBrowse(response.items, generation: generation, searching: false)
                 }
             } catch is CancellationError {
                 return
             } catch {
-                model.actionState = .failed(message: "More wallpapers could not be loaded.")
+                guard generation == browseGeneration else { return }
+                model.browsePageError = "More wallpapers couldn’t be loaded."
             }
         }
     }
 
     public func loadDetail(wallpaperID: String) {
         detailTask?.cancel()
+        detailTargetID = wallpaperID
         detailGeneration &+= 1
         let generation = detailGeneration
+        Self.logger.info("Wallpaper detail requested; generation=\(generation, privacy: .public)")
         model.selectedDetail = nil
+        detailMediaLease = CatalogMediaLease()
         model.detailState = .loading
         guard let gateway else {
             model.detailState = .empty
@@ -531,11 +564,12 @@ public final class MarketplaceCoordinator {
                 let detail = try await gateway.detail(wallpaperID: wallpaperID)
                 try Task.checkCancellation()
                 guard let self, generation == self.detailGeneration else { return }
-                self.model.selectedDetail = await self.presentationDetail(detail)
-                try Task.checkCancellation()
-                guard generation == self.detailGeneration else { return }
+                self.model.selectedDetail = self.presentationDetail(detail)
                 self.model.detailState = .ready
+                Self.logger.info("Wallpaper metadata ready; generation=\(generation, privacy: .public)")
+                await self.hydrateDetail(detail, generation: generation)
             } catch is CancellationError {
+                Self.logger.info("Wallpaper detail cancelled; generation=\(generation, privacy: .public)")
                 return
             } catch {
                 guard let self, generation == self.detailGeneration else { return }
@@ -544,16 +578,26 @@ public final class MarketplaceCoordinator {
         }
     }
 
+    public func cancelDetail(wallpaperID: String) {
+        guard detailTargetID == wallpaperID else { return }
+        Self.logger.info("Wallpaper detail view left; generation=\(self.detailGeneration, privacy: .public)")
+        detailTask?.cancel()
+        detailTargetID = nil
+        detailGeneration &+= 1
+    }
+
     public func signIn() {
         signIn(resuming: nil)
     }
 
     private func signIn(resuming action: DeferredAction?) {
+        guard model.authenticationState != .working else { return }
         guard let appleSignIn,
               let window = NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first
         else {
             deferredAction = nil
             pendingReport = nil
+            model.authenticationState = .failed(message: "Sign in with Apple is unavailable. Reopen WALI and try again.")
             if case .report = action {
                 model.reportState = .failed(message: "Sign in is unavailable in this build.")
             } else {
@@ -562,40 +606,65 @@ public final class MarketplaceCoordinator {
             return
         }
         deferredAction = action
-        Task { [weak self] in
+        model.authenticationState = .working
+        if case .report = action {
+            model.reportState = .working
+        } else if action != nil {
+            model.actionState = .working
+        }
+        authenticationTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let state = try await appleSignIn.signIn(presentingFrom: window)
+                try Task.checkCancellation()
+                model.authenticationState = .idle
+                if case .report = action { model.reportState = .idle }
+                else if action != nil { model.actionState = .idle }
                 model.accountState = .signedIn(userID: state.userID)
                 loadAccountProfile(for: state.userID)
                 let pending = deferredAction
                 deferredAction = nil
                 resume(pending)
             } catch is CancellationError {
+                model.authenticationState = .idle
                 if case .report = action { model.reportState = .idle }
+                else if action != nil { model.actionState = .idle }
                 deferredAction = nil
                 pendingReport = nil
                 return
             } catch {
+                let message = "Sign in with Apple couldn’t be completed. Try again."
+                model.authenticationState = .failed(message: message)
                 if case .report = action {
-                    model.reportState = .failed(message: "Sign in was not completed.")
+                    model.reportState = .failed(message: message)
+                } else if action != nil {
+                    model.actionState = .failed(message: message)
                 }
                 deferredAction = nil
                 pendingReport = nil
-                model.accountState = .signedOut
             }
         }
     }
 
     public func signOut() {
-        guard let authStore else { return }
-        Task { [weak self] in
+        guard model.authenticationState != .working else { return }
+        guard let authStore else {
+            model.authenticationState = .failed(message: "Sign out is unavailable. Reopen WALI and try again.")
+            return
+        }
+        model.authenticationState = .working
+        authenticationTask = Task { [weak self] in
+            guard let self else { return }
             do {
                 try await authStore.signOut()
-                self?.clearSubjectBoundState()
-                self?.model.accountState = .signedOut
+                try Task.checkCancellation()
+                clearSubjectBoundState()
+                model.accountState = .signedOut
+                model.authenticationState = .idle
+            } catch is CancellationError {
+                model.authenticationState = .idle
             } catch {
-                return
+                model.authenticationState = .failed(message: "Sign out couldn’t be completed. Check your connection and try again.")
             }
         }
     }
@@ -676,6 +745,10 @@ public final class MarketplaceCoordinator {
     }
 
     public func requestAccountExport() {
+        switch model.accountExportState {
+        case .working, .queued, .processing: return
+        default: break
+        }
         guard case .signedIn = model.accountState,
               model.accountProfile != nil,
               let accountGateway
@@ -708,8 +781,8 @@ public final class MarketplaceCoordinator {
     }
 
     public func refreshAccountExport() {
-        guard let snapshot = accountExportSnapshot else { return }
-        pollAccountExport(snapshot)
+        guard let id = accountExportSnapshot?.id ?? accountExportRecoveryID else { return }
+        pollAccountExport(id: id)
     }
 
     public func chooseAccountExportDestination() {
@@ -731,7 +804,15 @@ public final class MarketplaceCoordinator {
         accountTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await accountGateway.saveAccountExport(snapshot, to: destination)
+                // The save panel may remain open longer than the short-lived grant.
+                let fresh = try await accountGateway.accountExportStatus(
+                    id: snapshot.id,
+                    idempotencyKey: UUID().uuidString.lowercased()
+                )
+                try Task.checkCancellation()
+                guard accountSubjectMatchesCurrentProfile(fresh.subjectID) else { return }
+                accountExportSnapshot = fresh
+                try await accountGateway.saveAccountExport(fresh, to: destination)
                 try Task.checkCancellation()
                 guard accountSubjectMatchesCurrentProfile else { return }
                 model.accountExportState = .saved(fileName: destination.lastPathComponent)
@@ -740,7 +821,7 @@ public final class MarketplaceCoordinator {
             } catch {
                 guard accountSubjectMatchesCurrentProfile else { return }
                 model.accountExportState = .failed(
-                    message: "The export failed integrity verification and was not saved."
+                    message: "The export could not be saved. Refresh its status and try again."
                 )
             }
         }
@@ -929,54 +1010,85 @@ public final class MarketplaceCoordinator {
     }
 
     public func refreshAccountDeletion() {
-        guard let snapshot = accountDeletionSnapshot else { return }
-        pollAccountDeletion(snapshot)
+        guard let id = accountDeletionSnapshot?.id ?? accountDeletionRecoveryID else { return }
+        pollAccountDeletion(id: id)
     }
 
     public func installSelectedWallpaper() {
-        guard requireAuthentication(for: .install),
-              let gateway,
-              let installPreparer,
-              let securityStore,
-              let installHandler,
-              let detail = model.selectedDetail
-        else { return }
-        let idempotencyKey = UUID().uuidString.lowercased()
-        performAction {
-            let security = try await self.refreshCatalogSecurityState(
-                gateway: gateway,
-                store: securityStore
-            )
-            let grant = try await gateway.requestInstall(
-                wallpaperID: detail.id,
-                releaseID: detail.currentReleaseID,
-                expectedWallpaperRevision: detail.wallpaperRevision,
-                idempotencyKey: idempotencyKey
-            )
-            let prepared = try await installPreparer.prepare(
-                grant: grant,
-                expectedWallpaperID: detail.id,
-                expectedReleaseID: detail.currentReleaseID,
-                security: security
-            )
+        guard requireAuthentication(for: .install), let detail = model.selectedDetail else { return }
+        startCatalogInstall(detail)
+    }
+
+    public func retryCatalogInstall() {
+        guard requireAuthentication(for: .install), let retryableInstall else { return }
+        startCatalogInstall(retryableInstall)
+    }
+
+    public func cancelCatalogInstall() {
+        guard model.catalogInstall?.canCancel == true else { return }
+        installTask?.cancel()
+        model.catalogInstall?.phase = .cancelled
+    }
+
+    private func startCatalogInstall(_ detail: WALICatalogDetailPresentation) {
+        guard model.catalogInstall?.isActive != true,
+              let gateway, let installPreparer, let securityStore, let installHandler else { return }
+        let operationID = UUID()
+        let idempotencyKey = operationID.uuidString.lowercased()
+        retryableInstall = detail
+        model.catalogInstall = .init(id: operationID, wallpaperID: detail.id,
+            releaseID: detail.currentReleaseID, title: detail.title)
+        installTask = Task { [weak self] in
+            guard let self else { return }
             do {
+                let security = try await refreshCatalogSecurityState(gateway: gateway, store: securityStore)
+                try Task.checkCancellation()
+                let grant = try await gateway.requestInstall(
+                    wallpaperID: detail.id, releaseID: detail.currentReleaseID,
+                    expectedWallpaperRevision: detail.wallpaperRevision, idempotencyKey: idempotencyKey)
+                try Task.checkCancellation()
+                let prepared = try await installPreparer.prepare(grant: grant,
+                    expectedWallpaperID: detail.id, expectedReleaseID: detail.currentReleaseID, security: security
+                ) { [weak self] received, expected in
+                    Task { @MainActor [weak self] in
+                        guard let self, var current = model.catalogInstall, current.id == operationID,
+                              current.canCancel, expected > 0 else { return }
+                        current.receivedBytes = min(received, expected)
+                        current.expectedBytes = expected
+                        current.phase = received == expected ? .verifying : .downloading
+                        model.catalogInstall = current
+                    }
+                }
+                defer { installPreparer.discard(quarantineReference: prepared.quarantineReference) }
+                try Task.checkCancellation()
+                guard model.catalogInstall?.id == operationID else { return }
+                // Once handed to the agent, local publication owns completion.
+                // Do not offer a cancel button that cannot cancel that operation.
+                model.catalogInstall?.phase = .installing
                 try await installHandler(prepared)
+                try Task.checkCancellation()
+                guard model.catalogInstall?.id == operationID else { return }
+                model.catalogInstall?.phase = .completed
+                retryableInstall = nil
+                if model.selectedDetail?.id == detail.id, model.actionState != .working {
+                    model.actionState = .succeeded(message: "Added to Library")
+                }
+                if let code = await Self.recordInstallWithRetry(operation: {
+                    try await gateway.recordInstall(receipt: grant.receipt, manifestDigest: prepared.manifestDigest,
+                        releaseID: prepared.releaseID, idempotencyKey: idempotencyKey)
+                }) {
+                    Self.logger.error("Install metric could not be recorded; code=\(code, privacy: .public)")
+                }
+            } catch is CancellationError {
+                if model.catalogInstall?.id == operationID { model.catalogInstall?.phase = .cancelled }
             } catch {
-                installPreparer.discard(quarantineReference: prepared.quarantineReference)
-                throw error
-            }
-            installPreparer.discard(quarantineReference: prepared.quarantineReference)
-            // Metrics are explicitly best effort: verified local playback must
-            // remain available if the network disappears after installation.
-            if let code = await Self.recordInstallWithRetry(operation: {
-                try await gateway.recordInstall(
-                    receipt: grant.receipt,
-                    manifestDigest: prepared.manifestDigest,
-                    releaseID: prepared.releaseID,
-                    idempotencyKey: idempotencyKey
-                )
-            }) {
-                Self.logger.error("Install metric could not be recorded; code=\(code, privacy: .public)")
+                guard model.catalogInstall?.id == operationID else { return }
+                let code = Self.diagnosticCode(for: error)
+                Self.logger.error("Catalog install failed; code=\(code, privacy: .public)")
+                let message = code == "stale_revision"
+                    ? "This wallpaper changed. Open it again to download the latest version."
+                    : "The download couldn’t be completed. Try again."
+                model.catalogInstall?.phase = .failed(message)
             }
         }
     }
@@ -1096,6 +1208,8 @@ public final class MarketplaceCoordinator {
             } catch is CancellationError {
                 return
             } catch {
+                let code = Self.diagnosticCode(for: error)
+                Self.logger.error("Report submission failed; code=\(code, privacy: .public)")
                 model.reportState = .failed(message: "The report could not be submitted. Try again.")
             }
         }
@@ -1147,6 +1261,10 @@ public final class MarketplaceCoordinator {
     }
 
     private func clearSubjectBoundState() {
+        installTask?.cancel()
+        model.catalogInstall = nil
+        retryableInstall = nil
+        moderatorAccess?.cancel()
         actionTask?.cancel()
         reportTask?.cancel()
         accountTask?.cancel()
@@ -1159,6 +1277,8 @@ public final class MarketplaceCoordinator {
         deferredAction = nil
         accountExportSnapshot = nil
         accountDeletionSnapshot = nil
+        accountExportRecoveryID = nil
+        accountDeletionRecoveryID = nil
         accountExportRequestKey = nil
         accountDeletionRequestKey = nil
         accountMFAFactorID = nil
@@ -1169,6 +1289,7 @@ public final class MarketplaceCoordinator {
         model.accountProfileState = .idle
         model.accountExportState = .idle
         model.accountDeletionState = .idle
+        model.actionState = .idle
         model.reportState = .idle
     }
 
@@ -1211,6 +1332,7 @@ public final class MarketplaceCoordinator {
                     revision: profile.revision
                 )
                 model.accountProfileState = .ready
+                await restoreAccountOperations(for: expectedUserID)
             } catch is CancellationError {
                 return
             } catch {
@@ -1274,8 +1396,32 @@ public final class MarketplaceCoordinator {
         }
     }
 
+    private func restoreAccountOperations(for subjectID: String) async {
+        guard let accountGateway else { return }
+        do {
+            let references = try await accountGateway.accountOperationReferences()
+            try Task.checkCancellation()
+            guard accountSubjectMatchesCurrentProfile(subjectID),
+                  let references, references.subjectID == subjectID
+            else { return }
+            if accountExportSnapshot == nil, let id = references.exportID {
+                accountExportRecoveryID = id
+                pollAccountExport(id: id)
+            }
+            if accountDeletionSnapshot == nil, let id = references.deletionID {
+                accountDeletionRecoveryID = id
+                pollAccountDeletion(id: id)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            Self.logger.error("Account operation recovery references could not be restored")
+        }
+    }
+
     private func applyAccountExport(_ snapshot: AccountExportSnapshot) {
         accountExportSnapshot = snapshot
+        accountExportRecoveryID = snapshot.id
         switch snapshot.status {
         case .queued:
             model.accountExportState = .queued
@@ -1300,9 +1446,9 @@ public final class MarketplaceCoordinator {
         accountExportPollTask = Task { [weak self] in
             guard let self, let accountGateway else { return }
             var current = snapshot
-            for _ in 0..<150 {
+            for _ in 0..<60 {
                 do {
-                    try await Task.sleep(for: .seconds(2))
+                    try await Task.sleep(for: .seconds(5))
                     let next = try await accountGateway.accountExportStatus(
                         id: current.id,
                         idempotencyKey: UUID().uuidString.lowercased()
@@ -1326,7 +1472,7 @@ public final class MarketplaceCoordinator {
         }
     }
 
-    private func pollAccountExport(_ snapshot: AccountExportSnapshot) {
+    private func pollAccountExport(id: String) {
         guard let accountGateway else { return }
         accountExportPollTask?.cancel()
         model.accountExportState = .working
@@ -1334,7 +1480,7 @@ public final class MarketplaceCoordinator {
             guard let self else { return }
             do {
                 let next = try await accountGateway.accountExportStatus(
-                    id: snapshot.id,
+                    id: id,
                     idempotencyKey: UUID().uuidString.lowercased()
                 )
                 try Task.checkCancellation()
@@ -1351,6 +1497,8 @@ public final class MarketplaceCoordinator {
     }
 
     private func applyAccountDeletion(_ snapshot: AccountDeletionSnapshot) {
+        accountDeletionSnapshot = snapshot
+        accountDeletionRecoveryID = snapshot.id
         if snapshot.status == .completed, let completedAt = snapshot.completedAt {
             model.accountDeletionState = .completed(completedAt: completedAt)
             return
@@ -1376,9 +1524,9 @@ public final class MarketplaceCoordinator {
         accountDeletionPollTask = Task { [weak self] in
             guard let self, let accountGateway else { return }
             var current = snapshot
-            for _ in 0..<150 {
+            for _ in 0..<60 {
                 do {
-                    try await Task.sleep(for: .seconds(2))
+                    try await Task.sleep(for: .seconds(5))
                     let next = try await accountGateway.accountDeletionStatus(
                         id: current.id,
                         idempotencyKey: UUID().uuidString.lowercased()
@@ -1403,7 +1551,7 @@ public final class MarketplaceCoordinator {
         }
     }
 
-    private func pollAccountDeletion(_ snapshot: AccountDeletionSnapshot) {
+    private func pollAccountDeletion(id: String) {
         guard let accountGateway else { return }
         accountDeletionPollTask?.cancel()
         model.accountDeletionState = .working
@@ -1411,7 +1559,7 @@ public final class MarketplaceCoordinator {
             guard let self else { return }
             do {
                 let next = try await accountGateway.accountDeletionStatus(
-                    id: snapshot.id,
+                    id: id,
                     idempotencyKey: UUID().uuidString.lowercased()
                 )
                 try Task.checkCancellation()
@@ -1569,30 +1717,39 @@ public final class MarketplaceCoordinator {
 
     private func presentationCards(
         _ items: [CatalogWallpaperSummary],
-        includePreview: Bool = false
+        retaining lease: CatalogMediaLease,
+        includePreview: Bool = false,
+        onCard: (@MainActor (WALICatalogCardPresentation) -> Void)? = nil
     ) async -> [WALICatalogCardPresentation] {
         guard let presentationMediaCache else {
             return items.map { Self.card($0) }
         }
         return await withTaskGroup(of: (Int, WALICatalogCardPresentation).self) { group in
-            for (index, item) in items.enumerated() {
+            var pending = Array(items.enumerated()).makeIterator()
+            func enqueue(_ entry: (offset: Int, element: CatalogWallpaperSummary)) {
                 group.addTask {
-                    let posterURL = try? await presentationMediaCache.localURL(for: item.poster)
-                    let previewURL = includePreview
-                        ? try? await presentationMediaCache.localURL(for: item.preview)
+                    let posterURL = try? await presentationMediaCache.localURL(for: entry.element.poster, retaining: lease)
+                    let previewURL = includePreview && !Task.isCancelled
+                        ? try? await presentationMediaCache.localURL(for: entry.element.preview, retaining: lease)
                         : nil
-                    return (index, Self.card(item, posterURL: posterURL, previewURL: previewURL))
+                    return (entry.offset, Self.card(entry.element, posterURL: posterURL, previewURL: previewURL))
                 }
             }
+            for _ in 0..<4 { if let entry = pending.next() { enqueue(entry) } }
             var values: [(Int, WALICatalogCardPresentation)] = []
-            for await value in group { values.append(value) }
+            while let value = await group.next() {
+                guard !Task.isCancelled else { group.cancelAll(); break }
+                values.append(value)
+                onCard?(value.1)
+                if let entry = pending.next() { enqueue(entry) }
+            }
             return values.sorted { $0.0 < $1.0 }.map(\.1)
         }
     }
 
     private func presentationSections(
         _ sections: [CatalogHomeSection]
-    ) async -> [WALICatalogSectionPresentation] {
+    ) -> [WALICatalogSectionPresentation] {
         let heroSummaries = WALIDiscoverLayout.carouselItems(from: sections.map(\.items))
         var result: [WALICatalogSectionPresentation] = []
         if !heroSummaries.isEmpty {
@@ -1600,7 +1757,7 @@ public final class MarketplaceCoordinator {
                 id: WALIDiscoverLayout.heroSectionID,
                 title: WALIDiscoverLayout.heroSectionTitle,
                 layout: WALIDiscoverLayout.heroSectionLayout,
-                cards: await presentationCards(heroSummaries, includePreview: true)
+                cards: heroSummaries.map { Self.card($0) }
             ))
         }
         for section in sections {
@@ -1608,24 +1765,89 @@ public final class MarketplaceCoordinator {
                 id: section.id,
                 title: section.title,
                 layout: WALIDiscoverLayout.catalogSectionLayout,
-                cards: await presentationCards(section.items)
+                cards: section.items.map { Self.card($0) }
             ))
         }
         return result
     }
 
+    private func hydrateBrowse(_ items: [CatalogWallpaperSummary], generation: UInt64, searching: Bool) async {
+        _ = await presentationCards(items, retaining: searching ? searchMediaLease : browseMediaLease) { [weak self] card in
+            guard let self, generation == browseGeneration else { return }
+            if searching {
+                model.searchItems = model.searchItems.map { $0.id == card.id ? $0.withMedia(from: card) : $0 }
+            } else {
+                model.browseItems = model.browseItems.map { $0.id == card.id ? $0.withMedia(from: card) : $0 }
+            }
+        }
+    }
+
+    private func hydrateHome(_ sections: [CatalogHomeSection], generation: UInt64) async {
+        var seen: Set<String> = []
+        let items = sections.flatMap(\.items).filter { seen.insert($0.id).inserted }
+        let update: @MainActor (WALICatalogCardPresentation) -> Void = { [weak self] card in
+            guard let self, generation == homeGeneration else { return }
+            model.homeSections = model.homeSections.map { section in
+                WALICatalogSectionPresentation(id: section.id, title: section.title, layout: section.layout,
+                    cards: section.cards.map { $0.id == card.id ? $0.withMedia(from: card) : $0 })
+            }
+        }
+        _ = await presentationCards(items, retaining: homeMediaLease, onCard: update)
+        guard !Task.isCancelled, generation == homeGeneration else { return }
+        let heroes = WALIDiscoverLayout.carouselItems(from: sections.map(\.items))
+        _ = await presentationCards(heroes, retaining: homeMediaLease, includePreview: true, onCard: update)
+    }
+
+    private enum DetailMediaUpdate: Sendable {
+        case poster(URL?)
+        case preview(URL?)
+        case related([WALICatalogCardPresentation])
+    }
+
+    private func hydrateDetail(_ value: CatalogWallpaperDetail, generation: UInt64) async {
+        guard let presentationMediaCache else { return }
+        let lease = detailMediaLease
+        await withTaskGroup(of: DetailMediaUpdate.self) { group in
+            var pendingHeroMedia = 2
+            group.addTask {
+                .poster(try? await presentationMediaCache.localURL(for: value.summary.poster, retaining: lease))
+            }
+            group.addTask {
+                let playback = try? await presentationMediaCache.localURL(for: value.videoDefault, retaining: lease)
+                guard !Task.isCancelled else { return .preview(nil) }
+                if let playback { return .preview(playback) }
+                return .preview(try? await presentationMediaCache.localURL(for: value.summary.preview, retaining: lease))
+            }
+            group.addTask { [weak self] in
+                .related(await self?.presentationCards(value.related, retaining: lease) ?? [])
+            }
+            for await update in group {
+                guard !Task.isCancelled, generation == detailGeneration,
+                      var current = model.selectedDetail, current.id == value.id,
+                      current.currentReleaseID == value.summary.currentReleaseID else {
+                    group.cancelAll()
+                    return
+                }
+                // Patch the latest value so a media completion cannot undo a
+                // Favorite or Save action performed while the preview loads.
+                switch update {
+                case let .poster(url):
+                    current.updateVerifiedPoster(url)
+                    pendingHeroMedia -= 1
+                case let .preview(url):
+                    current.updateVerifiedPreview(url)
+                    pendingHeroMedia -= 1
+                case let .related(cards): current.updateRelated(cards)
+                }
+                if pendingHeroMedia == 0 { current.finishLoadingMedia() }
+                model.selectedDetail = current
+            }
+        }
+    }
+
     private func presentationDetail(
         _ value: CatalogWallpaperDetail
-    ) async -> WALICatalogDetailPresentation {
-        let posterURL = try? await presentationMediaCache?.localURL(for: value.summary.poster)
-        let playbackURL = try? await presentationMediaCache?.localURL(for: value.videoDefault)
-        let previewURL: URL?
-        if let playbackURL {
-            previewURL = playbackURL
-        } else {
-            previewURL = try? await presentationMediaCache?.localURL(for: value.summary.preview)
-        }
-        let related = await presentationCards(value.related)
+    ) -> WALICatalogDetailPresentation {
         let totalSeconds = value.durationMilliseconds / 1_000
         let duration = String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
         return WALICatalogDetailPresentation(
@@ -1634,8 +1856,8 @@ public final class MarketplaceCoordinator {
             creator: value.summary.creator.displayName,
             creatorHandle: value.summary.creator.handle,
             description: value.description,
-            previewURL: previewURL ?? nil,
-            posterURL: posterURL ?? nil,
+            previewURL: nil,
+            posterURL: nil,
             attribution: value.attributionText,
             rightsHolder: value.rightsHolder,
             sourceURL: value.sourceURL,
@@ -1655,14 +1877,17 @@ public final class MarketplaceCoordinator {
             savedRevision: value.savedRevision,
             currentReleaseID: value.summary.currentReleaseID,
             wallpaperRevision: value.summary.revision,
-            related: related
+            related: value.related.map { Self.card($0) },
+            isLoadingMedia: presentationMediaCache != nil
         )
     }
 
     private static func loadState(for error: Error) -> WALIMarketplaceLoadState {
-        if let remote = error as? CatalogRemoteError,
-           remote.code == "temporarily_unavailable" {
-            return .offline
+        if let remote = error as? CatalogRemoteError {
+            if remote.code == "network_unavailable" { return .offline }
+            if remote.retryable {
+                return .failed(message: "The marketplace is temporarily unavailable. Try again in a moment.")
+            }
         }
         return .failed(message: "The marketplace could not be loaded.")
     }
