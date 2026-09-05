@@ -26,6 +26,20 @@ if [[ "${CONFIGURATION}" == "Development" ]]; then
         CODE_SIGNING_REQUIRED=YES
         "DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM}"
     )
+elif [[ "${CONFIGURATION}" == "Debug" ]]; then
+    # Service Management registers sealed app bundles. Local ad-hoc signing
+    # needs no developer credentials and keeps Debug free of production entitlements.
+    signing_arguments=(
+        CODE_SIGNING_ALLOWED=YES
+        CODE_SIGNING_REQUIRED=YES
+        CODE_SIGN_IDENTITY=-
+        DEVELOPMENT_TEAM=
+    )
+elif [[ "${CONFIGURATION}" == "Release" ]]; then
+    signing_arguments=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES)
+else
+    printf 'Unsupported configuration: %s\n' "${CONFIGURATION}" >&2
+    exit 1
 fi
 
 xcodebuild \
@@ -36,4 +50,3 @@ xcodebuild \
     -derivedDataPath "${DERIVED_DATA_PATH}" \
     "${signing_arguments[@]}" \
     build
-

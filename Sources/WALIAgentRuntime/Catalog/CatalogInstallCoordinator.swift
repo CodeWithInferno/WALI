@@ -13,6 +13,16 @@ public enum CatalogInstallError: Error, Sendable, Equatable {
 
 public typealias CatalogTranscodeHandler = @Sendable (TranscoderRequest) async throws -> TranscoderOutput
 
+public struct CatalogInstallResult: Sendable {
+    public let item: EngineLibraryItem
+    public let completedImport: EngineImportJob?
+
+    public init(item: EngineLibraryItem, completedImport: EngineImportJob? = nil) {
+        self.item = item
+        self.completedImport = completedImport
+    }
+}
+
 /// Re-establishes remote trust inside the authenticated agent, then feeds the
 /// downloaded canonical source through the existing sandboxed transcoder and
 /// content-addressed publication journal.
@@ -41,7 +51,7 @@ public actor CatalogInstallCoordinator {
         _ request: AgentCatalogInstallRequest,
         idempotencyKey: UUID,
         acceptedRevision: EngineRevision
-    ) async throws -> EngineLibraryItem {
+    ) async throws -> CatalogInstallResult {
         let quarantineURL = quarantineRoot.appendingPathComponent(
             "\(request.quarantineReference.uuidString.lowercased()).wali-quarantine.mp4",
             isDirectory: false
@@ -59,7 +69,7 @@ public actor CatalogInstallCoordinator {
             releaseID: verified.manifest.manifest.releaseID,
             manifestDigest: manifestDigest
         ) {
-            return try LibraryRecordFactory.makeEngineItem(from: existing)
+            return try CatalogInstallResult(item: LibraryRecordFactory.makeEngineItem(from: existing))
         }
 
         let sourceDigest = try ContentDigest(
@@ -78,6 +88,7 @@ public actor CatalogInstallCoordinator {
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
+            let startedAt = Date()
             let context = try await runtimeStore.beginImport(
                 sourceURL: ownedSourceURL,
                 sourceBookmark: sourceBookmark,
@@ -135,7 +146,13 @@ public actor CatalogInstallCoordinator {
                 )
                 let item = try LibraryRecordFactory.makeEngineItem(from: record)
                 try? await runtimeStore.removeAdoptedCatalogSource(ownedSourceURL)
-                return item
+                return CatalogInstallResult(
+                    item: item,
+                    completedImport: EngineImportJob(
+                        id: idempotencyKey, fileName: item.name,
+                        phase: .complete, progress: 1, createdAt: startedAt
+                    )
+                )
             } catch {
                 try? await runtimeStore.finishImportAttempt(
                     jobID: context.jobID,

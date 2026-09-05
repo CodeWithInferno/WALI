@@ -7,6 +7,7 @@ import { handleCreateUpload } from "../create-upload/index.ts";
 import { handleCatalogSecurityState } from "../catalog-security-state/index.ts";
 import { handleCreatorCommand } from "../creator-command/index.ts";
 import { handleModerateSubmission } from "../moderate-submission/index.ts";
+import { handleResolveReport } from "../resolve-report/index.ts";
 import { handleRecordInstall } from "../record-install/index.ts";
 import { handleRequestInstall } from "../request-install/index.ts";
 import { handlePublishRelease } from "../publish-release/index.ts";
@@ -803,6 +804,22 @@ Deno.test("moderation requires AAL2 before database access", async () => {
     dependencies(database),
   );
   assertEquals(response.status, 403);
+  assertEquals(database.calls.length, 0);
+  const reportResponse = await handleResolveReport(
+    jsonRequest(JSON.stringify({
+      api_version: "moderation.v1",
+      request_id: "90000000-0000-4000-8000-000000000051",
+      idempotency_key: "resolve_report_000000000001",
+      report_id: "81000000-0000-4000-8000-000000000001",
+      expected_revision: 1,
+      expected_wallpaper_revision: 2,
+      action: "hide_pending_review",
+      reason_code: "unsafe",
+      private_note: "Needs human investigation.",
+    })),
+    dependencies(database),
+  );
+  assertEquals(reportResponse.status, 403);
   assertEquals(database.calls.length, 0);
 });
 

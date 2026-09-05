@@ -209,8 +209,11 @@ release_app="$(new_fixture \
     com.wali.WALI \
     com.wali.WALIAgent \
     com.wali.WALITranscoder)"
-CONFIGURATION=Release "${VERIFIER}" "${release_app}" >/dev/null
-pass_count=$((pass_count + 1))
+expect_verifier_failure \
+    "release-unsigned" \
+    Release \
+    "${release_app}" \
+    "Release verification requires sealed signatures on all runtime bundles"
 
 development_app="$(new_fixture \
     development-adhoc \
@@ -346,7 +349,7 @@ expect_verifier_failure \
     "release-adhoc-sealed" \
     Release \
     "${release_adhoc}" \
-    "Release verification requires unsealed credential-free bundles"
+    "Release requires a Team ID"
 
 release_fake_seal="$(new_fixture \
     release-fake-seal \
@@ -365,7 +368,7 @@ expect_verifier_failure \
     "release-sealed-wrappers" \
     Release \
     "${release_fake_seal}" \
-    "Release verification requires unsealed credential-free bundles"
+    "Release requires a Team ID"
 
 release_partial="$(new_fixture \
     release-partial-seal \
@@ -380,7 +383,7 @@ expect_verifier_failure \
     "release-partial-seal" \
     Release \
     "${release_partial}" \
-    "Release verification requires unsealed credential-free bundles"
+    "Release verification requires sealed signatures on all runtime bundles"
 
 debug_sealed="$(new_fixture \
     debug-sealed \
@@ -393,7 +396,7 @@ expect_verifier_failure \
     "debug-sealed" \
     Debug \
     "${debug_sealed}" \
-    "Debug verification requires unsealed credential-free bundles"
+    "Debug bundles must be consistently unsealed or signed"
 
 debug_dylib="$(new_fixture \
     debug-dylib-linkage \

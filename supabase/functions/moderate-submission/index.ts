@@ -1,5 +1,6 @@
 import { EdgeError, success } from "../_shared/errors.ts";
 import { enforceRateLimit } from "../_shared/rate-limit.ts";
+import { normalizeStorageGrant } from "../_shared/storage-grant.ts";
 import {
   type EndpointDependencies,
   productionDependencies,
@@ -64,7 +65,11 @@ export async function handleModerateSubmission(
       2_147_483_647,
     );
     const creatorNote = requirePlainText(body.creator_note, 1, 2_000);
-    const privateNote = optionalPlainText(body.private_note, 4_000);
+    // An untouched optional native text field encodes as an empty string.
+    // Keep the database's optional-note representation canonical.
+    const privateNote = body.private_note === ""
+      ? null
+      : optionalPlainText(body.private_note, 4_000);
     if (
       !Array.isArray(body.reason_codes) || body.reason_codes.length > 20 ||
       body.reason_codes.some((code) =>
@@ -167,7 +172,11 @@ async function handleReadOperation(
     if (!validPage(data)) {
       throw new EdgeError("temporarily_unavailable", 503, true);
     }
-    return success(API_VERSION, envelope.requestID, data);
+    return success(
+      API_VERSION,
+      envelope.requestID,
+      await signCanonicalArtifacts(data, auth.accessToken, dependencies),
+    );
   }
   requireExactKeys(body, [
     "api_version",
@@ -179,7 +188,10 @@ async function handleReadOperation(
     "cursor",
     "limit",
   ]);
-  const status = requireEnum(body.status, ["pending", "under_review"] as const);
+  const status = requireEnum(
+    body.status,
+    ["pending", "under_review", "approved"] as const,
+  );
   const sort = requireEnum(
     body.sort,
     ["oldest_submitted", "newest_submitted", "risk_priority"] as const,
@@ -267,10 +279,11 @@ async function signCanonicalArtifacts(
         artifact.byte_count > 2_147_483_648 ||
         expectedExtension === null ||
         !artifact.storage_path.endsWith(`.${expectedExtension}`) ||
-        (artifact.role !== "poster" && artifact.role !== "preview") ||
+        (artifact.role !== "poster" && artifact.role !== "preview" &&
+          artifact.role !== "video_default") ||
         (artifact.role === "poster" &&
           !String(artifact.media_type).startsWith("image/")) ||
-        (artifact.role === "preview" && artifact.media_type !== "video/mp4") ||
+        (artifact.role !== "poster" && artifact.media_type !== "video/mp4") ||
         typeof artifact.width !== "number" ||
         !Number.isInteger(artifact.width) ||
         artifact.width < 1 || artifact.width > 7_680 ||
@@ -280,16 +293,18 @@ async function signCanonicalArtifacts(
         typeof artifact.duration_ms !== "number" ||
         !Number.isSafeInteger(artifact.duration_ms) ||
         (artifact.role === "poster" && artifact.duration_ms !== 0) ||
-        (artifact.role === "preview" &&
+        (artifact.role !== "poster" &&
           (artifact.duration_ms < 1 || artifact.duration_ms > 600_000))
       ) {
         throw new EdgeError("temporarily_unavailable", 503, true);
       }
-      paths.push(artifact.storage_path);
+      if (!paths.includes(artifact.storage_path)) {
+        paths.push(artifact.storage_path);
+      }
     }
   }
   if (paths.length === 0) return page;
-  if (paths.length > 200 || new Set(paths).size !== paths.length) {
+  if (paths.length > 200) {
     throw new EdgeError("temporarily_unavailable", 503, true);
   }
   const endpoint = new URL(
@@ -317,28 +332,23 @@ async function signCanonicalArtifacts(
     throw new EdgeError("temporarily_unavailable", 503, true);
   }
   const urls = new Map<string, string>();
-  const expectedOrigin = new URL(dependencies.supabaseURL).origin;
   for (const grant of grants) {
     if (
       !isObject(grant) || typeof grant.path !== "string" ||
-      typeof grant.signedURL !== "string" || !paths.includes(grant.path)
+      typeof grant.signedURL !== "string" || !paths.includes(grant.path) ||
+      urls.has(grant.path)
     ) {
       throw new EdgeError("temporarily_unavailable", 503, true);
     }
-    let signed: URL;
-    try {
-      signed = new URL(grant.signedURL, dependencies.supabaseURL);
-    } catch {
-      throw new EdgeError("temporarily_unavailable", 503, true);
-    }
-    if (
-      signed.origin !== expectedOrigin || signed.username || signed.password ||
-      signed.hash || signed.href.length > 4_096 ||
-      !signed.pathname.startsWith("/storage/v1/object/sign/processing-private/")
-    ) {
-      throw new EdgeError("temporarily_unavailable", 503, true);
-    }
-    urls.set(grant.path, signed.href);
+    urls.set(
+      grant.path,
+      normalizeStorageGrant(
+        grant.signedURL,
+        dependencies.supabaseURL,
+        "processing-private",
+        grant.path,
+      ),
+    );
   }
   return {
     items: page.items.map((raw) => {

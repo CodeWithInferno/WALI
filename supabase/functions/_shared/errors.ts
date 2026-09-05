@@ -85,6 +85,9 @@ export function mapDatabaseError(message: string): EdgeError {
   const mappings: ReadonlyArray<readonly [string, string, number, boolean]> = [
     ["WALI_IDEMPOTENCY_CONFLICT", "idempotency_conflict", 409, false],
     ["WALI_REVISION_MISMATCH", "stale_revision", 409, false],
+    ["WALI_REPORT_NOT_FOUND", "not_found", 404, false],
+    ["WALI_REPORT_ASSIGNED_ELSEWHERE", "stale_revision", 409, false],
+    ["WALI_SELF_REVIEW_FORBIDDEN", "self_review_forbidden", 403, false],
     ["WALI_AUTH_REQUIRED", "authentication_required", 401, false],
     ["WALI_AUTH_SUBJECT_CHANGED", "authentication_required", 401, false],
     ["WALI_ACCOUNT_INACTIVE", "account_suspended", 403, false],

@@ -10,18 +10,18 @@ struct BrowseView: View {
     let onOpen: (String) -> Void
     let onLoadMore: () -> Void
 
+    private var normalizedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var isSearching: Bool { !normalizedQuery.isEmpty }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Spacer(minLength: 0)
-                CatalogFiltersView(sort: $sort)
+            WALIPageHeader(isSearching ? "Search Results" : "Browse") {
+                if !isSearching { CatalogFiltersView(sort: $sort) }
             }
-            .padding(.horizontal, WALIBrowseLayout.chromeInset)
-            .padding(.top, 16)
-            .padding(.bottom, 8)
             content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { onLoad(sort) }
         .onChange(of: sort) { _, value in onLoad(value) }
         .accessibilityIdentifier("WALI.Marketplace.Browse")
@@ -34,22 +34,30 @@ struct BrowseView: View {
             ProgressView("Finding wallpapers…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .empty:
-            ContentUnavailableView.search(text: query)
+            if isSearching {
+                ContentUnavailableView.search(text: normalizedQuery)
+            } else {
+                ContentUnavailableView("No Wallpapers Yet", systemImage: "photo.on.rectangle.angled")
+            }
         case .offline:
-            ContentUnavailableView(
-                "Marketplace Offline",
-                systemImage: "wifi.slash",
-                description: Text("Browsing needs a connection; your Library remains available.")
-            )
+            ContentUnavailableView {
+                Label("Marketplace Offline", systemImage: "wifi.slash")
+            } description: {
+                Text("Browsing needs a connection; your Library remains available.")
+            } actions: {
+                Button("Try Again") { onLoad(sort) }
+            }
         case let .failed(message):
-            ContentUnavailableView(
-                "Couldn’t Load Wallpapers",
-                systemImage: "exclamationmark.triangle",
-                description: Text(message)
-            )
+            ContentUnavailableView {
+                Label("Couldn’t Load Wallpapers", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(message)
+            } actions: {
+                Button("Try Again") { onLoad(sort) }
+            }
         case .ready:
             GeometryReader { geometry in
-                let items = query.isEmpty ? marketplace.browseItems : marketplace.searchItems
+                let items = isSearching ? marketplace.searchItems : marketplace.browseItems
                 let columnCount = WALIBrowseLayout.columnCount(forAvailableWidth: geometry.size.width)
                 ScrollView {
                     WALIMasonryLayout(columnCount: columnCount, gutter: WALIBrowseLayout.gutter) {
@@ -62,6 +70,13 @@ struct BrowseView: View {
                     }
                     .padding(.horizontal, WALIBrowseLayout.chromeInset)
                     .padding(.bottom, 24)
+                    if let message = marketplace.browsePageError {
+                        HStack {
+                            Text(message).foregroundStyle(.secondary)
+                            Button("Try Again", action: onLoadMore)
+                        }
+                        .padding(.bottom, 20)
+                    }
                 }
             }
         }

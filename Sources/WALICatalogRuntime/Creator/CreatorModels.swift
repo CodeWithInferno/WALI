@@ -290,6 +290,7 @@ public struct CreatorMediaFacts: Sendable, Hashable {
 public enum CreatorArtifactRole: String, Codable, Sendable, Hashable {
     case poster
     case preview
+    case videoDefault = "video_default"
 }
 
 public struct CreatorCanonicalArtifact: Identifiable, Sendable, Hashable {
@@ -326,7 +327,7 @@ public struct CreatorCanonicalArtifact: Identifiable, Sendable, Hashable {
         let validMedia = switch role {
         case .poster:
             ["image/jpeg", "image/png"].contains(mediaType) && durationMilliseconds == 0
-        case .preview:
+        case .preview, .videoDefault:
             mediaType == "video/mp4" && (1...600_000).contains(durationMilliseconds)
         }
         guard validMedia else { throw CreatorContractError.nonCanonicalArtifact }
@@ -450,6 +451,7 @@ public struct CreatorProcessingStatus: Sendable, Hashable {
 public struct CreatorSubmission: Identifiable, Sendable, Hashable {
     public let id: UUID
     public let wallpaperID: UUID?
+    public let wallpaperStatus: ModerationWallpaperStatus?
     public let revision: UInt64
     public let generation: UInt64
     public let state: CreatorSubmissionState
@@ -471,10 +473,12 @@ public struct CreatorSubmission: Identifiable, Sendable, Hashable {
         moderationReasonCodes: [String],
         creatorFacingNote: String?,
         createdAt: Date,
-        updatedAt: Date
+        updatedAt: Date,
+        wallpaperStatus: ModerationWallpaperStatus? = nil
     ) {
         self.id = id
         self.wallpaperID = wallpaperID
+        self.wallpaperStatus = wallpaperStatus
         self.revision = revision
         self.generation = generation
         self.state = state
@@ -739,6 +743,9 @@ public struct ModerationQueueItem: Identifiable, Sendable, Hashable {
     public let submissionID: UUID
     public let revision: UInt64
     public let generation: UInt64
+    public let state: CreatorSubmissionState
+    public let wallpaperID: UUID?
+    public let wallpaperRevision: UInt64?
     public let creator: CreatorPublicIdentity
     public let proposedTitle: String
     public let proposedDescription: String
@@ -773,11 +780,17 @@ public struct ModerationQueueItem: Identifiable, Sendable, Hashable {
         mediaFacts: CreatorMediaFacts?,
         findings: [CreatorFinding],
         modelSuggestions: [CreatorModelSuggestion],
-        submittedAt: Date
+        submittedAt: Date,
+        state: CreatorSubmissionState = .underReview,
+        wallpaperID: UUID? = nil,
+        wallpaperRevision: UInt64? = nil
     ) {
         self.submissionID = submissionID
         self.revision = revision
         self.generation = generation
+        self.state = state
+        self.wallpaperID = wallpaperID
+        self.wallpaperRevision = wallpaperRevision
         self.creator = creator
         self.proposedTitle = proposedTitle
         self.proposedDescription = proposedDescription
@@ -793,6 +806,45 @@ public struct ModerationQueueItem: Identifiable, Sendable, Hashable {
         self.findings = findings
         self.modelSuggestions = modelSuggestions
         self.submittedAt = submittedAt
+    }
+}
+
+public struct PublishReleaseRequest: Sendable, Hashable {
+    public let submissionID: UUID
+    public let expectedRevision: UInt64
+    public let expectedGeneration: UInt64
+    public let expectedWallpaperRevision: UInt64
+    public let idempotencyKey: String
+
+    public init(submissionID: UUID, expectedRevision: UInt64, expectedGeneration: UInt64,
+                expectedWallpaperRevision: UInt64, idempotencyKey: String) throws {
+        guard CreatorValidation.isRevision(expectedRevision), expectedGeneration > 0,
+              CreatorValidation.isRevision(expectedGeneration),
+              CreatorValidation.isRevision(expectedWallpaperRevision),
+              CreatorValidation.isIdempotencyKey(idempotencyKey)
+        else { throw CreatorContractError.invalidRequest }
+        self.submissionID = submissionID
+        self.expectedRevision = expectedRevision
+        self.expectedGeneration = expectedGeneration
+        self.expectedWallpaperRevision = expectedWallpaperRevision
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public struct PublishedRelease: Sendable, Hashable {
+    public let wallpaperID: UUID
+    public let releaseID: UUID
+    public let edition: UInt64
+    public let wallpaperRevision: UInt64
+    public let publishedAt: Date
+
+    public init(wallpaperID: UUID, releaseID: UUID, edition: UInt64,
+                wallpaperRevision: UInt64, publishedAt: Date) {
+        self.wallpaperID = wallpaperID
+        self.releaseID = releaseID
+        self.edition = edition
+        self.wallpaperRevision = wallpaperRevision
+        self.publishedAt = publishedAt
     }
 }
 
@@ -948,19 +1000,106 @@ public struct ModerationDecisionResult: Sendable, Hashable {
     }
 }
 
+public enum ModerationReportStatus: String, Sendable, Hashable {
+    case open, triaged, appealed, closed
+}
+
+public enum ModerationWallpaperStatus: String, Sendable, Hashable {
+    case draft, published, hidden, suspended, removed
+}
+
+public enum ModerationReportAction: String, CaseIterable, Sendable, Hashable {
+    case closeNoAction = "close_no_action"
+    case hidePendingReview = "hide_pending_review"
+    case delist
+}
+
 public struct ModerationReport: Identifiable, Sendable, Hashable {
     public let id: UUID
     public let revision: UInt64
     public let reasonCode: String
     public let safeSummary: String
     public let createdAt: Date
+    public let status: ModerationReportStatus
+    public let wallpaperID: UUID
+    public let wallpaperRevision: UInt64
+    public let wallpaperTitle: String
+    public let wallpaperStatus: ModerationWallpaperStatus
+    public let releaseID: UUID?
+    public let edition: UInt64?
+    public let canonicalArtifacts: [CreatorCanonicalArtifact]
 
-    public init(id: UUID, revision: UInt64, reasonCode: String, safeSummary: String, createdAt: Date) {
+    public init(
+        id: UUID, revision: UInt64, reasonCode: String, safeSummary: String, createdAt: Date,
+        status: ModerationReportStatus, wallpaperID: UUID, wallpaperRevision: UInt64,
+        wallpaperTitle: String, wallpaperStatus: ModerationWallpaperStatus,
+        releaseID: UUID?, edition: UInt64?, canonicalArtifacts: [CreatorCanonicalArtifact]
+    ) {
         self.id = id
         self.revision = revision
         self.reasonCode = reasonCode
         self.safeSummary = safeSummary
         self.createdAt = createdAt
+        self.status = status
+        self.wallpaperID = wallpaperID
+        self.wallpaperRevision = wallpaperRevision
+        self.wallpaperTitle = wallpaperTitle
+        self.wallpaperStatus = wallpaperStatus
+        self.releaseID = releaseID
+        self.edition = edition
+        self.canonicalArtifacts = canonicalArtifacts
+    }
+}
+
+public struct ModerationReportResolutionRequest: Sendable, Hashable {
+    public let reportID: UUID
+    public let expectedRevision: UInt64
+    public let wallpaperID: UUID
+    public let expectedWallpaperRevision: UInt64
+    public let action: ModerationReportAction
+    public let reasonCode: String
+    public let privateNote: String
+    public let idempotencyKey: String
+
+    public init(report: ModerationReport, action: ModerationReportAction, reasonCode: String,
+                privateNote: String, idempotencyKey: String) throws {
+        guard report.revision > 0, CreatorValidation.isRevision(report.revision),
+              report.wallpaperRevision > 0, CreatorValidation.isRevision(report.wallpaperRevision),
+              ["no_violation", "copyright", "impersonation", "unsafe", "sexual", "hate", "violence", "spam", "misleading", "other"].contains(reasonCode),
+              (action == .closeNoAction) == (reasonCode == "no_violation"),
+              CreatorValidation.isPlainText(privateNote, range: 1...2_000),
+              CreatorValidation.isIdempotencyKey(idempotencyKey)
+        else { throw CreatorContractError.invalidRequest }
+        reportID = report.id
+        expectedRevision = report.revision
+        wallpaperID = report.wallpaperID
+        expectedWallpaperRevision = report.wallpaperRevision
+        self.action = action
+        self.reasonCode = reasonCode
+        self.privateNote = privateNote
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public struct ModerationReportResolution: Sendable, Hashable {
+    public let reportID: UUID
+    public let revision: UInt64
+    public let status: ModerationReportStatus
+    public let action: ModerationReportAction
+    public let wallpaperID: UUID
+    public let wallpaperRevision: UInt64
+    public let wallpaperStatus: ModerationWallpaperStatus
+
+    public init(reportID: UUID, revision: UInt64, status: ModerationReportStatus,
+                action: ModerationReportAction, wallpaperID: UUID, wallpaperRevision: UInt64,
+                wallpaperStatus: ModerationWallpaperStatus) {
+        self.reportID = reportID
+        self.revision = revision
+        self.status = status
+        self.action = action
+        self.wallpaperID = wallpaperID
+        self.wallpaperRevision = wallpaperRevision
+        self.wallpaperStatus = wallpaperStatus
     }
 }
 

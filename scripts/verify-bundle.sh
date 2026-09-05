@@ -69,7 +69,7 @@ assert_strict_descendant() {
         fail "${label} must be a strict descendant of its expected parent"
 }
 
-verify_development_bundle() {
+verify_signed_bundle() {
     local bundle_path="$1"
     local expected_group="$2"
     local label="$3"
@@ -83,7 +83,7 @@ verify_development_bundle() {
     validation_output="$(
         printf '%s\n' "${metadata}" |
             "${SIGNATURE_VALIDATOR}" \
-                --configuration Development \
+                --configuration "${CONFIGURATION}" \
                 --label "${label}" \
                 --bundle-identifier "${expected_identifier}" \
                 --team "${expected_team}" \
@@ -240,56 +240,18 @@ helper_ui_element="$(plist_value "${HELPER_PATH}/Contents/Info.plist" LSUIElemen
 
 bundle_paths=("${APP_PATH}" "${AGENT_PATH}" "${XPC_PATH}" "${HELPER_PATH}")
 
+expected_version="$(plist_value "${APP_PATH}/Contents/Info.plist" CFBundleShortVersionString)"
+expected_build="$(plist_value "${APP_PATH}/Contents/Info.plist" CFBundleVersion)"
+[[ "${expected_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "invalid application version"
+[[ "${expected_build}" =~ ^[1-9][0-9]*$ ]] || fail "invalid application build number"
 for bundle_path in "${bundle_paths[@]}"; do
     info_plist="${bundle_path}/Contents/Info.plist"
-    [[ "$(plist_value "${info_plist}" CFBundleShortVersionString)" == "0.1.0" ]] ||
-        fail "$(/usr/bin/basename "${bundle_path}") short version must be 0.1.0"
-    [[ "$(plist_value "${info_plist}" CFBundleVersion)" == "1" ]] ||
-        fail "$(/usr/bin/basename "${bundle_path}") build version must be 1"
+    [[ "$(plist_value "${info_plist}" CFBundleShortVersionString)" == "${expected_version}" ]] ||
+        fail "$(/usr/bin/basename "${bundle_path}") version differs from the app"
+    [[ "$(plist_value "${info_plist}" CFBundleVersion)" == "${expected_build}" ]] ||
+        fail "$(/usr/bin/basename "${bundle_path}") build number differs from the app"
 done
 
-sealed_bundle_count=0
-for bundle_path in "${bundle_paths[@]}"; do
-    seal_path="${bundle_path}/Contents/_CodeSignature/CodeResources"
-    if [[ -e "${seal_path}" || -L "${seal_path}" ]]; then
-        sealed_bundle_count=$((sealed_bundle_count + 1))
-    fi
-done
-
-if [[ "${CONFIGURATION}" == "Debug" || "${CONFIGURATION}" == "Release" ]]; then
-    [[ ${sealed_bundle_count} -eq 0 ]] ||
-        fail "${CONFIGURATION} verification requires unsealed credential-free bundles"
-else
-    [[ ${sealed_bundle_count} -eq 4 ]] ||
-        fail "Development verification requires sealed signatures on all runtime bundles"
-fi
-
-if [[ "${CONFIGURATION}" == "Development" ]]; then
-    verify_development_bundle \
-        "${APP_PATH}" \
-        "${expected_app_group}" \
-        "WALI.app" \
-        "${expected_app_identifier}" \
-        "${expected_development_team}"
-    verify_development_bundle \
-        "${AGENT_PATH}" \
-        "${expected_app_group}" \
-        "WALIAgent.app" \
-        "${expected_agent_identifier}" \
-        "${expected_development_team}"
-    verify_development_bundle \
-        "${XPC_PATH}" \
-        "" \
-        "WALITranscoder.xpc" \
-        "${expected_transcoder_identifier}" \
-        "${expected_development_team}"
-    verify_development_bundle \
-        "${HELPER_PATH}" \
-        "${expected_app_group}" \
-        "WALILockScreenHelper.app" \
-        "${expected_helper_identifier}" \
-        "${expected_development_team}"
-fi
 
 executables=(
     "${APP_PATH}/Contents/MacOS/WALI"
@@ -361,10 +323,68 @@ for bundle_path in "${bundle_paths[@]}"; do
         fail "internal frameworks were embedded in ${bundle_path}"
 done
 
+sealed_bundle_count=0
+for bundle_path in "${bundle_paths[@]}"; do
+    seal_path="${bundle_path}/Contents/_CodeSignature/CodeResources"
+    if [[ -e "${seal_path}" || -L "${seal_path}" ]]; then
+        sealed_bundle_count=$((sealed_bundle_count + 1))
+    fi
+done
+
+if [[ "${CONFIGURATION}" == "Debug" ]]; then
+    [[ ${sealed_bundle_count} -eq 0 || ${sealed_bundle_count} -eq 4 ]] ||
+        fail "Debug bundles must be consistently unsealed or signed"
+    if [[ ${sealed_bundle_count} -eq 4 ]]; then
+        for bundle_path in "${bundle_paths[@]}"; do
+            /usr/bin/codesign --verify --strict "${bundle_path}" || fail "invalid Debug seal"
+        done
+    fi
+else
+    [[ ${sealed_bundle_count} -eq 4 ]] ||
+        fail "${CONFIGURATION} verification requires sealed signatures on all runtime bundles"
+fi
+
+if [[ "${CONFIGURATION}" == "Release" ]]; then
+    expected_development_team="$(/usr/bin/codesign -dvv "${APP_PATH}" 2>&1 | /usr/bin/awk -F= '/^TeamIdentifier=/{print $2}')"
+    [[ -n "${expected_development_team}" && "${expected_development_team}" != "not set" ]] || fail "Release requires a Team ID"
+    if [[ -n "${DEVELOPMENT_TEAM:-}" ]]; then
+        [[ "${expected_development_team}" == "${DEVELOPMENT_TEAM}" ]] || fail "Release Team ID does not match DEVELOPMENT_TEAM"
+    fi
+fi
+if [[ "${CONFIGURATION}" != "Debug" ]]; then
+    verify_signed_bundle \
+        "${APP_PATH}" \
+        "${expected_app_group}" \
+        "WALI.app" \
+        "${expected_app_identifier}" \
+        "${expected_development_team}"
+    verify_signed_bundle \
+        "${AGENT_PATH}" \
+        "${expected_app_group}" \
+        "WALIAgent.app" \
+        "${expected_agent_identifier}" \
+        "${expected_development_team}"
+    verify_signed_bundle \
+        "${XPC_PATH}" \
+        "" \
+        "WALITranscoder.xpc" \
+        "${expected_transcoder_identifier}" \
+        "${expected_development_team}"
+    verify_signed_bundle \
+        "${HELPER_PATH}" \
+        "${expected_app_group}" \
+        "WALILockScreenHelper.app" \
+        "${expected_helper_identifier}" \
+        "${expected_development_team}"
+fi
+
+
 if [[ "${CONFIGURATION}" == "Development" ]]; then
     signing_summary="strict Apple Development signatures"
+elif [[ "${CONFIGURATION}" == "Release" ]]; then
+    signing_summary="strict Developer ID signatures with secure timestamps"
 else
-    signing_summary="unsealed credential-free wrappers"
+    signing_summary="credential-free wrappers"
 fi
 printf 'Verified %s WALI.app identities, nested topology, %s, versions, and static internal linkage\n' \
     "${CONFIGURATION}" "${signing_summary}"

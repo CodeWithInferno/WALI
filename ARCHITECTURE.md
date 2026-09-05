@@ -1,6 +1,6 @@
 # WALI Architecture
 
-**Status:** Implemented local pre-release baseline, 2026-09-01
+**Status:** Implemented pre-release repair candidate, 2026-09-04
 **Scope:** Native macOS 15+ wallpaper engine and accepted marketplace foundation
 
 WALI is an engine-centered modular monolith hosted by `WALIAgent.app`. The
@@ -11,7 +11,7 @@ agent is the sole local runtime authority,
 ADRs 0011–0016 add an app-only marketplace without moving local runtime
 authority to the server. Supabase owns internet-facing identity/catalog state;
 `WALICatalog` owns strict signed-catalog contracts; a foreground adapter owns
-network transport. `WALIAgent` still owns local install/render/SQLite without
+network transport. `WALIAgent` still owns local install/render/persistence without
 Full Disk Access. `WALILockScreenHelper.app` is the only WALI binary eligible
 for that optional permission and owns only the fixed authenticated-session
 Lock Screen compatibility operations.
@@ -19,10 +19,13 @@ Lock Screen compatibility operations.
 The local wallpaper engine, bounded authenticated XPC paths, per-display
 renderer, durable Engine/store, import/transcode pipeline, signed-catalog
 verification, and narrow Lock Screen helper are implemented. Marketplace
-schema, Edge Function, queue, worker, and client foundations are implemented
-and tested locally, but this is not deployment evidence: creator/moderator and
-account-privacy product flows are incomplete, public creator uploads are
-disabled, and no hosted project or worker VM is claimed to be configured.
+schema, Edge Functions, queues, worker, and native creator/moderator/account
+routes are implemented. The staging creator agreement, original-video upload,
+worker processing, submission, export, and catalog install have native evidence.
+Moderation policy, deletion, restore, capacity, distribution, and hardware
+release gates remain open. See the dated
+[evidence ledger](docs/release/marketplace-public-beta-evidence.md); a staging
+canary is not production readiness.
 [`modules.yml`](docs/architecture/modules.yml) separates current
 presence/capabilities from target responsibility and is the authoritative graph
 registry.
@@ -85,11 +88,12 @@ installed launchd lifecycle remain environment evidence, not local hostless
 test claims.
 
 Debug, Development, and Release use distinct bundle and planned control-service
-namespaces. Credential-free Debug and Release verification requires unsealed
-wrappers; linker-produced ad-hoc Mach-O signatures are not bundle seals.
-Debug has no app-group entitlement. Development uses the
+namespaces. Script-built Debug bundles receive ad-hoc seals for local agent
+registration; hostless test builds may remain unsealed. Debug has no app-group
+entitlement and cannot authenticate the privileged helper. Development uses the
 `com.wali.development.*` namespace, strict Apple Development signatures, and
-its own app group; Release retains the `com.wali.*` production identities.
+its own app group; Release retains the `com.wali.*` production identities and
+requires configured distribution signing.
 
 ### Implemented topology and remaining environment proof
 
@@ -132,16 +136,17 @@ anonymous endpoint is not an acceptable fallback.
   revisions, durable job semantics, and orchestration policy.
 - `WALIUI` contains reusable presentation only.
 - Runtime static modules adapt the engine and model to SwiftUI, AppKit,
-  AVFoundation, SQLite, ServiceManagement, launchd, and XPC.
+  AVFoundation, atomic file persistence, ServiceManagement, launchd, and XPC.
 - `WALICatalog` owns bounded catalog identifiers, canonical JSON, detached
   Ed25519 verification, approved-host checks, and revocation values. It depends
   only on `WALIModel` internally and Foundation/CryptoKit from the platform; it
   has no transport, UI, media, persistence, or Supabase dependency.
 - `WALICatalogRuntime` implements native Apple sign-in, public catalog,
   interaction/report/install transport, bounded mapping, public caching, and
-  create-exclusive downloads. Creator/moderator protocols and presentation
-  models exist, but their production gateway and app-route composition are
-  deferred. Supabase types do not escape the runtime boundary.
+  create-exclusive downloads, creator submissions, authenticated moderation,
+  and account export/deletion. Their native routes are composed; the evidence
+  ledger identifies which end-to-end flows still require verification.
+  Supabase types do not escape the runtime boundary.
 - `WALILockScreenHelperRuntime` owns only authenticated, fixed-root, version-
   gated Lock Screen transactions and process refreshes. Its composition app is
   the only product eligible for Full Disk Access and imports no media, network,
@@ -163,7 +168,10 @@ needs a real adapter boundary, an owner, and at least one caller.
 - Agent AppKit/SwiftUI objects, wallpaper windows, players, and display
   reconciliation are `@MainActor` owned. Engine operations reach them through
   narrow adapters; the Engine does not import AppKit or AVFoundation.
-- The agent is the only WALI runtime process that opens SQLite.
+- The agent is the sole writer of library, job, assignment, and Engine state.
+  Current runtime persistence uses atomically replaced JSON snapshots and
+  content-addressed files, not SQLite. Any future runtime database stays behind
+  this ownership boundary and requires an accepted migration decision.
 - `WALITranscoder.xpc` operates on one bounded immutable attempt at a time. It
   may claim digests and media properties, but it cannot publish artifacts,
   mutate assignments, or edit the database.
@@ -180,7 +188,7 @@ idempotent.
   not generic CRUD.
 - `PresentationUseCases`: assignment, playback, and display intentions.
 - `RuntimeStore`: Engine transactions, durable jobs, revisions, and install
-  journal access; it does not leak SQLite handles.
+  journal access; storage representations do not escape its boundary.
 - `WallpaperRenderer`: capability-based preparation, activation, and
   idempotent teardown.
 - `TranscodeExecutor`: bounded immutable attempts and cancellable progress.
@@ -218,7 +226,7 @@ intent_recorded -> verifying -> verified -> prepared -> published -> committed
 ```
 
 Only committed releases appear in library queries. Recovery reconciles
-journal, filesystem, and database state idempotently; a stale worker completion
+journal, filesystem, and durable metadata state idempotently; a stale worker completion
 cannot publish.
 
 Every persisted or external surface is inventoried in
@@ -260,12 +268,19 @@ and install follow ADRs 0011–0016; they do not broaden Lock Screen scope.
 
 **Implementation status:** the schema, bounded Edge contracts, queue workers,
 private staging/promotion path, classifier persistence, catalog client, and
-local install verifier are implemented and exercised locally. Rights-proof
-scanning and reviewer grants, licensed/other submissions, native
-creator/moderator composition, account export/deletion retrieval and status,
-and the Supabase Auth cleanup executor are deferred. Hosted Supabase projects,
-a dedicated worker VM, production signing/recovery keys, exact release images,
-and backup/restore evidence remain external release gates.
+local install verifier are implemented. Native creator/moderator composition,
+account export/deletion retrieval and status, and the Supabase Auth cleanup
+executor are wired. Staging has a dedicated worker and native evidence for
+agreement acceptance, media processing, requested revisions, resubmission,
+MFA-protected approval, account export, and catalog installation. Rights-proof
+scanning and reviewer grants, licensed/other submissions, content-safety
+screening, public-object removal and copyright case handling remain incomplete.
+Native report hiding/removal is verified for the original staging canary.
+Production signing and
+recovery, exact release verification, capacity, and backup/restore evidence
+remain release gates. See the dated
+[evidence ledger](docs/release/marketplace-public-beta-evidence.md) for the
+verified candidate and remaining native journeys.
 
 Supabase is the only public control plane: Auth, a non-exposed authoritative
 Postgres schema, explicit public views/RPCs, private upload/evidence/export

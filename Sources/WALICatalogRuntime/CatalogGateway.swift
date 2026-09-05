@@ -400,8 +400,26 @@ public protocol CatalogReportGateway: Sendable {
     func report(_ request: CatalogReportRequest) async throws -> CatalogReportReceipt
 }
 
+public struct AccountPrivacyOperationReferences: Sendable {
+    public let subjectID: String
+    public let exportID: String?
+    public let deletionID: String?
+
+    public init(subjectID: String, exportID: String?, deletionID: String?) throws {
+        guard UUID(uuidString: subjectID)?.uuidString.lowercased() == subjectID,
+              [exportID, deletionID].compactMap({ $0 }).allSatisfy({
+                  UUID(uuidString: $0)?.uuidString.lowercased() == $0
+              })
+        else { throw CatalogMappingError.invalidResponse }
+        self.subjectID = subjectID
+        self.exportID = exportID
+        self.deletionID = deletionID
+    }
+}
+
 public protocol AccountPrivacyGateway: Sendable {
     func accountProfile() async throws -> MarketplaceAccountProfile
+    func accountOperationReferences() async throws -> AccountPrivacyOperationReferences?
     func requestAccountExport(idempotencyKey: String) async throws -> AccountExportSnapshot
     func accountExportStatus(id: String, idempotencyKey: String) async throws -> AccountExportSnapshot
     func saveAccountExport(_ snapshot: AccountExportSnapshot, to destination: URL) async throws
@@ -411,6 +429,10 @@ public protocol AccountPrivacyGateway: Sendable {
         idempotencyKey: String
     ) async throws -> AccountDeletionSnapshot
     func accountDeletionStatus(id: String, idempotencyKey: String) async throws -> AccountDeletionSnapshot
+}
+
+public extension AccountPrivacyGateway {
+    func accountOperationReferences() async throws -> AccountPrivacyOperationReferences? { nil }
 }
 
 public extension CatalogGateway {

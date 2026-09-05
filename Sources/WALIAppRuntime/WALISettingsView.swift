@@ -20,6 +20,7 @@ public struct WALISettingsView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
+            WALIPageHeader("Settings") { EmptyView() }
             Form {
                 Section("General") {
                     Toggle("Launch WALI at Login", isOn: $draft.launchAtLogin)
@@ -95,6 +96,7 @@ public struct WALISettingsView: View {
                 }
             }
             .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
             .padding(12)
 
             Divider()

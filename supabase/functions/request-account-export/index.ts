@@ -1,5 +1,6 @@
 import { EdgeError, success } from "../_shared/errors.ts";
 import { enforceRateLimit } from "../_shared/rate-limit.ts";
+import { normalizeStorageGrant } from "../_shared/storage-grant.ts";
 import {
   type EndpointDependencies,
   productionDependencies,
@@ -104,6 +105,9 @@ async function handleAccountExportStatus(
       typeof status.digest !== "string" ||
       !/^[0-9a-f]{64}$/.test(status.digest)
     ) throw new EdgeError("temporarily_unavailable", 503, true);
+    // Capture before signing and round down: never advertise a longer grant.
+    const grantStartedAt = Math.floor(dependencies.now().getTime() / 1_000) *
+      1_000;
     const grant = await createExportDownloadGrant(
       status.download_path,
       auth.accessToken,
@@ -111,7 +115,7 @@ async function handleAccountExportStatus(
     );
     downloadURL = grant.url;
     downloadExpiresAt = new Date(
-      dependencies.now().getTime() + 300_000,
+      grantStartedAt + 300_000,
     ).toISOString().replace(".000Z", "Z");
   }
   return success(API_VERSION, envelope.requestID, {
@@ -156,21 +160,14 @@ async function createExportDownloadGrant(
   if (!isObject(value) || typeof value.signedURL !== "string") {
     throw new EdgeError("temporarily_unavailable", 503, true);
   }
-  let signed: URL;
-  try {
-    signed = new URL(value.signedURL, dependencies.supabaseURL);
-  } catch {
-    throw new EdgeError("temporarily_unavailable", 503, true);
-  }
-  const expectedOrigin = new URL(dependencies.supabaseURL).origin;
-  if (
-    signed.origin !== expectedOrigin || signed.username || signed.password ||
-    signed.hash ||
-    !signed.pathname.startsWith(
-      `/storage/v1/object/sign/exports-private/${encodedPath}`,
-    ) || signed.href.length > 4_096
-  ) throw new EdgeError("temporarily_unavailable", 503, true);
-  return { url: signed.href };
+  return {
+    url: normalizeStorageGrant(
+      value.signedURL,
+      dependencies.supabaseURL,
+      "exports-private",
+      storagePath,
+    ),
+  };
 }
 
 if (import.meta.main) {

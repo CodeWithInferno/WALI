@@ -3,3 +3,8 @@
 // private keys remain in the macOS keychain and never in this repository.
 WALI_CODE_SIGN_IDENTITY = Developer ID Application
 WALI_DEVELOPMENT_TEAM = REPLACE_WITH_TEAM_ID
+// Developer ID provisioning profile names installed on this Mac.
+// The app profile must authorize Sign in with Apple and the production app group.
+WALI_APP_PROVISIONING_PROFILE =
+WALI_AGENT_PROVISIONING_PROFILE =
+WALI_HELPER_PROVISIONING_PROFILE =

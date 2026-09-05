@@ -77,7 +77,10 @@ final class CreatorModerationModelTests: XCTestCase {
             revision: 1,
             reasonCode: "rights_review",
             safeSummary: "Review requested.",
-            createdAt: .now
+            createdAt: .now, status: .open,
+            wallpaperID: UUID(uuidString: "44444444-4444-4444-8444-444444444444")!,
+            wallpaperRevision: 1, wallpaperTitle: "Reported wallpaper", wallpaperStatus: .published,
+            releaseID: nil, edition: nil, canonicalArtifacts: []
         )
         let gateway = ScriptedModerationGateway(
             queueItems: [],

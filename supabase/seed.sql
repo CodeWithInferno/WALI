@@ -103,7 +103,7 @@ from (values
   (11, 'retro', 'Retro', 'Historical and retro-inspired aesthetics.'),
   (12, 'other', 'Other', 'Material not represented by another active category.')
 ) as fixture(n, slug, name, description)
-on conflict (id) do nothing;
+on conflict (slug) do nothing;
 
 insert into wali.tags (id, slug, label, kind) values
   ('11000000-0000-0000-0000-000000000009', 'mountains', 'Mountains', 'subject'),
@@ -129,7 +129,7 @@ from (values
   (5, 'stars', 'Stars', 'subject'), (6, 'night', 'Night', 'setting'),
   (7, 'synthetic', 'Synthetic', 'format'), (8, 'vivid', 'Vivid', 'style')
 ) as fixture(n, slug, label, kind)
-on conflict (id) do nothing;
+on conflict (slug) do nothing;
 
 insert into wali.catalog_signing_keys (
   key_id, public_key, valid_from, status, activated_by, activated_at
@@ -176,8 +176,8 @@ insert into wali.wallpapers (
   id, creator_id, slug, title, description, primary_category_id, license_id,
   rights_holder_display, attribution_text, source_url, status, visibility, content_rating
 ) values
-  ('30000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', 'synthetic-blue-drift', 'Synthetic Blue Drift', 'A generated blue gradient fixture with slow motion.', '10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'WALI Project', 'Generated locally for WALI testing.', 'https://example.invalid/wali-fixtures/blue-drift', 'draft', 'public', 'everyone'),
-  ('30000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000006', 'synthetic-star-field', 'Synthetic Star Field', 'A generated star-field fixture used for stable pagination.', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', 'WALI Project', 'Generated locally for WALI testing.', 'https://example.invalid/wali-fixtures/star-field', 'draft', 'public', 'everyone')
+  ('30000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', 'synthetic-blue-drift', 'Synthetic Blue Drift', 'A generated blue gradient fixture with slow motion.', (select id from wali.categories where slug = 'abstract'), '20000000-0000-0000-0000-000000000001', 'WALI Project', 'Generated locally for WALI testing.', 'https://example.invalid/wali-fixtures/blue-drift', 'draft', 'public', 'everyone'),
+  ('30000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000006', 'synthetic-star-field', 'Synthetic Star Field', 'A generated star-field fixture used for stable pagination.', (select id from wali.categories where slug = 'space'), '20000000-0000-0000-0000-000000000001', 'WALI Project', 'Generated locally for WALI testing.', 'https://example.invalid/wali-fixtures/star-field', 'draft', 'public', 'everyone')
 on conflict (id) do nothing;
 
 insert into wali.submissions (
@@ -185,8 +185,8 @@ insert into wali.submissions (
   primary_category_id, license_id, rights_holder, attribution_text, source_url,
   upload_session_id, status, generation, submitted_at, decided_at, created_at, updated_at
 ) values
-  ('71000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000001', 'Synthetic Blue Drift', 'A generated blue gradient fixture with slow motion.', '10000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000001', 'WALI Project', 'Generated locally for WALI testing.', 'https://example.invalid/wali-fixtures/blue-drift', '70000000-0000-0000-0000-000000000001', 'approved', 1, '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'),
-  ('71000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000006', '30000000-0000-0000-0000-000000000002', 'Synthetic Star Field', 'A generated star-field fixture used for stable pagination.', '10000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000001', 'WALI Project', 'Generated locally for WALI testing.', 'https://example.invalid/wali-fixtures/star-field', '70000000-0000-0000-0000-000000000002', 'approved', 1, '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')
+  ('71000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000001', 'Synthetic Blue Drift', 'A generated blue gradient fixture with slow motion.', (select id from wali.categories where slug = 'abstract'), '20000000-0000-0000-0000-000000000001', 'WALI Project', 'Generated locally for WALI testing.', 'https://example.invalid/wali-fixtures/blue-drift', '70000000-0000-0000-0000-000000000001', 'approved', 1, '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z'),
+  ('71000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000006', '30000000-0000-0000-0000-000000000002', 'Synthetic Star Field', 'A generated star-field fixture used for stable pagination.', (select id from wali.categories where slug = 'space'), '20000000-0000-0000-0000-000000000001', 'WALI Project', 'Generated locally for WALI testing.', 'https://example.invalid/wali-fixtures/star-field', '70000000-0000-0000-0000-000000000002', 'approved', 1, '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')
 on conflict (id) do nothing;
 
 insert into wali.rights_declarations (
@@ -305,7 +305,7 @@ insert into wali.wallpaper_tags (wallpaper_id, tag_id, source, status, decided_b
   ('30000000-0000-0000-0000-000000000001', '11000000-0000-0000-0000-000000000001', 'editorial', 'approved', '00000000-0000-0000-0000-000000000001', '2026-09-01T00:00:00Z'),
   ('30000000-0000-0000-0000-000000000001', '11000000-0000-0000-0000-000000000003', 'editorial', 'approved', '00000000-0000-0000-0000-000000000001', '2026-09-01T00:00:00Z'),
   ('30000000-0000-0000-0000-000000000002', '11000000-0000-0000-0000-000000000005', 'editorial', 'approved', '00000000-0000-0000-0000-000000000001', '2026-09-01T00:00:00Z'),
-  ('30000000-0000-0000-0000-000000000002', '11000000-0000-0000-0000-000000000006', 'editorial', 'approved', '00000000-0000-0000-0000-000000000001', '2026-09-01T00:00:00Z')
+  ('30000000-0000-0000-0000-000000000002', (select id from wali.tags where slug = 'night'), 'editorial', 'approved', '00000000-0000-0000-0000-000000000001', '2026-09-01T00:00:00Z')
 on conflict (wallpaper_id, tag_id, source) do nothing;
 
 insert into wali.quality_assessments (

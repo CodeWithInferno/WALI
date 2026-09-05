@@ -76,13 +76,14 @@ class MarketplaceContractChecker
     set_creator_follow_v1 request_install_v1 creator_authorization_v1
     creator_metadata_v1 creator_processing_status_v1 my_creator_submissions_v1
     moderation_queue_v1 moderation_reports_v1 moderation_metadata_v1
+    account_operation_references_v1
   ]).freeze
   EDGE_BOUNDARY_PUBLIC_FUNCTIONS = Set.new(%w[
     record_install_v1 wali_edge_take_rate_limit_v1
     wali_edge_request_install_v1 wali_edge_create_upload_v1
     wali_edge_bind_upload_endpoint_v1 wali_edge_complete_upload_v1
     wali_edge_submit_wallpaper_v1 wali_edge_moderate_submission_v1
-    wali_edge_report_wallpaper_v1 wali_edge_request_account_export_v1
+    wali_edge_report_wallpaper_v1 wali_edge_resolve_report_v1 wali_edge_request_account_export_v1
     wali_edge_request_account_deletion_v1 wali_edge_admin_role_grant_v1
     wali_edge_catalog_security_state_v1 wali_edge_publish_security_document_v1
     wali_edge_prepare_publication_v1 wali_edge_finalize_publication_v1

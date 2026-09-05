@@ -112,6 +112,8 @@ verify_jwt = false
 verify_jwt = false
 [functions.report-wallpaper]
 verify_jwt = false
+[functions.resolve-report]
+verify_jwt = false
 [functions.request-account-deletion]
 verify_jwt = false
 [functions.request-account-export]

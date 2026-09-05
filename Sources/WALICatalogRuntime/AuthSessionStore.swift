@@ -120,6 +120,8 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
                 )
             }
             return state
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw CatalogRemoteError(
                 code: "authentication_failed",
@@ -132,6 +134,8 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
     public func signOut() async throws {
         do {
             try await client.auth.signOut(scope: .global)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw CatalogRemoteError(
                 code: "sign_out_failed",

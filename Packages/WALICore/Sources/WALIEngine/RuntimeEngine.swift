@@ -5,7 +5,7 @@ public enum EngineAction: Sendable {
     case beginImports([(id: UUID, fileName: String, bookmark: Data)])
     case updateImport(id: UUID, phase: EngineImportJob.Phase, progress: Double, detail: String?)
     case finishImport(jobID: UUID, item: EngineLibraryItem)
-    case installCatalogItem(EngineLibraryItem)
+    case installCatalogItem(EngineLibraryItem, completedImport: EngineImportJob? = nil)
     case cancelImport(UUID)
     case replaceDisplays([EngineDisplay])
     case apply(itemID: UUID, displayIDs: [String], scaling: EnginePreferences.Scaling)
@@ -140,18 +140,22 @@ public actor RuntimeEngine {
             state.imports[index].progress = 1
             return []
 
-        case let .installCatalogItem(item):
+        case let .installCatalogItem(item, completedImport):
             if let existing = state.items.first(where: { $0.id == item.id }) {
                 guard existing.contentDigest == item.contentDigest else {
                     throw EngineError.catalogInstallConflict(item.id)
                 }
-                return []
+            } else {
+                // Catalog identity is the signed release ID. Byte deduplication
+                // belongs to the object store, not this provenance-bearing item.
+                state.items.append(item)
+                state.items.sort { $0.createdAt > $1.createdAt }
             }
-            if state.items.contains(where: { $0.contentDigest == item.contentDigest }) {
-                return []
+            if let completedImport, completedImport.phase == .complete {
+                state.imports.removeAll { $0.id == completedImport.id }
+                state.imports.append(completedImport)
+                state.imports.sort { $0.createdAt > $1.createdAt }
             }
-            state.items.append(item)
-            state.items.sort { $0.createdAt > $1.createdAt }
             return []
 
         case let .cancelImport(id):

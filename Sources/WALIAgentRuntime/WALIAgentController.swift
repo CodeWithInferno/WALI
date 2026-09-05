@@ -27,6 +27,8 @@ public final class WALIAgentController: WALIUIActionHandling {
     private let stateStore: EngineSnapshotStore?
     private let runtimeStore: RuntimeStore?
     private let lockScreenHelper: LockScreenHelperConnection?
+    private let lockScreenMetadataDirectory: URL?
+    private var hasAttemptedLockScreenActivation = false
     private let transcoder: TranscoderConnection
     private let catalogInstallCoordinator: CatalogInstallCoordinator?
     private var router: AgentCommandRouter?
@@ -43,6 +45,7 @@ public final class WALIAgentController: WALIUIActionHandling {
         let transcoder = TranscoderConnection()
         self.transcoder = transcoder
         let libraryPaths = try? LibraryPaths.applicationSupport()
+        lockScreenMetadataDirectory = libraryPaths?.metadata
         stateStore = try? EngineSnapshotStore()
         runtimeStore = libraryPaths.map(RuntimeStore.init(paths:))
         if let runtimeStore,
@@ -276,7 +279,8 @@ public final class WALIAgentController: WALIUIActionHandling {
         case .openSettings:
             DistributedNotificationCenter.default().postNotificationName(
                 Notification.Name("com.wali.openSettings"),
-                object: nil,
+                object: Bundle.main.object(forInfoDictionaryKey: "WALIControlServiceName") as? String
+                    ?? Bundle.main.bundleIdentifier,
                 userInfo: nil,
                 deliverImmediately: true
             )
@@ -284,7 +288,8 @@ public final class WALIAgentController: WALIUIActionHandling {
         case .quit:
             DistributedNotificationCenter.default().postNotificationName(
                 Notification.Name("com.wali.quitAll"),
-                object: nil,
+                object: Bundle.main.object(forInfoDictionaryKey: "WALIControlServiceName") as? String
+                    ?? Bundle.main.bundleIdentifier,
                 userInfo: nil,
                 deliverImmediately: true
             )
@@ -754,6 +759,22 @@ public final class WALIAgentController: WALIUIActionHandling {
             result.imports[index].progress = 1
             result.imports[index].detail = nil
         }
+        var knownImportIDs = Set(result.imports.map(\.id))
+        for persisted in durable.importJobs {
+            guard persisted.job.header.phase == .terminal,
+                  persisted.job.header.terminalOutcome == .succeeded,
+                  let committed = persisted.job.committedResult,
+                  let itemID = UUID(uuidString: committed.libraryItemID.rawValue),
+                  let record = records[itemID], record.item.origin == .catalog,
+                  record.release.id == committed.releaseID,
+                  let id = UUID(uuidString: persisted.job.header.idempotencyKey.rawValue),
+                  knownImportIDs.insert(id).inserted else { continue }
+            result.imports.append(EngineImportJob(
+                id: id, fileName: record.item.displayName,
+                phase: .complete, progress: 1, createdAt: persisted.createdAt
+            ))
+        }
+        result.imports.sort { $0.createdAt > $1.createdAt }
         return result
     }
 
@@ -841,13 +862,33 @@ public final class WALIAgentController: WALIUIActionHandling {
     ) async throws {
         guard let lockScreenHelper else { return }
         if snapshot.preferences.lockScreenContinuityEnabled {
+            // Remain conservative if disabling races an activation or its reply
+            // is lost before the helper's ownership journal becomes visible.
+            hasAttemptedLockScreenActivation = true
             try await lockScreenHelper.activate(
                 try await lockScreenHelperReleaseIntent(from: snapshot),
                 restartPlayback: restartPlayback
             )
         } else {
+            if !hasAttemptedLockScreenActivation {
+                guard try hasLockScreenRecoveryState() else { return }
+            }
             try await lockScreenHelper.deactivate()
         }
+    }
+
+    private func hasLockScreenRecoveryState() throws -> Bool {
+        guard let lockScreenMetadataDirectory else { throw WALIAgentRuntimeError.storageUnavailable }
+        for name in ["lock-screen-helper-state.json", "lock-screen-choice-journal.json", "lock-screen-asset-journal.json"] {
+            let path = lockScreenMetadataDirectory.appendingPathComponent(name).path
+            do {
+                _ = try FileManager.default.attributesOfItem(atPath: path)
+                return true
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+                continue
+            }
+        }
+        return false
     }
 
     private func lockScreenHelperReleaseIntent(
@@ -926,7 +967,7 @@ public final class WALIAgentController: WALIUIActionHandling {
     private static func lockScreenNotice(for error: Error) -> AgentRuntimeNotice {
         AgentRuntimeNotice(
             kind: .warning,
-            title: "Desktop Wallpaper Applied",
+            title: "Lock Screen Continuity Unavailable",
             message: "Lock Screen continuity could not update. \(error.localizedDescription)"
         )
     }

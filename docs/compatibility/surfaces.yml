@@ -493,6 +493,8 @@ surfaces:
       unknown_newer_policy: reject_before_write
       contract: docs/adr/0014-marketplace-schema-and-rls.md
 
+  # Native account recovery reads the existing server-owned request IDs through
+  # account_operation_references_v1; see docs/api/catalog-v1.md.
   - id: catalog_public_api
     kind: public_api
     owner_role: catalog_maintainer

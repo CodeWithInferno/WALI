@@ -216,10 +216,30 @@ func (c *Client) Publish(ctx context.Context, publication PublishRequest) error 
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		return c.verifyExisting(ctx, publication)
 	}
-	if response.StatusCode != http.StatusConflict && response.StatusCode != http.StatusPreconditionFailed {
+	if !isExistingObjectResponse(response) {
 		return fmt.Errorf("publish object: unexpected status %d", response.StatusCode)
 	}
 	return c.verifyExisting(ctx, publication)
+}
+
+func isExistingObjectResponse(response *http.Response) bool {
+	if response.StatusCode == http.StatusConflict || response.StatusCode == http.StatusPreconditionFailed {
+		return true
+	}
+	if response.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	// Supabase also returns its legacy 400 envelope for create-only collisions.
+	// A collision is successful only after verifyExisting checks all stored bytes.
+	var failure struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 4096))
+	if decoder.Decode(&failure) != nil {
+		return false
+	}
+	return failure.Code == "KeyAlreadyExists" || failure.Code == "ResourceAlreadyExists" || failure.Error == "Duplicate"
 }
 
 func (c *Client) Delete(ctx context.Context, bucket, objectPath string) error {
@@ -360,5 +380,8 @@ func ImmutablePath(digest, role, relativePath string) (string, error) {
 	if _, err := hex.DecodeString(digest); err != nil || digest != strings.ToLower(digest) {
 		return "", errors.New("digest must be lowercase hexadecimal")
 	}
-	return "sha256/" + digest[:2] + "/" + digest[2:4] + "/" + digest + "/" + role + extension, nil
+	// SQL upload intents use URL filename tokens (video-default), while the
+	// immutable artifact role remains video_default in the wire contract.
+	filenameRole := strings.ReplaceAll(role, "_", "-")
+	return "sha256/" + digest[:2] + "/" + digest[2:4] + "/" + digest + "/" + filenameRole + extension, nil
 }

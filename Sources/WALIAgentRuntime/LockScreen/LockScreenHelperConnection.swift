@@ -14,7 +14,7 @@ public enum LockScreenHelperConnectionError: LocalizedError, Equatable, Sendable
     public var errorDescription: String? {
         switch self {
         case .unavailable:
-            "The separate WALI Lock Screen Helper is not running. Desktop wallpaper remains active."
+            "The separate WALI Lock Screen Helper is unavailable."
         case .permissionRequired:
             "Allow WALI Lock Screen Helper in Full Disk Access; WALI Agent does not need that permission."
         case .unsupportedBuild:

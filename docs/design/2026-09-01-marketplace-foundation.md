@@ -728,14 +728,18 @@ draft -> uploading -> uploaded -> processing -> ready_for_submission
                                               /       |       \
                                    changes_requested approved rejected
                                           |             |
-                                          `-> draft     `-> published
+                                          |             `-> published
+                                          `-> ready_for_submission
 
 draft|ready_for_submission|changes_requested -> withdrawn
 ```
 
 Only server commands move state. Every command supplies expected `revision`
 and an idempotency key. Illegal, stale, or duplicate transitions return stable
-machine codes.
+machine codes. Saving changes requested during review returns to
+`ready_for_submission` only when the current generation's completed processing
+attempt still has its full verified artifact set. Rights review resets to
+pending, and the creator must submit the new revision for another review.
 
 ### Processing attempt
 

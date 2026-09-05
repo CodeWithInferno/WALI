@@ -13,6 +13,10 @@ struct MarketplaceWallpaperDetailView: View {
     let onRetry: () -> Void
     let onOpenRelated: (String) -> Void
     let onInstall: () -> Void
+    let onCancelInstall: () -> Void
+    let onRetryInstall: () -> Void
+    let installedReleaseIDs: Set<String>
+    let onOpenLibrary: () -> Void
     let onFavorite: () -> Void
     let onSave: () -> Void
     let onReport: (CatalogReportKind, String) -> Void
@@ -28,8 +32,14 @@ struct MarketplaceWallpaperDetailView: View {
             }
         }
         .overlay(alignment: .bottom) {
-            actionNotice
-                .padding(18)
+            VStack(spacing: 10) {
+                if let install = marketplace.catalogInstall, install.wallpaperID == wallpaperID,
+                   install.phase != .completed {
+                    CatalogInstallProgressView(install: install, onCancel: onCancelInstall, onRetry: onRetryInstall)
+                        .frame(maxWidth: 540)
+                }
+                actionNotice
+            }.padding(18)
         }
         .sheet(isPresented: $showsReportSheet) {
             WallpaperReportView(state: marketplace.reportState) { kind, detail in
@@ -58,7 +68,7 @@ struct MarketplaceWallpaperDetailView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     hero(detail, height: heroHeight, leadingBleed: leadingBleed)
-                    metadata(detail, leadingBleed: leadingBleed)
+                    metadata(detail, leadingBleed: leadingBleed, visibleWidth: fullWidth - leadingBleed)
                     if !detail.related.isEmpty {
                         related(detail.related, leadingBleed: leadingBleed)
                     }
@@ -97,7 +107,7 @@ struct MarketplaceWallpaperDetailView: View {
                             Color.black
                         }
                     }
-                } else if let previewURL = detail.previewURL {
+                } else if !reduceMotion, let previewURL = detail.previewURL {
                     LoopingVideoView(url: previewURL, cornerRadius: 0)
                 } else if let posterURL = detail.posterURL {
                     AsyncImage(url: posterURL) { phase in
@@ -113,6 +123,19 @@ struct MarketplaceWallpaperDetailView: View {
             }
             .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
             .clipped()
+
+            if detail.previewURL == nil && detail.posterURL == nil {
+                if detail.isLoadingMedia {
+                    ProgressView("Loading preview…")
+                        .tint(.white)
+                        .foregroundStyle(.white.opacity(0.8))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Label("Preview unavailable", systemImage: "photo")
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
 
             LinearGradient(
                 colors: [.clear, .black.opacity(0.55)],
@@ -179,15 +202,40 @@ struct MarketplaceWallpaperDetailView: View {
     }
 
     private var installButton: some View {
-        Button(action: onInstall) {
-            Label("Add to Library", systemImage: "arrow.down.circle.fill")
+        Button(action: currentReleaseIsInstalled ? onOpenLibrary : onInstall) {
+            Label(
+                installButtonTitle,
+                systemImage: currentReleaseIsInstalled ? "square.grid.2x2" : "arrow.down.circle.fill"
+            )
         }
         .controlSize(.large)
-        .disabled(marketplace.actionState == .working)
+        .disabled(!currentReleaseIsInstalled && marketplace.catalogInstall?.isActive == true)
     }
 
-    private func metadata(_ detail: WALICatalogDetailPresentation, leadingBleed: CGFloat) -> some View {
-        HStack(alignment: .top, spacing: 42) {
+    private var currentReleaseIsInstalled: Bool {
+        guard let detail = marketplace.selectedDetail, detail.id == wallpaperID else { return false }
+        return installedReleaseIDs.contains(detail.currentReleaseID)
+    }
+
+    private var installButtonTitle: String {
+        if currentReleaseIsInstalled { return "Show in Library" }
+        guard let install = marketplace.catalogInstall, install.isActive,
+              install.wallpaperID == wallpaperID else { return "Add to Library" }
+        switch install.phase {
+        case .preparing: return "Preparing…"
+        case .downloading: return "Downloading…"
+        case .verifying: return "Verifying…"
+        case .installing: return "Adding to Library…"
+        case .completed, .cancelled, .failed: return "Add to Library"
+        }
+    }
+
+    private func metadata(_ detail: WALICatalogDetailPresentation, leadingBleed: CGFloat, visibleWidth: CGFloat) -> some View {
+        let compact = visibleWidth < 760
+        let layout = compact
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 24))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 42))
+        return layout {
             VStack(alignment: .leading, spacing: 18) {
                 Text("About this wallpaper")
                     .font(.title2.weight(.semibold))
@@ -207,7 +255,7 @@ struct MarketplaceWallpaperDetailView: View {
                     LabeledContent("Attribution", value: attribution)
                 }
 
-                HStack(spacing: 10) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 90, maximum: 160), spacing: 8)], alignment: .leading, spacing: 8) {
                     ForEach(detail.tags, id: \.self) { tag in
                         Text(tag)
                             .font(.caption.weight(.medium))
@@ -236,34 +284,35 @@ struct MarketplaceWallpaperDetailView: View {
                 }
                 .labelStyle(.iconOnly)
             }
-            .frame(width: 330, alignment: .leading)
+            .frame(width: compact ? nil : 330, alignment: .leading)
+            .frame(maxWidth: compact ? .infinity : nil, alignment: .leading)
         }
         .padding(.leading, WALIMarketplaceDetailLayout.chromeLeadingInset(leadingBleed: leadingBleed))
         .padding(.trailing, WALIMarketplaceDetailLayout.chromeInset)
         .padding(.vertical, WALIMarketplaceDetailLayout.chromeInset)
-        .foregroundStyle(.white)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
+        .foregroundStyle(.primary)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func related(_ cards: [WALICatalogCardPresentation], leadingBleed: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Related Wallpapers")
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 240, maximum: 360), spacing: 18)],
                 spacing: 24
             ) {
                 ForEach(cards) { card in
                     CatalogCardView(card: card) { onOpenRelated(card.id) }
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                 }
             }
         }
         .padding(.leading, WALIMarketplaceDetailLayout.chromeLeadingInset(leadingBleed: leadingBleed))
         .padding(.trailing, WALIMarketplaceDetailLayout.chromeInset)
         .padding(.vertical, WALIMarketplaceDetailLayout.chromeInset)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.94))
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     @ViewBuilder

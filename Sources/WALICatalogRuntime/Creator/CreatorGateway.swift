@@ -15,6 +15,17 @@ public protocol ModerationGateway: Sendable {
     func queue(_ request: ModerationQueueRequest) async throws -> ModerationQueuePage
     func moderate(_ request: ModerationDecisionRequest) async throws -> ModerationDecisionResult
     func reports(_ request: ModerationReportQueueRequest) async throws -> ModerationReportPage
+    func resolveReport(_ request: ModerationReportResolutionRequest) async throws -> ModerationReportResolution
+    func publish(_ request: PublishReleaseRequest) async throws -> PublishedRelease
+}
+
+public extension ModerationGateway {
+    func resolveReport(_ request: ModerationReportResolutionRequest) async throws -> ModerationReportResolution {
+        throw CreatorContractError.invalidRequest
+    }
+    func publish(_ request: PublishReleaseRequest) async throws -> PublishedRelease {
+        throw CreatorContractError.invalidRequest
+    }
 }
 
 public protocol CreatorAuthorizationGateway: Sendable {
@@ -51,6 +62,7 @@ public enum CreatorRemoteFailureDisposition: Sendable, Equatable {
     }
 
     private static let staleCodes: Set<String> = [
+        "stale_revision",
         "revision_mismatch",
         "processing_generation_stale",
         "review_generation_stale",
@@ -60,6 +72,9 @@ public enum CreatorRemoteFailureDisposition: Sendable, Equatable {
     ]
 
     private static let revocationCodes: Set<String> = [
+        "authentication_required",
+        "reauthentication_required",
+        "account_suspended",
         "auth_required",
         "session_expired",
         "account_inactive",

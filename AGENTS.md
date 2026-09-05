@@ -51,40 +51,34 @@ Signed Development configuration:
 DEVELOPMENT_TEAM=ABCDE12345 make development
 ```
 
-Debug and Release script builds are credential-free and use unsealed app,
-agent, and XPC wrappers. Linker-produced ad-hoc Mach-O signatures are not bundle
-seals and are not reported as cryptographically signed wrappers. Debug omits
+Debug script builds use credential-free ad-hoc bundle seals for local agent
+registration; hostless test builds may remain unsealed. Debug omits
 the app-group entitlements and uses `com.wali.debug.*` identities, so it cannot
 verify shared-container behavior. Development uses `com.wali.development.*`,
 automatic Apple Development signing, and
 `group.com.wali.development.shared`; the selected team must have provisioning
 access to those identifiers. Release retains `com.wali.*` and
-`group.com.wali.shared`. The credential-free test path compiles the UI-test
+`group.com.wali.shared` and requires configured distribution signing. The credential-free test path compiles the UI-test
 target but does not launch its runner.
 
 ## Runtime topology
 
-### Current scaffold
+### Current implementation
 
 ```text
-WALI.app ──► placeholder app runtime/UI ──► WALIModel + WALIWire
- └─ embeds WALIAgent.app ──► placeholder agent runtime/UI
-     │                         └─► WALIModel + WALIWire + WALIEngine
-     └─ embeds WALITranscoder.xpc ──► placeholder runtime ──► WALIModel + WALIWire
-
-WALIModel implements Foundation-free immutable Task 4 records plus pure
-package-scoped playback/import-job reducers. No app↔agent IPC, Engine
-orchestration, renderer, durable persistence, filesystem behavior, or storage
-is implemented.
+WALI.app ──► app runtime/UI, catalog adapter ──► bounded AgentGateway
+ ├─ embeds WALIAgent.app ──► Engine, renderer, local persistence, import/install
+ │    └─ embeds WALITranscoder.xpc ──► bounded private media worker
+ └─ embeds WALILockScreenHelper.app ──► optional fixed compatibility operations
 ```
 
-`WALICore` remains the local package reference/path, but its imported module and
-product are retired. WALIWire and WALIEngine still contain only package-scoped
-module-availability markers. WALIModel retains its marker alongside implemented
-model values and reducers; this does not make persistence or orchestration
-implemented behavior.
+`WALICore` remains the package path, not an imported module/product. WALIModel,
+WALIWire, and WALIEngine implement the model, versioned IPC contracts, and pure
+use cases. Agent-owned persistence currently uses atomic JSON snapshots and
+content-addressed files. Native marketplace creator/moderation/account routes
+are composed; consult the dated release evidence ledger for verification gaps.
 
-### Target before product behavior
+### Runtime boundary
 
 ```text
 WALI.app ──► AgentGateway / versioned wire ──► WALIAgent.app
@@ -95,8 +89,8 @@ WALI.app ──► AgentGateway / versioned wire ──► WALIAgent.app
 runtime static modules ──► package products they consume
 ```
 
-Containment is not linkage. Transcoder containment is agent-private as of
-Hardening Task 2, but no agent↔worker request path exists yet.
+Containment is not linkage. Transcoder containment and its authenticated request
+path are agent-private.
 Package-target dependencies are canonical only in
 `docs/architecture/modules.yml` under `swift_packages.*.*.targets`; diagrams
 must stop at package-product boundaries.
@@ -109,8 +103,8 @@ must stop at package-product boundaries.
   it depends on `WALIModel`, not UI/media/SQLite/XPC.
 - `WALIUI`: reusable presentation depending on model values.
 - `WALI.app`: foreground intentions and snapshot presentation only.
-- `WALIAgent.app`: future Engine host and sole runtime authority/SQLite opener.
-- `WALITranscoder.xpc`: future bounded agent-private media work returning untrusted
+- `WALIAgent.app`: Engine host and sole local runtime persistence authority.
+- `WALITranscoder.xpc`: bounded agent-private media work returning untrusted
   immutable artifact claims; it never installs or assigns.
 
 Runtime static modules are adapters. Executable targets must not import another
@@ -120,12 +114,12 @@ allowed current and target imports.
 ## Ownership and concurrency
 
 - AppKit/SwiftUI objects are main-actor owned.
-- In the target, one agent-hosted Engine owns command ordering, revisions, assignments, durable
+- One agent-hosted Engine owns command ordering, revisions, assignments, durable
   jobs, install decisions, and persistent mutations.
-- The target agent is the only WALI runtime process that opens SQLite.
+- The agent is the only writer of local runtime library/job/assignment state.
 - Wallpaper windows, players, and display reconciliation remain main-actor
   adapters owned by the agent.
-- Future worker outputs are claims; the agent verifies bytes and metadata before
+- Worker outputs are claims; the agent verifies bytes and metadata before
   content-addressed publication.
 - Values crossing actors or processes are immutable, bounded, `Codable`, and `Sendable`.
 - Revalidate state after each suspension point before committing a mutation.
