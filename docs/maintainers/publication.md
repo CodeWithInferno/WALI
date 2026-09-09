@@ -41,15 +41,16 @@ The repository owner authorizes publication under [governance](../../GOVERNANCE.
   Keep signed artifact, source commit, checksums, provenance, and native journey
   evidence together. Structural builds do not prove signed behavior.
 - Resolve the canonical public legal destination and anonymously check every
-  app-linked document. Current configuration and historical namespaces can refer
-  to different repository owners; redirects are not legal approval.
+  app-linked document. The default app links use this repository under `CodeWithInferno/WALI`;
+  the documents still need effective terms and anonymous reachability before
+  release. Historical URLs or a redirect do not establish legal approval.
 - Confirm the legal operator, contact routes, content rights, privacy disclosures,
   moderation and account-deletion readiness. Source visibility does not enable
   public uploads or close marketplace/App Store gates.
 - Review image and model redistribution evidence separately from source code.
-  Reconcile the dependency policy's older FFmpeg "unmodified" description with
-  the documented in-tree patch through the policy owner; retain patch notices,
-  corresponding source and image SBOM evidence before distributing that image.
+  The FFmpeg 10-bit patch is explicitly accepted in ADR 0017; retain its
+  notices, corresponding source and image SBOM evidence before distributing
+  the corresponding image.
 - Add exact signed download/checksum links, supported macOS/edition limitations,
   first-use/quit/uninstall guidance, and a demonstration made with rights-cleared
   media after the corresponding release exists. Never label an ad-hoc local DMG
