@@ -50,6 +50,45 @@ jobs:
           echo "$install_root/xcodegen/bin" >> "$GITHUB_PATH"
       - run: make verify
 
+  store:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      STRUCTURAL_ONLY: "YES"
+      ALLOW_PROVISIONING_UPDATES: "NO"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select the verified Xcode toolchain
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.2.app
+          xcrun swift --version | grep -E 'Swift version 6\.2([. ]|$)'
+      - name: Install pinned XcodeGen
+        env:
+          XCODEGEN_URL: https://github.com/yonaskolb/XcodeGen/releases/download/2.44.1/xcodegen.zip
+          XCODEGEN_SHA256: a2e905fb68446e9bb4008cdfe2e13e3f176d0cbcca828b71770f8e53fca91b73
+        run: |
+          archive="$RUNNER_TEMP/xcodegen.zip"
+          install_root="$RUNNER_TEMP/xcodegen-release"
+          curl --fail --location --proto '=https' --tlsv1.2 "$XCODEGEN_URL" --output "$archive"
+          printf '%s  %s\n' "$XCODEGEN_SHA256" "$archive" | shasum -a 256 --check
+          unzip -q "$archive" -d "$install_root"
+          test "$("$install_root/xcodegen/bin/xcodegen" --version | awk '{print $2}')" = "2.44.1"
+          echo "$install_root/xcodegen/bin" >> "$GITHUB_PATH"
+      - name: Validate the Store graph
+        run: /usr/bin/ruby scripts/check-store-graph.rb .
+      - name: Build and inspect the StoreDevelopment structure
+        run: |
+          CONFIGURATION=StoreDevelopment ./scripts/build-store.sh
+          python3 scripts/verify-store-bundle.py .build/store/DerivedData/Build/Products/StoreDevelopment/WALI.app --configuration StoreDevelopment
+      - name: Run the hostless Store suites
+        run: ./scripts/test-store.sh
+      - name: Build and inspect the optimized universal AppStore structure
+        run: |
+          CONFIGURATION=AppStore ./scripts/build-store.sh
+          python3 scripts/verify-store-bundle.py .build/store/DerivedData/Build/Products/AppStore/WALI.app --configuration AppStore
+
   backend:
     runs-on: ubuntu-24.04
     timeout-minutes: 25

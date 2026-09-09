@@ -14,6 +14,8 @@ struct LibrarySurface: View {
     let onDelete: (WALIWallpaperPresentation) -> Void
     let onReveal: (WALIWallpaperPresentation) -> Void
     let onDrop: ([URL]) -> Void
+    let onPreparePreview: (UUID) -> Void
+    let presentationRevisions: [UUID: UInt64]
 
     @State private var previewTask: Task<Void, Never>?
     @State private var hoveringID: UUID?
@@ -76,6 +78,7 @@ struct LibrarySurface: View {
                                     onReveal: { onReveal(wallpaper) },
                                     onHover: { updateHover($0, wallpaperID: wallpaper.id) }
                                 )
+                                .id(presentationRevisions[wallpaper.id, default: 0])
                             }
                         }
                         .padding(WALILibraryLayout.chromeInset)
@@ -111,6 +114,7 @@ struct LibrarySurface: View {
             previewTask = Task {
                 try? await Task.sleep(for: .milliseconds(350))
                 guard !Task.isCancelled else { return }
+                onPreparePreview(wallpaperID)
                 hoveringID = wallpaperID
             }
         } else if hoveringID == wallpaperID {

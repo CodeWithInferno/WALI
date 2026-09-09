@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 @testable import WALILockScreenHelperRuntime
-import WALIWire
+import WALILockScreenWire
 
 final class LockScreenHelperTests: XCTestCase {
     func testActivationRejectsCallerControlledFilesystemAndCommandFields() throws {

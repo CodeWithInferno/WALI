@@ -12,6 +12,7 @@ public struct WALIAppRootView: View {
     @State private var model: WALIAppModel
     @State private var marketplace: MarketplaceCoordinator
     private let actions: any WALIUIActionHandling
+    private let preparePresentation: (UUID) -> Void
 
     @State private var route: AppRoute = .library
     @State private var catalogPath: [String] = []
@@ -37,11 +38,13 @@ public struct WALIAppRootView: View {
     public init(
         model: WALIAppModel = WALIAppModel(),
         actions: any WALIUIActionHandling = NoopWALIUIActionHandler(),
-        marketplace: MarketplaceCoordinator = MarketplaceCoordinator()
+        marketplace: MarketplaceCoordinator = MarketplaceCoordinator(),
+        preparePresentation: ((UUID) -> Void)? = nil
     ) {
         _model = State(initialValue: model)
         _marketplace = State(initialValue: marketplace)
         self.actions = actions
+        self.preparePresentation = preparePresentation ?? { _ in }
     }
 
     public var body: some View {
@@ -65,6 +68,7 @@ public struct WALIAppRootView: View {
                         displayIDs: effectiveDisplayIDs,
                         onApply: { apply(selectedWallpaper) }
                     )
+                    .id(model.presentationRevisions[selectedWallpaper.id, default: 0])
                 }
             }
             .alert("Delete Wallpaper?", isPresented: deletionAlertBinding) {
@@ -94,6 +98,9 @@ public struct WALIAppRootView: View {
             .onChange(of: connectedDisplayIDs) { _, _ in
                 synchronizeDisplays()
                 synchronizeContentFit()
+            }
+            .onChange(of: selectedWallpaperID) { _, selected in
+                if let selected { preparePresentation(selected) }
             }
             .onChange(of: selectedDisplayIDs) { _, _ in synchronizeContentFit() }
             .onChange(of: searchText) { _, value in
@@ -306,7 +313,9 @@ public struct WALIAppRootView: View {
                 onPreview: preview,
                 onDelete: requestDeletion,
                 onReveal: { actions.send(.revealWallpaper(itemID: $0.id)) },
-                onDrop: importVideos
+                onDrop: importVideos,
+                onPreparePreview: preparePresentation,
+                presentationRevisions: model.presentationRevisions
             )
         case .downloads:
             DownloadsSurface(
@@ -430,6 +439,7 @@ public struct WALIAppRootView: View {
                 onDelete: { requestDeletion(selectedWallpaper) },
                 onReveal: { actions.send(.revealWallpaper(itemID: selectedWallpaper.id)) }
             )
+            .id(model.presentationRevisions[selectedWallpaper.id, default: 0])
         }
     }
 

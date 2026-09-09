@@ -145,6 +145,10 @@ public enum WireCodec {
 
     private static func validate(_ command: AgentCommand) throws {
         switch command {
+        case let .preparePresentation(itemIDs):
+            guard !itemIDs.isEmpty, itemIDs.count <= 32, Set(itemIDs).count == itemIDs.count else {
+                throw WireCodecError.collectionTooLarge
+            }
         case let .importFiles(bookmarks):
             guard bookmarks.count <= 32,
                   bookmarks.allSatisfy({ $0.count <= 1_024 * 1_024 }) else {

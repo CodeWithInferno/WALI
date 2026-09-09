@@ -42,6 +42,8 @@ public struct WALIUISnapshot: Equatable, Sendable {
 public final class WALIAppModel {
     public var snapshot: WALIUISnapshot
     public var settingsPresentationRequest: UInt64
+    /// Rebuild media views when a replaceable cached file reappears at the same URL.
+    public var presentationRevisions: [UUID: UInt64] = [:]
 
     public init(
         snapshot: WALIUISnapshot = .empty,

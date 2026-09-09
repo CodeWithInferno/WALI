@@ -68,3 +68,6 @@ Config/*Signing.local.xcconfig
 
 # Private generated review evidence and scanner reports.
 /output/
+# Separate generated Mac App Store graph and local signing settings.
+WALIStore.xcodeproj/
+Config/AppStoreSigning.local.xcconfig

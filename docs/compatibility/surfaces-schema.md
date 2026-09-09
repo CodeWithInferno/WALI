@@ -152,3 +152,31 @@ claim that signing or registration is configured.
 The checker proves schema and path presence. Owning tests must still prove
 format semantics, migrations, malformed/newer rejection, and any old-binary
 rollback claim.
+
+## Store distribution identities
+
+The `store_distribution` surface has kind `distribution_identity`. Its exact
+configuration map records StoreDevelopment/AppStore bundle IDs, application
+groups, and group-prefixed app–agent Mach service names. `policy_adr` is ADR 0018;
+`cross_distribution_migration` is `none`. Signing/container/runtime feasibility
+is pending, so its implementation, version, and fixture gate deliberately do
+not claim verified compatibility. Direct identity surfaces retain their three
+existing configurations.
+
+The direct helper wire implementation is now product `WALILockScreenWire`;
+its payload and Objective-C selectors are unchanged. Moving source between
+products changes linkage authority, not the existing wire message version.
+
+`store_wire_contracts` separately inventories Store import grant revision 1,
+worker request/negotiation revision 2, and payload-free lifecycle callback
+revision 1. It records independent bookmark bounds, the unchanged 4 MiB global
+envelope, nonce correlation before granting media access, and exact selectors.
+Its listed local regressions cover value bounds and controlled adapters;
+compatibility remains gated on signed cross-process scope/recovery evidence.
+These additions do not rewrite the existing direct wire contract.
+
+Store presentation demand is the additive `preparePresentation` command on the
+existing perform/envelope revision. It carries at most 32 unique item UUIDs and
+no caller path. The agent validates IDs against its committed snapshot and
+returns bounded group projection URLs. It does not grant foreground access to
+master media or authorize arbitrary filesystem requests.

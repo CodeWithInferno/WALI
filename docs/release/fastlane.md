@@ -1,8 +1,8 @@
 # Native macOS release workflow
 
-WALI currently targets Developer ID distribution outside the Mac App Store.
-The native runtime is not sandboxed. App Store eligibility is a separate final
-review; a successful archive or notarization is not App Store approval.
+WALI preserves its Developer ID distribution and adds a separate sandboxed
+Mac App Store graph under accepted ADR 0018. A successful build, archive, or
+notarization is not App Store approval.
 
 Use Ruby 3.3 or newer and Bundler. `Gemfile.lock` pins fastlane and its tools.
 
@@ -74,8 +74,8 @@ stapled-app digest so outer-DMG notarization can be retried.
 ## Publish the verified GitHub release
 
 After native journeys and the release review pass, merge the reviewed source
-and archive that exact `main` commit. Wait for its `source`, `contracts`,
-`swift`, `backend`, and `media` GitHub Actions checks to succeed. Supply the
+and archive that exact `main` commit. Wait for its `source`, `history-secrets`, `contracts`,
+`swift`, `store`, `backend`, and `media` GitHub Actions checks to succeed. Supply the
 existing GitHub credential as `GITHUB_API_TOKEN` through a protected process
 environment; never put it in a command argument, checked-in file, or log.
 
@@ -151,3 +151,145 @@ and its [implementation plan](../plans/2026-09-09-mac-app-store-distribution.md)
 the [metadata packet](app-store-metadata-draft.md) still contains unresolved
 owner and production facts. The final Store review must inspect the actual
 sandboxed archive and real user journeys.
+
+## Separate Store graph and feasibility
+
+The Store graph is generated as `WALIStore.xcodeproj` from `project-store.yml`
+and shared `project-common.yml` target templates. It retains the native
+marketplace routes. Production marketplace readiness and UGC review evidence
+remain separate submission gates. Direct signing and GitHub lanes are unchanged.
+
+```sh
+bundle exec fastlane mac store_feasibility structural_only:true
+bundle exec fastlane mac store_feasibility structural_only:true configuration:AppStore
+bundle exec fastlane mac store_test
+# Only after coordinating the signed feasibility run:
+DEVELOPMENT_TEAM=YOUR_TEAM_ID bundle exec fastlane mac store_feasibility \
+  structural_only:false allow_provisioning_updates:true
+```
+
+Structural builds use `.build/store/DerivedData`; signed feasibility uses
+`.build/store/SignedDerivedData`. Both inspect the real embedded bundles and
+resources without launching the app. Only the explicit provisioning option
+permits Xcode to update profiles; no lane creates or revokes certificates.
+A structural result proves source membership and binary shape, not service
+registration, app-group access, scoped media grants, desktop rendering, or quit
+behavior. Complete the signed journeys in the approved Store implementation
+plan before recording that gate as passed.
+
+For a later Store distribution archive, configure ignored
+`Config/AppStoreSigning.local.xcconfig` with `WALI_STORE_DEVELOPMENT_TEAM`,
+`WALI_STORE_CODE_SIGN_IDENTITY`, `WALI_APP_STORE_PROVISIONING_PROFILE`,
+`WALI_AGENT_STORE_PROVISIONING_PROFILE`, and a worker profile if the account
+requires one (`WALI_TRANSCODER_STORE_PROVISIONING_PROFILE`). App/agent profiles
+must authorize the Store app group; the foreground app also needs Sign in with
+Apple. Use Store-specific IDs, never direct-distribution profiles.
+Production client settings belong in ignored `Config/Marketplace.AppStore.local.xcconfig`.
+
+```sh
+DEVELOPMENT_TEAM=YOUR_TEAM_ID \
+WALI_STORE_INSTALLER_IDENTITY='3rd Party Mac Developer Installer: YOUR_NAME (YOUR_TEAM_ID)' \
+  bundle exec fastlane mac store_archive
+```
+
+`store_archive` requires committed source, archives with the AppStore
+configuration and canonical Swift dependency pins, and exports a signed PKG.
+It checks the selected team, Apple certificate class, hardened runtime, exact
+entitlements, and CMS-decoded profile dates, identity, capability grants, and
+signing certificate membership. It expands the exported package into a temporary
+directory, verifies its installer certificate and actual app payload, and writes `.build/store/release/archive.json` with source and
+artifact hashes; the recorded app digest belongs to the exported PKG payload.
+It does not upload or submit. Store packages do not use the
+Developer ID notarization/DMG path. App Store Connect agreement, metadata,
+privacy, demo-account, production UGC, signed-runtime, and review gates remain
+required before submission.
+
+
+## Upload and submit the Store build
+
+These are separate commands. Complete the signed native journeys and resolve
+production, account deletion, creator blocking, legal, privacy, content rights,
+age rating, App Store agreements, pricing/availability and reviewer access first.
+The metadata draft is not an upload input. No lane chooses those answers for the
+owner or establishes runtime acceptance from a successful source build.
+
+Publish the matching Developer ID release first. `store_upload` and
+`store_submit` both recheck current merged main and its seven required CI jobs,
+the signed exported Store PKG, the exact version/build/team, and the published
+GitHub tag and package/provenance digests. Keep the matching direct release
+artifacts under `.build/release`; a draft GitHub release does not satisfy this
+ordering. Store and direct binaries have different identities, but these lanes
+require them to represent the same reviewed source/version/build.
+
+Use an App Store Connect API key JSON outside source control, selected through
+`APP_STORE_CONNECT_API_KEY_PATH`, or secure Apple login with `FASTLANE_USER` and
+`WALI_ASC_TEAM_ID`. The latter is the numeric App Store Connect team ID, separate
+from the ten-character Developer team used for signing. Provide
+`GITHUB_API_TOKEN` only through a protected environment. Never paste passwords,
+sessions, private keys or review credentials into terminal command arguments.
+
+Prepare final Fastlane metadata in a private directory: root `copyright.txt`
+and `primary_category.txt`, and `en-US/name.txt`, `description.txt`,
+`keywords.txt`, `support_url.txt`, `privacy_url.txt`, plus applicable optional
+localized fields. Supply 1–10 English screenshots from the actual selected
+build under a separate `en-US` screenshots directory, using unique two-digit
+prefixes such as `01-library.png`. Only macOS desktop dimensions are accepted.
+Upload replaces the screenshots in this supplied English locale and verifies
+the ordered remote checksums and sizes; other locales are not supplied. The local checks reject
+missing files, symlinks and placeholder text; Apple validates image formats and
+Store metadata constraints. Public HTTPS URL presence is not proof that the
+page is reachable or that its policy is effective—verify both independently.
+
+The private review JSON has exactly two objects: `app_review_information` and
+`submission_information`. Review information requires `first_name`, `last_name`,
+`phone_number`, `email_address` and `notes`; include `demo_user` and
+`demo_password` only together for an actual task-specific review account.
+Submission information requires explicit JSON booleans for
+`export_compliance_uses_encryption` and
+`content_rights_contains_third_party_content`, based on the final archive and
+rights review. These names are the pinned Fastlane action's options; do not
+infer an exemption or rights grant from an example elsewhere.
+
+```sh
+DEVELOPMENT_TEAM=YOUR_TEAM_ID bundle exec fastlane mac store_upload \
+  github_tag:v0.1.0 metadata:/absolute/private/metadata \
+  screenshots:/absolute/private/screenshots review:/absolute/private/review.json
+
+# After the same uploaded build completes processing and the review is ready:
+DEVELOPMENT_TEAM=YOUR_TEAM_ID bundle exec fastlane mac store_submit \
+  github_tag:v0.1.0 metadata:/absolute/private/metadata \
+  screenshots:/absolute/private/screenshots review:/absolute/private/review.json
+```
+
+Upload sends the verified package, final metadata and screenshots without
+submitting. `.build/store/release/upload.json` records the exact source,
+package and review-input fingerprints after Transporter succeeds. An interrupted
+or duplicate upload requires inspecting App Store Connect and the local receipt;
+these lanes never silently adopt a previously uploaded unrelated build.
+Ambient `DELIVER_*` overrides and `Deliverfile` configuration are refused so
+they cannot turn a real upload into a successful validation-only run.
+
+Submission requires that receipt and the unchanged review inputs, selects the
+specific macOS version/build (never `latest`), refuses processing/invalid/expired
+builds, and runs Fastlane metadata Precheck with errors stopping the lane. It
+does not reject an existing submission or enable automatic release. The final
+receipt identifies the Apple build and review submission; Apple approval remains
+a separate state. A metadata change requires reconciling the uploaded metadata
+and receipts before submitting. Detailed upload/receipt recovery support and
+actual credentialed execution remain unverified until the first release run.
+
+Both commands reject verbose mode before reading credentials. Private contact,
+demo and declaration JSON remains local; receipts record hashes rather than
+those values. Credential-free refusal regressions live in
+`Tests/Release/store-submission-support-tests.rb` and run in `make verify`.
+
+References: [Fastlane macOS upload and submission](https://docs.fastlane.tools/actions/appstore/),
+[Apple build processing](https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds/),
+[Apple review submission](https://developer.apple.com/help/app-store-connect/manage-submissions-to-app-review/submit-an-app).
+
+The Store upload lane creates a candidate version only when no editable version
+exists, and refuses to rename a different prepared version. Metadata is restricted
+to approved category/copyright files and `en-US` text; review contacts and demo
+credentials come only from the private review JSON. Existing screenshot sets in
+other languages must be resolved before this English-only lane runs, because the
+pinned uploader can reorder those sets even when only English images are supplied.

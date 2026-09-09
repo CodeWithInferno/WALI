@@ -1,0 +1,222 @@
+---
+name: WALIStore
+options:
+  bundleIdPrefix: com.wali
+  createIntermediateGroups: true
+  defaultConfig: StoreDevelopment
+  deploymentTarget:
+    macOS: '15.0'
+  generateEmptyDirectories: true
+  minimumXcodeGenVersion: 2.44.1
+  xcodeVersion: '26.2'
+packages:
+  WALICore:
+    path: Packages/WALICore
+  Supabase:
+    url: https://github.com/supabase/supabase-swift.git
+    exactVersion: 2.54.1
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: '15.0'
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_VERSION: '6.0'
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) WALI_APP_STORE"
+include:
+- project-common.yml
+configs:
+  StoreDevelopment: debug
+  AppStore: release
+configFiles:
+  StoreDevelopment: Config/StoreDevelopment.xcconfig
+  AppStore: Config/AppStore.xcconfig
+targets:
+  WALI:
+    templates:
+    - CommonWALI
+    info:
+      path: Config/Generated/Store/WALI-Info.plist
+      properties:
+        WALIDistribution: store
+        WALIExpectedAgentBundleIdentifier: "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
+        WALIApplicationGroupIdentifier: "$(WALI_APP_GROUP_IDENTIFIER)"
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: Config/Store-WALI.entitlements
+      configs:
+        AppStore:
+          PROVISIONING_PROFILE_SPECIFIER: "$(WALI_APP_STORE_PROVISIONING_PROFILE)"
+    postBuildScripts:
+    - name: Embed selected Store launch agent
+      path: scripts/embed-store-launch-agent.sh
+      inputFiles:
+      - "$(SRCROOT)/Config/StoreLaunchAgents/$(WALI_AGENT_BUNDLE_IDENTIFIER).plist"
+      outputFiles:
+      - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchAgents/com.wali.store.development.WALIAgent.plist"
+      - "$(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Library/LaunchAgents/com.wali.store.WALIAgent.plist"
+      basedOnDependencyAnalysis: false
+  WALIAppRuntime:
+    templates:
+    - CommonWALIAppRuntime
+  WALICatalogRuntime:
+    templates:
+    - CommonWALICatalogRuntime
+  WALIAgent:
+    templates:
+    - CommonWALIAgent
+    info:
+      path: Config/Generated/Store/WALIAgent-Info.plist
+      properties:
+        WALIDistribution: store
+        WALIExpectedClientBundleIdentifier: "$(WALI_APP_BUNDLE_IDENTIFIER)"
+        WALIApplicationGroupIdentifier: "$(WALI_APP_GROUP_IDENTIFIER)"
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: Config/Store-WALIAgent.entitlements
+      configs:
+        AppStore:
+          PROVISIONING_PROFILE_SPECIFIER: "$(WALI_AGENT_STORE_PROVISIONING_PROFILE)"
+  WALIAgentRuntime:
+    templates:
+    - CommonWALIAgentRuntime
+    sources:REPLACE:
+    - path: Sources/WALIAgentRuntime
+      excludes:
+      - LockScreen/**
+  WALITranscoder:
+    templates:
+    - CommonWALITranscoder
+    info:
+      path: Config/Generated/Store/WALITranscoder-Info.plist
+      properties:
+        WALIDistribution: store
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: Config/Store-WALITranscoder.entitlements
+      configs:
+        AppStore:
+          PROVISIONING_PROFILE_SPECIFIER: "$(WALI_TRANSCODER_STORE_PROVISIONING_PROFILE)"
+  WALITranscoderRuntime:
+    templates:
+    - CommonWALITranscoderRuntime
+  WALIUI:
+    templates:
+    - CommonWALIUI
+  WALIAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Tests/WALIAppTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAppTests
+    dependencies:
+    - target: WALIAppRuntime
+    - package: WALICore
+      product: WALIModel
+    - package: WALICore
+      product: WALIWire
+    - target: WALICatalogRuntime
+    - target: WALIUI
+    - package: WALICore
+      product: WALICatalog
+  WALICatalogRuntimeTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Tests/WALICatalogRuntimeTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALICatalogRuntimeTests
+    dependencies:
+    - target: WALICatalogRuntime
+    - package: WALICore
+      product: WALICatalog
+  WALIAgentTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Tests/WALIAgentTests
+      excludes:
+      - WALIAgentTests.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAgentTests
+    dependencies:
+    - target: WALIAgentRuntime
+    - package: WALICore
+      product: WALIWire
+    - package: WALICore
+      product: WALIEngine
+    - package: WALICore
+      product: WALIModel
+    - package: WALICore
+      product: WALICatalog
+  WALITranscoderTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Tests/WALITranscoderTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALITranscoderTests
+    dependencies:
+    - target: WALITranscoderRuntime
+    - package: WALICore
+      product: WALIWire
+  WALIUITests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Tests/WALIUITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIUITests
+    dependencies:
+    - target: WALIUI
+  WALIEndToEndTests:
+    type: bundle.ui-testing
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: UITests/WALIEndToEndTests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIEndToEndTests
+    dependencies:
+    - target: WALI
+schemes:
+  WALI:
+    build:
+      targets:
+        WALI: all
+    run:
+      config: StoreDevelopment
+    test:
+      config: StoreDevelopment
+      gatherCoverageData: true
+      targets:
+      - WALIAppTests
+      - WALICatalogRuntimeTests
+      - WALIAgentTests
+      - WALITranscoderTests
+      - WALIUITests
+      - WALIEndToEndTests
+    profile:
+      config: AppStore
+    analyze:
+      config: StoreDevelopment
+    archive:
+      config: AppStore
+    management:
+      shared: true

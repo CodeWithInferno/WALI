@@ -18,13 +18,16 @@ func require(_ condition: Bool, _ message: String) throws {
 }
 
 do {
-    try require(CommandLine.arguments.count == 2, "Usage: xcrun swift scripts/verify-branding.swift /path/to/WALI.app")
+    let store = CommandLine.arguments.count == 3 && CommandLine.arguments[2] == "--store"
+    try require(CommandLine.arguments.count == 2 || store, "Usage: xcrun swift scripts/verify-branding.swift /path/to/WALI.app [--store]")
     let appURL = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
-    let bundleURLs = [
+    var bundleURLs = [
         appURL,
         appURL.appendingPathComponent("Contents/Library/LoginItems/WALIAgent.app"),
-        appURL.appendingPathComponent("Contents/Library/LoginItems/WALILockScreenHelper.app"),
     ]
+    if !store {
+        bundleURLs.append(appURL.appendingPathComponent("Contents/Library/LoginItems/WALILockScreenHelper.app"))
+    }
 
     for url in bundleURLs {
         guard let bundle = Bundle(url: url), let resources = bundle.resourceURL else {

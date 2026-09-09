@@ -2,7 +2,7 @@
 
 .PHONY: generate build development test check-architecture verify-bundle package-dmg verify clean \
 	backend-start backend-stop backend-reset backend-test backend-lint marketplace-contracts \
-	worker-test classifier-test sandbox-test edge-test marketplace-verify licenses sbom
+	worker-test classifier-test sandbox-test edge-test marketplace-verify licenses sbom store-generate store-build store-test store-verify
 .NOTPARALLEL: verify
 
 generate:
@@ -71,6 +71,20 @@ sbom:
 
 marketplace-verify: marketplace-contracts backend-test backend-lint edge-test worker-test classifier-test sandbox-test licenses
 
+store-generate:
+	./scripts/generate-store.sh
+
+store-build:
+	./scripts/build-store.sh
+
+store-test:
+	./scripts/test-store.sh
+
+store-verify:
+	/usr/bin/ruby Tests/Architecture/store-graph-tests.rb
+	./scripts/check-architecture.sh
+	python3 scripts/verify-store-bundle.py .build/store/DerivedData/Build/Products/StoreDevelopment/WALI.app
+
 clean:
-	rm -rf .build build WALI.xcodeproj \
+	rm -rf .build build WALI.xcodeproj WALIStore.xcodeproj \
 		Packages/WALICore/.build Packages/WALICore/.swiftpm Config/Generated

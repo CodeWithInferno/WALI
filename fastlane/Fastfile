@@ -4,8 +4,10 @@ require "fileutils"
 require "json"
 require "shellwords"
 require "tempfile"
+require "tmpdir"
 require "uri"
 require_relative "release_support"
+require_relative "store_submission_support"
 
 opt_out_usage
 default_platform(:mac)
@@ -34,7 +36,224 @@ def wali_write_checksum(path)
   end
 end
 
+def wali_store_credentials
+  key_path = ENV.fetch("APP_STORE_CONNECT_API_KEY_PATH", "")
+  return {api_key_path: File.expand_path(key_path)} unless key_path.empty?
+  user = ENV.fetch("FASTLANE_USER", "")
+  team = ENV.fetch("WALI_ASC_TEAM_ID", "")
+  UI.user_error!("Set FASTLANE_USER and the numeric WALI_ASC_TEAM_ID, or APP_STORE_CONNECT_API_KEY_PATH.") unless user.include?("@") && team.match?(/\A[0-9]+\z/)
+  {username: user, team_id: team}
+end
+
+def wali_store_connect(credentials, identifier)
+  require "spaceship"
+  if credentials[:api_key_path]
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.from(filepath: credentials.fetch(:api_key_path))
+  else
+    Spaceship::ConnectAPI.login(credentials.fetch(:username), nil, use_portal: false, use_tunes: true, tunes_team_id: credentials.fetch(:team_id))
+  end
+  app = Spaceship::ConnectAPI::App.find(identifier)
+  UI.user_error!("Create the approved Store app record in the selected App Store Connect team first.") unless app && app.bundle_id == identifier
+  app
+end
+
+def wali_store_preflight(options)
+  UI.user_error!("Store publication forbids --verbose to protect credentials and private review inputs") if FastlaneCore::Globals.verbose?
+  ambient = Dir.chdir(WALI_ROOT) { FastlaneCore::Configuration.find_configuration_file_path(config_file_name: "Deliverfile") }
+  WALIStoreSubmissionSupport.verify_environment!(environment: ENV, configuration_files: ambient ? [File.expand_path(ambient, WALI_ROOT)] : [])
+  team = wali_team
+  commit = WALIReleaseSupport.source_commit(WALI_ROOT)
+  directory = File.join(WALI_ROOT, ".build", "store", "release")
+  package = File.join(directory, "candidate", "WALI.pkg")
+  archive = JSON.parse(File.read(File.join(directory, "archive.json")))
+  Dir.mktmpdir("wali-store-preflight-") do |temporary|
+    payload_path = File.join(temporary, "payload.json")
+    Bundler.with_unbundled_env do
+      sh("python3", File.join(WALI_ROOT, "scripts", "verify-store-package.py"), package, "--team", team, "--receipt", payload_path)
+    end
+    WALIStoreSubmissionSupport.verify_archive!(archive, payload: JSON.parse(File.read(payload_path)), package: package, commit: commit, team: team)
+  end
+  metadata = File.expand_path(options.fetch(:metadata))
+  screenshots = File.expand_path(options.fetch(:screenshots))
+  review = File.expand_path(options.fetch(:review))
+  packet, fingerprint = WALIStoreSubmissionSupport.review_inputs(metadata: metadata, screenshots: screenshots, review: review)
+  require "deliver/app_screenshot"
+  pictures = Dir.glob(File.join(screenshots, "en-US", "*.{png,jpg,jpeg}"))
+  UI.user_error!("Use valid macOS desktop screenshots only") unless pictures.all? { |path| Deliver::AppScreenshot.new(path, "en-US").display_type == "APP_DESKTOP" }
+  tag = options.fetch(:github_tag).to_s
+  UI.user_error!("GitHub tag must match the Store version") unless tag.match?(/\Av#{Regexp.escape(archive.fetch('version'))}(?:-[A-Za-z0-9.-]+)?\z/)
+  token = ENV.fetch("GITHUB_API_TOKEN", "")
+  UI.user_error!("Provide GITHUB_API_TOKEN through the environment") if token.empty?
+  fail_api = {"*" => proc { |result| UI.user_error!("GitHub prerequisite request failed with HTTP #{result[:status]}") }}
+  api = lambda { |path| github_api(api_token: token, secure: true, path: "repos/CodeWithInferno/WALI/#{path}", error_handlers: fail_api)[:json] }
+  UI.user_error!("Archive current merged main before Store upload") unless api.call("commits/main").fetch("sha") == commit
+  WALIReleaseSupport.verify_ci!(api.call("commits/#{commit}/check-runs?filter=latest&per_page=100").fetch("check_runs"), commit: commit)
+  object = api.call("git/ref/tags/#{tag}").fetch("object")
+  8.times do
+    break if object.fetch("type") == "commit"
+    UI.user_error!("Invalid GitHub release tag") unless object.fetch("type") == "tag"
+    object = api.call("git/tags/#{object.fetch('sha')}").fetch("object")
+  end
+  UI.user_error!("GitHub release tag does not resolve to a commit") unless object.fetch("type") == "commit"
+  published = api.call("releases/tags/#{tag}")
+  direct_bytes = File.binread(File.join(WALI_RELEASE, "release.json"))
+  WALIStoreSubmissionSupport.verify_github_release!(published, direct_receipt: JSON.parse(direct_bytes), direct_bytes: direct_bytes, directory: WALI_RELEASE, tag: tag, tag_commit: object.fetch("sha"), store_receipt: archive)
+  UI.user_error!("Source changed during Store preflight") unless WALIReleaseSupport.source_commit(WALI_ROOT) == commit
+  {archive: archive, package: package, directory: directory, metadata: metadata, screenshots: screenshots, review: review, packet: packet, fingerprint: fingerprint, github_release_id: published.fetch("id"), github_tag: tag}
+end
+
 platform :mac do
+  desc "Upload the exact signed Store package and final metadata after the matching GitHub release"
+  lane :store_upload do |options|
+    input = wali_store_preflight(options)
+    credentials = wali_store_credentials
+    archive = input.fetch(:archive)
+    app = wali_store_connect(credentials, archive.fetch("bundle_id"))
+    existing = Spaceship::ConnectAPI::Build.all(app_id: app.id, version: archive.fetch("version"), build_number: archive.fetch("build"), platform: "MAC_OS")
+    UI.user_error!("This Store build already exists; inspect upload.json and processing status before retrying.") unless existing.empty?
+    version = app.get_edit_app_store_version(platform: "MAC_OS")
+    if version.nil?
+      Spaceship::ConnectAPI.post_app_store_version(app_id: app.id, attributes: {versionString: archive.fetch("version"), platform: "MAC_OS"})
+      version = app.get_edit_app_store_version(platform: "MAC_OS")
+    end
+    WALIStoreSubmissionSupport.verify_editable_version!(version, archive: archive)
+    WALIStoreSubmissionSupport.verify_screenshot_scope!(version.get_app_store_version_localizations)
+    # A private copy makes later local packaging edits independent of Transporter.
+    Dir.mktmpdir("wali-store-upload-") do |temporary|
+      package = File.join(temporary, "WALI.pkg")
+      FileUtils.cp(input.fetch(:package), package)
+      File.chmod(0o400, package)
+      UI.user_error!("Store package changed before upload") unless Digest::SHA256.file(package).hexdigest == archive.fetch("package_sha256")
+      upload_to_app_store(**credentials,
+        app_identifier: archive.fetch("bundle_id"), app_version: archive.fetch("version"), platform: "osx", pkg: package,
+        metadata_path: input.fetch(:metadata), screenshots_path: input.fetch(:screenshots),
+        app_review_information: input.fetch(:packet).fetch("app_review_information"),
+        **WALIStoreSubmissionSupport.delivery_options(upload: true)
+      )
+    end
+    _, current_fingerprint = WALIStoreSubmissionSupport.review_inputs(metadata: input.fetch(:metadata), screenshots: input.fetch(:screenshots), review: input.fetch(:review))
+    UI.user_error!("Review inputs or source changed during upload; reconcile App Store Connect before retrying") unless current_fingerprint == input.fetch(:fingerprint) && WALIReleaseSupport.source_commit(WALI_ROOT) == archive.fetch("source_commit")
+    version = app.get_edit_app_store_version(platform: "MAC_OS")
+    UI.user_error!("Uploaded editable Store version differs") unless version && version.version_string == archive.fetch("version")
+    localizations = Spaceship::ConnectAPI::AppStoreVersionLocalization.all(app_store_version_id: version.id)
+    english = localizations.select { |localization| localization.locale == "en-US" }
+    UI.user_error!("Missing English Store localization after upload") unless english.length == 1
+    WALIStoreSubmissionSupport.verify_screenshots!(english.first.get_app_screenshot_sets, directory: input.fetch(:screenshots))
+    receipt = archive.merge("status" => "uploaded_not_submitted", "review_inputs" => current_fingerprint, "github_release_id" => input.fetch(:github_release_id), "github_tag" => input.fetch(:github_tag))
+    File.write(File.join(input.fetch(:directory), "upload.json"), JSON.pretty_generate(receipt) + "\n", perm: 0o600)
+    UI.success("Uploaded Store #{archive.fetch('version')} (#{archive.fetch('build')}); Apple processing and review submission are separate steps.")
+  end
+
+  desc "Submit the previously uploaded, processed exact Store build with explicit reviewed declarations"
+  lane :store_submit do |options|
+    input = wali_store_preflight(options)
+    archive = input.fetch(:archive)
+    upload = JSON.parse(File.read(File.join(input.fetch(:directory), "upload.json")))
+    WALIStoreSubmissionSupport.verify_upload!(upload, archive: archive, fingerprint: input.fetch(:fingerprint), github_release_id: input.fetch(:github_release_id))
+    credentials = wali_store_credentials
+    app = wali_store_connect(credentials, archive.fetch("bundle_id"))
+    builds = Spaceship::ConnectAPI::Build.all(app_id: app.id, version: archive.fetch("version"), build_number: archive.fetch("build"), platform: "MAC_OS")
+    UI.user_error!("Wait for exactly this uploaded build to finish Apple processing") unless builds.length == 1
+    WALIStoreSubmissionSupport.verify_processed_build!(builds.first, archive: archive)
+    encryption = input.fetch(:packet).fetch("submission_information").fetch("export_compliance_uses_encryption")
+    WALIStoreSubmissionSupport.verify_encryption!(builds.first, answer: encryption)
+    version = app.get_edit_app_store_version(platform: "MAC_OS")
+    UI.user_error!("App Store Connect editable version does not match this candidate") unless version && version.version_string == archive.fetch("version")
+    english = version.get_app_store_version_localizations.select { |localization| localization.locale == "en-US" }
+    UI.user_error!("Missing English Store localization before submission") unless english.length == 1
+    WALIStoreSubmissionSupport.verify_screenshots!(english.first.get_app_screenshot_sets, directory: input.fetch(:screenshots))
+    # Run Precheck explicitly: Deliver's internal rescue can treat an exception
+    # as success. Here both a false result and an exception stop submission.
+    require "precheck"
+    Precheck.config = FastlaneCore::Configuration.create(Precheck::Options.available_options, credentials.merge(app_identifier: archive.fetch("bundle_id"), platform: "osx", default_rule_level: :error, include_in_app_purchases: false))
+    UI.user_error!("Store metadata precheck did not pass") unless Precheck::Runner.new.run == true
+    upload_to_app_store(**credentials,
+      app_identifier: archive.fetch("bundle_id"), app_version: archive.fetch("version"), build_number: archive.fetch("build"), platform: "osx",
+      submission_information: input.fetch(:packet).fetch("submission_information"),
+      **WALIStoreSubmissionSupport.delivery_options(upload: false)
+    )
+    submitted_build = Spaceship::ConnectAPI::Build.get(build_id: builds.first.id)
+    WALIStoreSubmissionSupport.verify_encryption!(submitted_build, answer: encryption, require_value: true)
+    submission = app.get_in_progress_review_submission(platform: "MAC_OS", includes: "appStoreVersionForReview,items")
+    UI.user_error!("Apple submission result could not be confirmed; inspect App Store Connect before retrying") unless submission
+    items = Spaceship::ConnectAPI::ReviewSubmissionItem.all(review_submission_id: submission.id, includes: "appStoreVersion")
+    selected = Spaceship::ConnectAPI::AppStoreVersion.get(app_store_version_id: version.id).get_build
+    WALIStoreSubmissionSupport.verify_submission!(submission, items: items, version_id: version.id, selected_build_id: selected&.id, expected_build_id: builds.first.id)
+    receipt = upload.merge("status" => "submitted_for_review", "apple_app_id" => app.id, "apple_version_id" => version.id, "apple_build_id" => builds.first.id, "apple_submission_id" => submission.id)
+    File.write(File.join(input.fetch(:directory), "submission.json"), JSON.pretty_generate(receipt) + "\n", perm: 0o600)
+    UI.success("App Store review submitted for #{archive.fetch('version')} (#{archive.fetch('build')}); approval is pending.")
+  end
+
+  desc "Build and inspect the separate Store graph; signed feasibility remains a native journey gate"
+  lane :store_feasibility do |options|
+    %i[structural_only allow_provisioning_updates].each do |key|
+      UI.user_error!("#{key} must be true or false") if options.key?(key) && !%w[true false].include?(options[key].to_s)
+    end
+    structural = options.fetch(:structural_only, true).to_s == "true"
+    allow_profiles = options.fetch(:allow_provisioning_updates, false).to_s == "true"
+    configuration = options.fetch(:configuration, "StoreDevelopment")
+    UI.user_error!("Use StoreDevelopment or AppStore") unless %w[StoreDevelopment AppStore].include?(configuration)
+    UI.user_error!("Use store_archive for AppStore distribution signing") if !structural && configuration == "AppStore"
+    team = wali_team unless structural
+    output = File.join(WALI_ROOT, ".build", "store", structural ? "DerivedData" : "SignedDerivedData")
+    environment = ["STRUCTURAL_ONLY=#{structural ? 'YES' : 'NO'}", "CONFIGURATION=#{configuration}", "DERIVED_DATA_PATH=#{output}"]
+    environment << "DEVELOPMENT_TEAM=#{team}" unless structural
+    environment << "ALLOW_PROVISIONING_UPDATES=#{allow_profiles ? 'YES' : 'NO'}"
+    Bundler.with_unbundled_env do
+      sh("env", *environment, File.join(WALI_ROOT, "scripts", "build-store.sh"))
+      args = ["python3", File.join(WALI_ROOT, "scripts", "verify-store-bundle.py"), File.join(output, "Build", "Products", configuration, "WALI.app"), "--configuration", configuration]
+      args += ["--signed", "--team", team] unless structural
+      sh(*args)
+    end
+    UI.message(structural ? "Structural Store artifact verified; no signing or sandbox runtime proof." : "Signed Store artifact verified. Record service, scoped import, renderer, recovery, and quit journeys before submission.")
+  end
+
+  desc "Compile Store tests and execute the hostless suites without launching the product"
+  lane :store_test do
+    Bundler.with_unbundled_env do
+      sh(File.join(WALI_ROOT, "scripts", "test-store.sh"))
+    end
+  end
+
+  desc "Archive an App Store signed package from committed source; never uploads automatically"
+  lane :store_archive do
+    team = wali_team
+    source_commit = WALIReleaseSupport.source_commit(WALI_ROOT)
+    identity = ENV.fetch("WALI_STORE_CODE_SIGN_IDENTITY", "Apple Distribution")
+    UI.user_error!("Use an Apple Distribution or 3rd Party Mac Developer Application certificate.") unless identity.start_with?("Apple Distribution", "3rd Party Mac Developer Application")
+    installer = ENV.fetch("WALI_STORE_INSTALLER_IDENTITY", "")
+    UI.user_error!("Set WALI_STORE_INSTALLER_IDENTITY to an existing 3rd Party Mac Developer Installer certificate.") unless installer.start_with?("3rd Party Mac Developer Installer")
+    output = File.join(WALI_ROOT, ".build", "store", "release")
+    FileUtils.mkdir_p(output)
+    Bundler.with_unbundled_env do
+      sh(File.join(WALI_ROOT, "scripts", "generate-store.sh"))
+      sh("/usr/bin/ruby", File.join(WALI_ROOT, "scripts", "check-store-graph.rb"), WALI_ROOT)
+      arguments = {"WALI_STORE_DEVELOPMENT_TEAM" => team, "WALI_STORE_CODE_SIGN_IDENTITY" => identity, "CODE_SIGNING_ALLOWED" => "YES", "CODE_SIGNING_REQUIRED" => "YES", "ONLY_ACTIVE_ARCH" => "NO"}
+      %w[MARKETING_VERSION CURRENT_PROJECT_VERSION].each { |key| arguments[key] = ENV[key] unless ENV[key].to_s.empty? }
+      build_mac_app(
+        project: File.join(WALI_ROOT, "WALIStore.xcodeproj"), scheme: "WALI", configuration: "AppStore",
+        destination: "generic/platform=macOS", archive_path: File.join(output, "WALI.xcarchive"),
+        derived_data_path: File.join(output, "DerivedData"), output_directory: File.join(output, "candidate"),
+        cloned_source_packages_path: File.join(WALI_ROOT, ".build", "store", "DerivedData", "SourcePackages"),
+        output_name: "WALI.pkg", buildlog_path: File.join(output, "logs"), export_method: "app-store",
+        installer_cert_name: installer, skip_package_pkg: false, skip_package_ipa: true,
+        disable_package_automatic_updates: true, skip_package_dependencies_resolution: true, xcodebuild_formatter: "",
+        xcargs: "ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO -onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution " + arguments.map { |key, value| "#{key}=#{Shellwords.escape(value)}" }.join(" ")
+      )
+      app = File.join(output, "WALI.xcarchive", "Products", "Applications", "WALI.app")
+      sh("python3", File.join(WALI_ROOT, "scripts", "verify-store-bundle.py"), app, "--configuration", "AppStore", "--signed", "--team", team)
+      UI.user_error!("Source changed during Store archive") unless source_commit == WALIReleaseSupport.source_commit(WALI_ROOT)
+      package = File.join(output, "candidate", "WALI.pkg")
+      UI.user_error!("App Store package was not produced") unless File.file?(package)
+      payload_receipt = File.join(output, "verified-payload.json")
+      sh("python3", File.join(WALI_ROOT, "scripts", "verify-store-package.py"), package, "--team", team, "--receipt", payload_receipt)
+      verified_payload = JSON.parse(File.read(payload_receipt))
+      UI.user_error!("Source changed during Store payload verification") unless source_commit == WALIReleaseSupport.source_commit(WALI_ROOT)
+      File.write(File.join(output, "archive.json"), JSON.pretty_generate({"source_commit" => source_commit, "team_id" => team, "app_sha256" => verified_payload.fetch("app_sha256"), "package_sha256" => Digest::SHA256.file(package).hexdigest, "distribution" => "app_store", "submission_status" => "not_submitted", "bundle_id" => verified_payload.fetch("bundle_id"), "version" => verified_payload.fetch("version"), "build" => verified_payload.fetch("build")}) + "\n")
+      UI.success("Signed Store candidate: #{package}")
+    end
+  end
+
   desc "Build the signed staging app for native user-journey testing"
   lane :development do
     wali_team
@@ -92,7 +311,7 @@ platform :mac do
       disable_package_automatic_updates: true,
       skip_package_dependencies_resolution: true,
       xcodebuild_formatter: "",
-      xcargs: "-onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution " + arguments.map { |key, value| "#{key}=#{Shellwords.escape(value)}" }.join(" ")
+      xcargs: "ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO -onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution " + arguments.map { |key, value| "#{key}=#{Shellwords.escape(value)}" }.join(" ")
       )
     end
     wali_verify(app, "Release")

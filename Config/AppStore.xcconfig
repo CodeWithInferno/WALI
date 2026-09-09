@@ -1,0 +1,18 @@
+#include "Base.xcconfig"
+#include? "Marketplace.AppStore.local.xcconfig"
+
+WALI_APP_BUNDLE_IDENTIFIER = com.wali.store.WALI
+WALI_AGENT_BUNDLE_IDENTIFIER = com.wali.store.WALIAgent
+WALI_TRANSCODER_BUNDLE_IDENTIFIER = com.wali.store.WALITranscoder
+WALI_APP_GROUP_IDENTIFIER = group.com.wali.store.shared
+WALI_AGENT_CONTROL_SERVICE_NAME = group.com.wali.store.shared.agent-control
+ENABLE_HARDENED_RUNTIME = YES
+// Set team, distribution identity, and three profile names only in the ignored local file.
+WALI_STORE_CODE_SIGN_IDENTITY = Apple Distribution
+WALI_STORE_DEVELOPMENT_TEAM =
+#include? "AppStoreSigning.local.xcconfig"
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = $(WALI_STORE_CODE_SIGN_IDENTITY)
+DEVELOPMENT_TEAM = $(WALI_STORE_DEVELOPMENT_TEAM)
+SWIFT_COMPILATION_MODE = wholemodule
+SWIFT_OPTIMIZATION_LEVEL = -O

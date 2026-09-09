@@ -772,3 +772,99 @@ surfaces:
         - source_media
         - secrets
       lease_required: true
+
+  # These identities are reserved by accepted ADR 0018. Checked-in structure and
+  # unsigned builds do not establish signed container or runtime compatibility.
+  - id: store_distribution
+    kind: distribution_identity
+    owner_role: security_responder
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALI, WALIAgent, WALITranscoder]
+      writers: [WALI, WALIAgent, WALITranscoder]
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      policy_adr: docs/adr/0018-sandboxed-mac-app-store-distribution.md
+      cross_distribution_migration: none
+      signing_gate: signed_sandbox_feasibility_pending
+      configurations:
+        StoreDevelopment:
+          WALI: com.wali.store.development.WALI
+          WALIAgent: com.wali.store.development.WALIAgent
+          WALITranscoder: com.wali.store.development.WALITranscoder
+          application_group: group.com.wali.store.development.shared
+          app_agent_service: group.com.wali.store.development.shared.agent-control
+        AppStore:
+          WALI: com.wali.store.WALI
+          WALIAgent: com.wali.store.WALIAgent
+          WALITranscoder: com.wali.store.WALITranscoder
+          application_group: group.com.wali.store.shared
+          app_agent_service: group.com.wali.store.shared.agent-control
+
+  - id: store_wire_contracts
+    kind: wire_channel
+    owner_role: ipc_maintainer
+    implementation: unimplemented
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALI, WALIAgent, WALITranscoder]
+      writers: [WALI, WALIAgent, WALITranscoder]
+    fixture_gate:
+      status: planned
+      paths: []
+    details:
+      policy_adr: docs/adr/0018-sandboxed-mac-app-store-distribution.md
+      module: WALIWire
+      source_path: Packages/WALICore/Sources/WALIWire/StoreProtocol.swift
+      direct_wire_unchanged: true
+      shared_envelope_maximum_bytes: 4194304
+      import_grant:
+        message_version: 1
+        maximum_bookmark_bytes: 262144
+        maximum_encoded_bytes: 368640
+        persistence: transient_only
+      worker_request:
+        message_version: 2
+        maximum_source_bookmark_bytes: 262144
+        maximum_staging_bookmark_bytes: 262144
+        staging_scope: exact_job_uuid_and_generation_directory
+      worker_handshake:
+        protocol_version: 2
+        message_version: 2
+        maximum_encoded_bytes: 4096
+        correlation: exact_nonce_echo_before_any_grants
+        added_selectors: ['negotiate:withReply:', 'shutdownWithReply:']
+      presentation_demand:
+        command: preparePresentation
+        envelope_message_version: 1
+        maximum_unique_item_ids: 32
+        caller_paths: forbidden
+        authority: committed_agent_snapshot
+      lifecycle_callback:
+        message_version: 1
+        selector: 'agentWillTerminateWithReply:'
+        payload: none
+      regression_paths:
+        - Packages/WALICore/Tests/WALIWireTests/StoreWireTests.swift
+        - Tests/WALIAgentTests/StoreScopedStorageTests.swift
+        - Tests/WALITranscoderTests/WorkerGrantTests.swift
+      remaining_gate: signed_cross_process_scope_and_recovery_journeys

@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
-import WALIWire
+import WALILockScreenWire
 
 public enum LockScreenHelperConnectionError: LocalizedError, Equatable, Sendable {
     case unavailable
