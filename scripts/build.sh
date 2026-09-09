@@ -48,5 +48,7 @@ xcodebuild \
     -configuration "${CONFIGURATION}" \
     -destination "platform=macOS" \
     -derivedDataPath "${DERIVED_DATA_PATH}" \
+    -disableAutomaticPackageResolution \
+    -onlyUsePackageVersionsFromResolvedFile \
     "${signing_arguments[@]}" \
     build

@@ -18,6 +18,8 @@ xcodebuild \
     -configuration Debug \
     -destination "platform=macOS" \
     -derivedDataPath "${DERIVED_DATA_PATH}" \
+    -disableAutomaticPackageResolution \
+    -onlyUsePackageVersionsFromResolvedFile \
     -parallel-testing-enabled NO \
     CODE_SIGNING_ALLOWED=NO \
     CODE_SIGNING_REQUIRED=NO \

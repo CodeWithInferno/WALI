@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "packages": [
+    {
+      "identity": "supabase-swift",
+      "version": "2.54.1",
+      "revision": "b118484ae0eb4a6b6ce1b216711d660baf6ec1aa",
+      "source_url": "https://github.com/supabase/supabase-swift.git",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "supabase-swift-LICENSE.txt",
+          "upstream_path": "LICENSE",
+          "sha256": "216a661b5399e973126f6b5ebe9867541ebc9d4bea23d216774c0e672acf55eb"
+        }
+      ]
+    },
+    {
+      "identity": "swift-asn1",
+      "version": "1.7.2",
+      "revision": "d9a5b37470adc940d22c3bcd5ca6953a516b727f",
+      "source_url": "https://github.com/apple/swift-asn1.git",
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "path": "swift-asn1-LICENSE.txt",
+          "upstream_path": "LICENSE.txt",
+          "sha256": "8c6db340475136df3c1201d458fa5755698eace76e510471ecc9d857d6083dac"
+        },
+        {
+          "path": "swift-asn1-NOTICE.txt",
+          "upstream_path": "NOTICE.txt",
+          "sha256": "11dd3b3b783e6ec26098dd38ebc962986ea109b85447e28e62867b83bd0f8c5b"
+        }
+      ]
+    },
+    {
+      "identity": "swift-clocks",
+      "version": "1.1.1",
+      "revision": "82440fa0a8b1c381a6d1e8e0fc7bbba53ec63204",
+      "source_url": "https://github.com/pointfreeco/swift-clocks",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "swift-clocks-LICENSE.txt",
+          "upstream_path": "LICENSE",
+          "sha256": "b89df9ea00d0d73c599e85f168de84180c1bee4771f19c0beca7630ceb5a42c6"
+        }
+      ]
+    },
+    {
+      "identity": "swift-concurrency-extras",
+      "version": "1.4.1",
+      "revision": "5fa253428866f2360c3754e88537f700ed2656b5",
+      "source_url": "https://github.com/pointfreeco/swift-concurrency-extras",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "swift-concurrency-extras-LICENSE.txt",
+          "upstream_path": "LICENSE",
+          "sha256": "72565151804cdc168937ccc70e4c30c5afff92ff314bb9d504780a3ad1c1f868"
+        }
+      ]
+    },
+    {
+      "identity": "swift-crypto",
+      "version": "4.5.1",
+      "revision": "47d3869a7291f085c1fb9fb1e6d3b97a793f45c6",
+      "source_url": "https://github.com/apple/swift-crypto.git",
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "path": "swift-crypto-LICENSE.txt",
+          "upstream_path": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "path": "swift-crypto-NOTICE.txt",
+          "upstream_path": "NOTICE.txt",
+          "sha256": "b3ddc2ae068e76b3beb71be03c0400f90090f9469aa491bf7b1ac42320af37b8"
+        }
+      ]
+    },
+    {
+      "identity": "swift-http-types",
+      "version": "1.6.0",
+      "revision": "db774a277f60063a32d854f2980299caf06da041",
+      "source_url": "https://github.com/apple/swift-http-types.git",
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "path": "swift-http-types-LICENSE.txt",
+          "upstream_path": "LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "path": "swift-http-types-NOTICE.txt",
+          "upstream_path": "NOTICE.txt",
+          "sha256": "eb79190094094bb6ce2b177a7ba7708f50bf873b9a2c5e6e1936a5f391b5ec0f"
+        }
+      ]
+    },
+    {
+      "identity": "xctest-dynamic-overlay",
+      "version": "1.13.1",
+      "revision": "d9308ad679143c26a30dec52daefe82f54af2b82",
+      "source_url": "https://github.com/pointfreeco/xctest-dynamic-overlay",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "xctest-dynamic-overlay-LICENSE.txt",
+          "upstream_path": "LICENSE",
+          "sha256": "e26e14493356d7abf33f426942a1c451832a8a4a309297d44c5b8a03af1d9ea1"
+        }
+      ]
+    }
+  ]
+}

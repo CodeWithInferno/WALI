@@ -3,6 +3,9 @@ require "bundler"
 require "fileutils"
 require "json"
 require "shellwords"
+require "tempfile"
+require "uri"
+require_relative "release_support"
 
 opt_out_usage
 default_platform(:mac)
@@ -19,6 +22,15 @@ end
 def wali_verify(app, configuration)
   Bundler.with_unbundled_env do
     sh("env", "CONFIGURATION=#{configuration}", File.join(WALI_ROOT, "scripts", "verify-bundle.sh"), app)
+  end
+end
+
+def wali_write_checksum(path)
+  Tempfile.create([".wali-checksum-", ".sha256"], File.dirname(path)) do |file|
+    file.write("#{Digest::SHA256.file(path).hexdigest}  #{File.basename(path)}\n")
+    file.flush
+    file.fsync
+    File.rename(file.path, "#{path}.sha256")
   end
 end
 
@@ -49,6 +61,7 @@ platform :mac do
   desc "Archive a universal Developer ID app; requires Release signing and provisioning"
   lane :archive do
     team = wali_team
+    source_commit = WALIReleaseSupport.source_commit(WALI_ROOT)
     identity = ENV.fetch("WALI_CODE_SIGN_IDENTITY", "Developer ID Application")
     UI.user_error!("Use a Developer ID Application certificate.") unless identity.start_with?("Developer ID Application")
     FileUtils.mkdir_p(WALI_RELEASE)
@@ -76,21 +89,31 @@ platform :mac do
       buildlog_path: File.join(WALI_RELEASE, "logs"),
       export_method: "developer-id",
       skip_package_pkg: true,
+      disable_package_automatic_updates: true,
+      skip_package_dependencies_resolution: true,
       xcodebuild_formatter: "",
-      xcargs: arguments.map { |key, value| "#{key}=#{Shellwords.escape(value)}" }.join(" ")
+      xcargs: "-onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution " + arguments.map { |key, value| "#{key}=#{Shellwords.escape(value)}" }.join(" ")
       )
     end
     wali_verify(app, "Release")
+    UI.user_error!("Source changed during archive") unless source_commit == WALIReleaseSupport.source_commit(WALI_ROOT)
+    File.write(File.join(WALI_RELEASE, "archive.json"), JSON.pretty_generate({
+      "source_commit" => source_commit,
+      "team_id" => team,
+      "app_sha256" => WALIReleaseSupport.bundle_digest(app)
+    }) + "\n")
     UI.success("Signed candidate: #{app}")
     UI.message("Native journeys and the final release review must pass before publication.")
   end
 
-  desc "Notarize and staple an existing candidate, then produce a verified distribution ZIP"
+  desc "Notarize and staple an existing candidate, then produce verified ZIP and branded DMG packages"
   lane :notarize_candidate do |options|
     wali_team
     profile = ENV.fetch("WALI_NOTARY_KEYCHAIN_PROFILE", "")
     UI.user_error!("Set WALI_NOTARY_KEYCHAIN_PROFILE to an existing notarytool Keychain profile.") if profile.empty?
     app = File.expand_path(options[:app] || File.join(WALI_RELEASE, "candidate", "WALI.app"))
+    archive_receipt = JSON.parse(File.read(File.join(WALI_RELEASE, "archive.json")))
+    WALIReleaseSupport.verify_archive!(archive_receipt, app: app, root: WALI_ROOT)
     wali_verify(app, "Release")
     FileUtils.mkdir_p(WALI_RELEASE)
     submission = File.join(WALI_RELEASE, "WALI-notary-submission.zip")
@@ -107,12 +130,156 @@ platform :mac do
     sh("/usr/bin/xcrun", "stapler", "validate", app)
     sh("/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=2", app)
     wali_verify(app, "Release")
+    # Stapling changes bundle bytes. Record the verified stapled state so a
+    # failed outer-DMG submission can be retried without accepting other edits.
+    archive_receipt["app_sha256"] = WALIReleaseSupport.bundle_digest(app)
+    File.write(File.join(WALI_RELEASE, "archive.json"), JSON.pretty_generate(archive_receipt) + "\n")
     version = sh("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", File.join(app, "Contents", "Info.plist"), log: false).strip
     build = sh("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleVersion", File.join(app, "Contents", "Info.plist"), log: false).strip
     output = File.join(WALI_RELEASE, "WALI-#{version}-#{build}-macOS.zip")
     sh("/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, output)
-    File.write("#{output}.sha256", "#{Digest::SHA256.file(output).hexdigest}  #{File.basename(output)}\n")
+    wali_write_checksum(output)
     UI.success("Notarized distribution package: #{output}")
+
+    dmg_name = "WALI-#{version}-#{build}-macOS.dmg"
+    dmg = File.join(WALI_RELEASE, "candidate", dmg_name)
+    Bundler.with_unbundled_env do
+      sh("env", "CONFIGURATION=Release", "DMG_KIND=distribution",
+         File.join(WALI_ROOT, "scripts", "package-dmg.sh"), app, dmg)
+    end
+    FileUtils.rm_f("#{dmg}.sha256") # Signing and stapling will change these bytes.
+    # The app is already stapled. Package it unchanged, then notarize the outer
+    # container separately so the drag-to-Applications download has its own ticket.
+    identity = ENV.fetch("WALI_CODE_SIGN_IDENTITY", "Developer ID Application")
+    UI.user_error!("Use a Developer ID Application certificate.") unless identity.start_with?("Developer ID Application")
+    sh("/usr/bin/codesign", "--sign", identity, "--timestamp", dmg)
+    sh("/usr/bin/codesign", "--verify", "--strict", dmg)
+    dmg_response = sh(
+      "/usr/bin/xcrun", "notarytool", "submit", dmg,
+      "--keychain-profile", profile, "--wait", "--timeout", "30m", "--output-format", "json",
+      log: false
+    )
+    dmg_receipt = JSON.parse(dmg_response)
+    File.write(File.join(WALI_RELEASE, "dmg-notarization.json"), JSON.pretty_generate(dmg_receipt))
+    UI.user_error!("DMG notarization was not accepted; inspect .build/release/dmg-notarization.json.") unless dmg_receipt["status"] == "Accepted"
+    sh("/usr/bin/xcrun", "stapler", "staple", dmg)
+    sh("/usr/bin/xcrun", "stapler", "validate", dmg)
+    sh("/usr/sbin/spctl", "--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", dmg)
+    final_dmg = File.join(WALI_RELEASE, dmg_name)
+    File.rename(dmg, final_dmg)
+    dmg = final_dmg
+    wali_write_checksum(dmg)
+    File.write(File.join(WALI_RELEASE, "release.json"), JSON.pretty_generate({
+      "source_commit" => archive_receipt.fetch("source_commit"),
+      "team_id" => archive_receipt.fetch("team_id"),
+      "version" => version, "build" => build,
+      "app_sha256" => WALIReleaseSupport.bundle_digest(app),
+      "notarization" => {"app" => receipt.fetch("id"), "dmg" => dmg_receipt.fetch("id")},
+      "assets" => {
+        "zip" => {"name" => File.basename(output), "sha256" => Digest::SHA256.file(output).hexdigest},
+        "dmg" => {"name" => File.basename(dmg), "sha256" => Digest::SHA256.file(dmg).hexdigest}
+      }
+    }) + "\n")
+    UI.success("Notarized branded disk image: #{dmg}")
+  end
+
+  desc "Publish verified notarized packages and release documents to GitHub after merge and final review"
+  lane :github_release do |options|
+    UI.user_error!("GitHub publication forbids --verbose because Fastlane can log authentication headers") if FastlaneCore::Globals.verbose?
+    repository = "CodeWithInferno/WALI"
+    token = ENV.fetch("GITHUB_API_TOKEN", "")
+    UI.user_error!("Provide GITHUB_API_TOKEN through the environment") if token.empty?
+    receipt_path = File.join(WALI_RELEASE, "release.json")
+    receipt_bytes = File.binread(receipt_path)
+    receipt = JSON.parse(receipt_bytes)
+    commit = WALIReleaseSupport.source_commit(WALI_ROOT)
+    UI.user_error!("Release artifacts belong to another commit") unless receipt.fetch("source_commit") == commit
+    UI.user_error!("Release team does not match") unless receipt.fetch("team_id") == wali_team
+    assets = WALIReleaseSupport.verify_assets!(receipt, directory: WALI_RELEASE)
+    app = File.join(WALI_RELEASE, "candidate", "WALI.app")
+    UI.user_error!("The notarized app changed") unless receipt.fetch("app_sha256") == WALIReleaseSupport.bundle_digest(app)
+    wali_verify(app, "Release")
+    sh("/usr/bin/xcrun", "stapler", "validate", app)
+    sh("/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=2", app)
+    dmg = File.join(WALI_RELEASE, receipt.fetch("assets").fetch("dmg").fetch("name"))
+    sh("/usr/bin/codesign", "--verify", "--strict", dmg)
+    sh("/usr/bin/xcrun", "stapler", "validate", dmg)
+    sh("/usr/sbin/spctl", "--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", dmg)
+    notes = File.expand_path(options.fetch(:notes))
+    UI.user_error!("Provide reviewed release notes") unless File.file?(notes) && !File.read(notes).strip.empty?
+    tag = options.fetch(:tag)
+    UI.user_error!("Tag must match the packaged version") unless tag.match?(/\Av#{Regexp.escape(receipt.fetch("version"))}(?:-[A-Za-z0-9.-]+)?\z/)
+    # Reject verbose HTTP diagnostics above; custom handlers also avoid the
+    # default failure path that includes authentication headers.
+    fail_api = {"*" => proc { |result| UI.user_error!("GitHub request failed with HTTP #{result[:status]}") }}
+    main = github_api(api_token: token, secure: true, path: "repos/#{repository}/commits/main", error_handlers: fail_api)[:json]
+    UI.user_error!("Archive the merged main commit before publishing") unless main.fetch("sha") == commit
+    checks = github_api(api_token: token, secure: true, path: "repos/#{repository}/commits/#{commit}/check-runs?filter=latest&per_page=100", error_handlers: fail_api)[:json]
+    WALIReleaseSupport.verify_ci!(checks.fetch("check_runs"), commit: commit)
+    resolve_tag = lambda do
+      result = github_api(api_token: token, secure: true, path: "repos/#{repository}/git/ref/tags/#{tag}", error_handlers: fail_api.merge(404 => proc { |_| }))
+      next nil if result[:status] == 404
+      object = result[:json].fetch("object")
+      8.times do
+        break if object.fetch("type") == "commit"
+        UI.user_error!("Release tag does not point to a commit") unless object.fetch("type") == "tag"
+        object = github_api(api_token: token, secure: true, path: "repos/#{repository}/git/tags/#{object.fetch('sha')}", error_handlers: fail_api)[:json].fetch("object")
+      end
+      UI.user_error!("Release tag nesting is invalid") unless object.fetch("type") == "commit"
+      object.fetch("sha")
+    end
+    existing_tag = resolve_tag.call
+    UI.user_error!("Existing release tag points to different source") if existing_tag && existing_tag != commit
+    docs = File.join(WALI_RELEASE, "documents")
+    FileUtils.mkdir_p(docs)
+    {
+      "Release-Notes.md" => notes,
+      "LICENSE.txt" => File.join(WALI_ROOT, "LICENSE"),
+      "THIRD_PARTY_NOTICES.md" => File.join(WALI_ROOT, "THIRD_PARTY_NOTICES.md"),
+      "wali-marketplace.spdx.json" => File.join(WALI_ROOT, "sbom", "wali-marketplace.spdx.json")
+    }.each do |name, source|
+      destination = File.join(docs, name)
+      FileUtils.cp(source, destination)
+      assets << destination
+    end
+    assets << receipt_path
+    license_archive = File.join(docs, "WALI-Third-Party-Licenses.zip")
+    sh("/usr/bin/ditto", "-c", "-k", "--keepParent", File.join(WALI_ROOT, "Resources", "ThirdPartyLicenses"), license_archive)
+    assets << license_archive
+    expected_assets = WALIReleaseSupport.asset_manifest(assets)
+    WALIReleaseSupport.verify_package_manifest!(expected_assets, receipt: receipt, receipt_bytes: receipt_bytes)
+    unless existing_tag
+      github_api(api_token: token, secure: true, http_method: "POST", path: "repos/#{repository}/git/refs", body: {ref: "refs/tags/#{tag}", sha: commit}, error_handlers: fail_api)
+    end
+    # Use configured github_api calls throughout: the pinned convenience
+    # release action bypasses its secure:true default in internal action calls.
+    release = github_api(
+      api_token: token, secure: true, http_method: "POST", path: "repos/#{repository}/releases",
+      body: {tag_name: tag, target_commitish: commit, name: "WALI #{tag.delete_prefix('v')}",
+             body: File.read(notes), draft: true, prerelease: tag.include?("-")},
+      error_handlers: fail_api
+    )[:json]
+    release_id = Integer(release.fetch("id"))
+    assets.each do |path|
+      bytes = File.binread(path)
+      expected = expected_assets.fetch(File.basename(path))
+      UI.user_error!("Release asset changed before upload") unless bytes.bytesize == expected.fetch("size") && Digest::SHA256.hexdigest(bytes) == expected.fetch("sha256")
+      github_api(
+        api_token: token, secure: true, server_url: "https://uploads.github.com", http_method: "POST",
+        path: "repos/#{repository}/releases/#{release_id}/assets?name=#{URI.encode_www_form_component(File.basename(path))}",
+        headers: {"Content-Type" => "application/octet-stream"}, raw_body: bytes, error_handlers: fail_api
+      )
+    end
+    release = github_api(api_token: token, secure: true, path: "repos/#{repository}/releases/#{release_id}", error_handlers: fail_api)[:json]
+    WALIReleaseSupport.verify_uploaded_assets!(release.fetch("assets"), expected: expected_assets)
+    UI.user_error!("Release tag changed during upload; draft remains unpublished") unless resolve_tag.call == commit
+    UI.user_error!("Source changed during upload; draft remains unpublished") unless WALIReleaseSupport.source_commit(WALI_ROOT) == commit
+    UI.user_error!("Release receipt changed during upload; draft remains unpublished") unless WALIReleaseSupport.asset_manifest([receipt_path]) == expected_assets.slice(File.basename(receipt_path))
+    result = github_api(
+      api_token: token, secure: true, http_method: "PATCH", path: "repos/#{repository}/releases/#{release_id}",
+      body: {draft: false}, error_handlers: fail_api
+    )
+    UI.success("Published release: #{result[:json].fetch('html_url')}")
   end
 
   desc "Build and notarize a release package without publishing it"

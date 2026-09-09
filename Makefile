@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 
-.PHONY: generate build development test check-architecture verify-bundle verify clean \
+.PHONY: generate build development test check-architecture verify-bundle package-dmg verify clean \
 	backend-start backend-stop backend-reset backend-test backend-lint marketplace-contracts \
 	worker-test classifier-test sandbox-test edge-test marketplace-verify licenses sbom
 .NOTPARALLEL: verify
@@ -22,6 +22,9 @@ check-architecture:
 
 verify-bundle:
 	./scripts/verify-bundle.sh
+
+package-dmg:
+	APP_PATH="$(APP_PATH)" DMG_OUTPUT="$(DMG_OUTPUT)" ./scripts/package-dmg.sh
 
 verify:
 	./scripts/verify.sh

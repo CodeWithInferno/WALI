@@ -16,6 +16,7 @@ public struct StatusPanel: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            brandHeader
             activeWallpaper
             Divider()
             rendererStatus
@@ -33,6 +34,25 @@ public struct StatusPanel: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("WALI.StatusPanel")
+    }
+
+    private var brandHeader: some View {
+        HStack(spacing: 8) {
+            WALIBrandMark()
+                .frame(width: 28, height: 20)
+            Text("WALI")
+                .font(.headline)
+
+            Spacer(minLength: 12)
+
+            Image(systemName: stateSymbol)
+                .foregroundStyle(stateTint)
+                .accessibilityHidden(true)
+            Text(stateTitle)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
     }
 
     private var activeWallpaper: some View {
@@ -60,15 +80,6 @@ public struct StatusPanel: View {
 
     private var rendererStatus: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 7) {
-                Image(systemName: stateSymbol)
-                    .foregroundStyle(stateTint)
-                    .accessibilityHidden(true)
-                Text(stateTitle)
-                    .font(.callout.weight(.medium))
-                Spacer()
-            }
-
             if let stateDetail {
                 Text(stateDetail)
                     .font(.caption)

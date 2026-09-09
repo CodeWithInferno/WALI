@@ -20,7 +20,10 @@ public struct WALISettingsView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            WALIPageHeader("Settings") { EmptyView() }
+            WALIPageHeader("Settings") {
+                WALIBrandMark()
+                    .frame(width: 36, height: 24)
+            }
             Form {
                 Section("General") {
                     Toggle("Launch WALI at Login", isOn: $draft.launchAtLogin)

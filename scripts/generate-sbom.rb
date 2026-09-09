@@ -4,6 +4,7 @@
 require "digest"
 require "json"
 require "pathname"
+require_relative "swift-dependency-inventory"
 
 ROOT = Pathname.new(__dir__).parent.freeze
 OUTPUT = ROOT / "sbom/wali-marketplace.spdx.json"
@@ -28,14 +29,14 @@ LICENSES = {
   "github.com/jackc/pgx/v5" => "MIT", "github.com/jackc/pgpassfile" => "MIT",
   "github.com/jackc/pgservicefile" => "MIT", "github.com/jackc/puddle/v2" => "MIT",
   "golang.org/x/crypto" => "BSD-3-Clause", "golang.org/x/sync" => "BSD-3-Clause",
-  "golang.org/x/text" => "BSD-3-Clause", "supabase-swift" => "Apache-2.0",
+  "golang.org/x/text" => "BSD-3-Clause", "fastlane" => "MIT",
   "ffmpeg" => "LGPL-2.1-or-later", "kvazaar" => "BSD-3-Clause",
   "google/siglip-base-patch16-224" => "Apache-2.0",
   "docker.io/library/debian:bookworm-slim" => "LicenseRef-Debian-Image-Mixed"
 }.freeze
 
-def package(name:, version:, ecosystem:, checksum: nil, download: "NOASSERTION")
-  license = LICENSES.fetch(name, "NOASSERTION")
+def package(name:, version:, ecosystem:, checksum: nil, download: "NOASSERTION", license: nil)
+  license ||= LICENSES.fetch(name, "NOASSERTION")
   identifier = "SPDXRef-Package-#{ecosystem}-#{name.gsub(/[^A-Za-z0-9.-]/, "-")}-#{version.gsub(/[^A-Za-z0-9.-]/, "-")}"
   result = {
     "SPDXID" => identifier,
@@ -74,9 +75,27 @@ uv_lock.scan(/^\[\[package\]\]\n(.*?)(?=^\[\[package\]\]|\z)/m).flatten.each do 
   packages << package(name: name, version: version, ecosystem: "pypi") if name && version
 end
 
-project = (ROOT / "project.yml").read
-project.scan(/^\s{2}([^:]+):\n\s+url:\s+([^\s]+)\n\s+version:\s+([^\s]+)/).each do |name, url, version|
-  packages << package(name: name, version: version, ecosystem: "swift", download: url)
+begin
+  SwiftDependencyInventory.load(ROOT).each do |pin|
+    packages << package(
+      name: pin.fetch("identity"), version: pin.fetch("state").fetch("version"),
+      ecosystem: "swift", license: pin.fetch("license"),
+      download: "git+#{pin.fetch('location')}@#{pin.fetch('state').fetch('revision')}"
+    )
+  end
+rescue StandardError => error
+  abort "Swift dependency inventory: #{error.message}"
+end
+
+# Git-sourced release tooling has no RubyGems artifact checksum. Preserve its
+# immutable upstream source in the inventory, including Fastlane's Rubyzip fix.
+(ROOT / "Gemfile.lock").read.scan(/^GIT\n(.*?)(?=^\S|\z)/m).flatten.each do |source|
+  remote = source[/^  remote: (https:\/\/\S+)$/, 1]
+  revision = source[/^  revision: ([0-9a-f]{40})$/, 1]
+  abort "Git-sourced Ruby tool must have an HTTPS source and exact revision" unless remote && revision
+  source.scan(/^    ([^\s(]+) \(([^)]+)\)$/).each do |name, version|
+    packages << package(name: name, version: version, ecosystem: "gem", download: "git+#{remote}@#{revision}")
+  end
 end
 
 sandbox = (ROOT / "Services/WALIMediaSandbox/Containerfile").read
