@@ -14,13 +14,13 @@ fi
 
 "${ROOT_DIR}/scripts/generate.sh"
 
-signing_arguments=(
+build_arguments=(
     CODE_SIGNING_ALLOWED=NO
     CODE_SIGNING_REQUIRED=NO
 )
 
 if [[ "${CONFIGURATION}" == "Development" ]]; then
-    signing_arguments=(
+    build_arguments=(
         -allowProvisioningUpdates
         CODE_SIGNING_ALLOWED=YES
         CODE_SIGNING_REQUIRED=YES
@@ -29,14 +29,16 @@ if [[ "${CONFIGURATION}" == "Development" ]]; then
 elif [[ "${CONFIGURATION}" == "Debug" ]]; then
     # Service Management registers sealed app bundles. Local ad-hoc signing
     # needs no developer credentials and keeps Debug free of production entitlements.
-    signing_arguments=(
+    build_arguments=(
         CODE_SIGNING_ALLOWED=YES
         CODE_SIGNING_REQUIRED=YES
         CODE_SIGN_IDENTITY=-
         DEVELOPMENT_TEAM=
     )
 elif [[ "${CONFIGURATION}" == "Release" ]]; then
-    signing_arguments=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES)
+    # Scheme test coverage must not instrument a distribution artifact.
+    build_arguments=(CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES
+        ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO)
 else
     printf 'Unsupported configuration: %s\n' "${CONFIGURATION}" >&2
     exit 1
@@ -50,5 +52,5 @@ xcodebuild \
     -derivedDataPath "${DERIVED_DATA_PATH}" \
     -disableAutomaticPackageResolution \
     -onlyUsePackageVersionsFromResolvedFile \
-    "${signing_arguments[@]}" \
+    "${build_arguments[@]}" \
     build

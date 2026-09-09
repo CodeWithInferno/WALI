@@ -36,6 +36,24 @@ It mirrors the main display's wallpaper through macOS's current-user global
 linked selection and restores the prior global/display/Space values on disable.
 Desktop and Lock Screen playback timelines are independent.
 
+## Distribution status
+
+The branding and verified Finder installer layout are merged in
+[PR 25](https://github.com/CodeWithInferno/WALI/pull/25). The direct-download
+product retains its optional, version-gated Lock Screen helper. Signed and
+notarized release packages are still gated on actual distribution credentials
+and the remaining release evidence; a local Debug DMG is not a distribution
+release.
+
+A separate sandboxed Mac App Store edition is being implemented under
+[ADR 0018](docs/adr/0018-sandboxed-mac-app-store-distribution.md). It retains the
+native desktop and intended marketplace product, omits private Lock Screen
+integration, and uses its own library/settings identity. Its helper-free
+structural build has passed; integrated tests, signed sandbox journeys,
+production readiness, and App Store submission remain separate open gates.
+See the [release ledger](docs/release/2026-09-09-release-status.md) and
+[Fastlane workflow](docs/release/fastlane.md) for the current evidence and commands.
+
 ## Architecture
 
 Current implementation:
@@ -104,7 +122,9 @@ DEVELOPMENT_TEAM=ABCDE12345 make development
 CONFIGURATION=Release ./scripts/build.sh
 ```
 
-The Xcode project is generated and intentionally ignored. Edit `project.yml`, then regenerate.
+The Xcode projects are generated and intentionally ignored. Edit `project.yml`
+for direct distribution or `project-store.yml` for Store, with shared declarations
+in `project-common.yml`, then regenerate the relevant graph.
 
 The marketplace control plane runs locally through Supabase. Install the
 Supabase CLI and Docker, then use `make backend-start`, `make backend-reset`,

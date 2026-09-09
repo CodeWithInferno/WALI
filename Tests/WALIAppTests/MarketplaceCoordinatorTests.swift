@@ -115,11 +115,15 @@ final class MarketplaceCoordinatorTests: XCTestCase {
             ),
         ])
         let coordinator = MarketplaceCoordinator(
-            gateway: ScriptedCatalogGateway(homeSteps: [.value(home, delay: .milliseconds(5))])
+            gateway: ScriptedCatalogGateway(homeSteps: [.value(home, delay: .milliseconds(75))])
         )
 
         coordinator.loadHome()
-        try await Task.sleep(for: .milliseconds(30))
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while coordinator.model.homeState == .loading, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
 
         XCTAssertEqual(coordinator.model.homeState, .ready)
         XCTAssertEqual(

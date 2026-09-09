@@ -12,7 +12,10 @@ responsibilities.
 also requires `swift package dump-package`; import authority requires
 `xcrun swiftc -frontend -dump-parse`. The wrapper checks these Apple-toolchain
 dependencies. No gem or third-party package is required, and the checker does
-not require `rg`.
+not require `rg`. Shared target templates additionally require the supported
+XcodeGen executable (`XCODEGEN_BIN` or `xcodegen`) to resolve included specs.
+The lossless JSON output retains package product names; the policy resolver
+applies XcodeGen dictionary, array, and `:REPLACE` target-template merge rules.
 
 Psych's AST is inspected before object construction so duplicate mapping keys
 are rejected rather than silently resolved with last-write-wins behavior.
@@ -222,3 +225,25 @@ Update the manifest and focused mutation fixtures before changing source or
 `project.yml`. Current graph changes require an accepted ADR. Target-only
 changes still require architectural review when they change ownership,
 dependency direction, or a security boundary.
+
+## Distribution graph authority
+
+`distributions.direct` names `project.yml`, generated `WALI.xcodeproj`, and the
+existing Debug/Development/Release configurations. The top-level current/target
+module and edge registry continues to describe this direct distribution.
+
+`distributions.store` records `project-store.yml`, `WALIStore.xcodeproj`, exact
+StoreDevelopment/AppStore configurations, the eight shared production targets,
+three excluded helper modules, the excluded agent `LockScreen/**` source tree,
+and required `WALI_APP_STORE` condition. It references accepted ADR 0018 and
+keeps its signed feasibility gate pending. These declarations are checked
+against fixed policy, then against the resolved Store graph and entitlements.
+The Store targets must retain every direct dependency except helper-only code;
+containment is exactly WALI → WALIAgent → WALITranscoder. The Store test graph
+omits the helper target and mixed direct helper test file; other suites retain
+the same module names and compile with the Store condition.
+
+`WALILockScreenWire` is a static Foundation-only product with no package edges.
+It preserves the direct helper selector/DTO contract. It is never a Store
+link dependency. Generation, graph mutation checks, and actual Mach-O scans are
+separate evidence; unsigned artifacts do not prove signed sandbox behavior.

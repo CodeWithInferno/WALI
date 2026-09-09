@@ -14,9 +14,11 @@ private final class ReplyBox: @unchecked Sendable {
 
 private final class AgentServiceEndpoint: NSObject, WALIAgentXPCProtocol, @unchecked Sendable {
     private let handler: AgentRequestHandler
+    private let afterQuitReply: (@Sendable () async -> Void)?
 
-    init(handler: @escaping AgentRequestHandler) {
+    init(handler: @escaping AgentRequestHandler, afterQuitReply: (@Sendable () async -> Void)?) {
         self.handler = handler
+        self.afterQuitReply = afterQuitReply
     }
 
     func perform(_ requestData: Data, withReply reply: @escaping (Data?, NSError?) -> Void) {
@@ -33,6 +35,11 @@ private final class AgentServiceEndpoint: NSObject, WALIAgentXPCProtocol, @unche
             let response = await handler(request)
             do {
                 replyBox.reply(try WireCodec.encodeResponse(response), nil)
+                #if WALI_APP_STORE
+                if case .quit = request.command, case .snapshot = response.result {
+                    await afterQuitReply?()
+                }
+                #endif
             } catch {
                 replyBox.reply(nil, error as NSError)
             }
@@ -42,6 +49,9 @@ private final class AgentServiceEndpoint: NSObject, WALIAgentXPCProtocol, @unche
 
 private final class AgentListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     private let endpoint: AgentServiceEndpoint
+    private let lock = NSLock()
+    private var connections: [ObjectIdentifier: NSXPCConnection] = [:]
+    private var stopped = false
 
     init(endpoint: AgentServiceEndpoint) {
         self.endpoint = endpoint
@@ -52,12 +62,79 @@ private final class AgentListenerDelegate: NSObject, NSXPCListenerDelegate, @unc
         shouldAcceptNewConnection connection: NSXPCConnection
     ) -> Bool {
         guard LocalClientValidator.isTrusted(connection) else { return false }
+        #if WALI_APP_STORE
+        lock.lock()
+        guard !stopped, connections.count < 16 else { lock.unlock(); return false }
+        connections[ObjectIdentifier(connection)] = connection
+        lock.unlock()
+        connection.invalidationHandler = { [weak self, weak connection] in
+            guard let self, let connection else { return }
+            self.remove(connection)
+        }
+        connection.remoteObjectInterface = NSXPCInterface(with: WALIAppLifecycleXPCProtocol.self)
+        #endif
         connection.exportedInterface = NSXPCInterface(with: WALIAgentXPCProtocol.self)
         connection.exportedObject = endpoint
         connection.resume()
         return true
     }
+
+    private func remove(_ connection: NSXPCConnection) {
+        lock.lock()
+        connections.removeValue(forKey: ObjectIdentifier(connection))
+        lock.unlock()
+    }
+
+    func stop() {
+        lock.lock()
+        stopped = true
+        let active = Array(connections.values)
+        connections.removeAll()
+        lock.unlock()
+        for connection in active { connection.invalidate() }
+    }
+
+    private func activeConnections() -> [NSXPCConnection] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(connections.values)
+    }
+
+    #if WALI_APP_STORE
+    func notifyForegroundTermination() async throws {
+        let active = activeConnections().map(StoreForegroundPeer.init)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for connection in active {
+                group.addTask {
+                    try await StoreForegroundAcknowledgement.wait { reply in
+                        connection.requestTermination(reply: reply)
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+    }
+    #endif
 }
+
+#if WALI_APP_STORE
+/// NSXPC supports message submission from arbitrary threads. Keep the accepted
+/// connection immutable while a bounded task waits for its callback reply.
+private final class StoreForegroundPeer: @unchecked Sendable {
+    private let connection: NSXPCConnection
+    init(_ connection: NSXPCConnection) { self.connection = connection }
+
+    func requestTermination(reply: @escaping StoreForegroundAcknowledgement.Reply) {
+        guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
+            reply(.failure(error))
+        }) as? WALIAppLifecycleXPCProtocol else {
+            reply(.failure(AgentFailure(code: .internalFailure, message: "WALI's foreground connection is unavailable.")))
+            return
+        }
+        proxy.agentWillTerminate { reply(.success(())) }
+    }
+}
+#endif
 
 private enum LocalClientValidator {
     static func isTrusted(_ connection: NSXPCConnection) -> Bool {
@@ -83,11 +160,22 @@ private enum LocalClientValidator {
         else {
             return false
         }
-        return SecCodeCheckValidity(client, [], requirement) == errSecSuccess
+        guard SecCodeCheckValidity(client, [], requirement) == errSecSuccess else { return false }
+        #if WALI_APP_STORE
+        var expression: CFString?
+        guard SecRequirementCopyString(requirement, [], &expression) == errSecSuccess,
+              let expression else { return false }
+        connection.setCodeSigningRequirement(expression as String)
+        #endif
+        return true
     }
 
     private static var isAdHocDebugBuild: Bool {
+        #if WALI_APP_STORE
+        false
+        #else
         (Bundle.main.bundleIdentifier ?? "").contains(".debug.")
+        #endif
     }
 
     private static func peerRequirement(identifier: String, team: String) -> SecRequirement? {
@@ -112,8 +200,19 @@ private enum LocalClientValidator {
     }
 
     private static var expectedClientIdentifier: String {
+        #if WALI_APP_STORE
+        let peers = [
+            "com.wali.store.development.WALIAgent": "com.wali.store.development.WALI",
+            "com.wali.store.WALIAgent": "com.wali.store.WALI",
+        ]
+        guard let ownIdentifier = Bundle.main.bundleIdentifier,
+              let expected = peers[ownIdentifier],
+              Bundle.main.object(forInfoDictionaryKey: "WALIExpectedClientBundleIdentifier") as? String == expected else { return "" }
+        return expected
+        #else
         let identifier = Bundle.main.bundleIdentifier ?? "com.wali.WALIAgent"
         return identifier.replacingOccurrences(of: "WALIAgent", with: "WALI")
+        #endif
     }
 
     private static func code(for processIdentifier: pid_t) -> SecCode? {
@@ -151,8 +250,12 @@ public final class AgentServiceHost: @unchecked Sendable {
     private let listener: NSXPCListener
     private let delegate: AgentListenerDelegate
 
-    public init(serviceName: String = AgentServiceName.current, handler: @escaping AgentRequestHandler) {
-        let endpoint = AgentServiceEndpoint(handler: handler)
+    public init(
+        serviceName: String = AgentServiceName.current,
+        afterQuitReply: (@Sendable () async -> Void)? = nil,
+        handler: @escaping AgentRequestHandler
+    ) {
+        let endpoint = AgentServiceEndpoint(handler: handler, afterQuitReply: afterQuitReply)
         delegate = AgentListenerDelegate(endpoint: endpoint)
         listener = NSXPCListener(machServiceName: serviceName)
         listener.delegate = delegate
@@ -162,8 +265,19 @@ public final class AgentServiceHost: @unchecked Sendable {
         listener.resume()
     }
 
+    #if WALI_APP_STORE
+    public func notifyForegroundTermination() async throws {
+        try await delegate.notifyForegroundTermination()
+    }
+    #endif
+
     public func stop() {
+        #if WALI_APP_STORE
+        listener.invalidate()
+        delegate.stop()
+        #else
         listener.suspend()
+        #endif
     }
 }
 
@@ -173,6 +287,10 @@ public enum AgentServiceName {
            !configured.isEmpty {
             return configured
         }
+        #if WALI_APP_STORE
+        return ""
+        #else
         return "com.wali.WALIAgent.control"
+        #endif
     }
 }

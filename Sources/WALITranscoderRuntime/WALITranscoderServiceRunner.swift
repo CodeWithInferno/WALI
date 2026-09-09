@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Security
 import WALIModel
 import WALIWire
@@ -71,24 +72,27 @@ private actor TranscodeTaskRegistry {
 
     private struct PendingAttempt {
         let request: TranscoderRequest
+        let stagingBookmark: Data?
         var waiters: [CheckedContinuation<TranscoderOutput, Error>]
     }
 
     private struct ActiveAttempt {
         let key: AttemptKey
         let request: TranscoderRequest
+        let stagingBookmark: Data?
         var waiters: [CheckedContinuation<TranscoderOutput, Error>]
         let progress: LatestProgress
         let task: Task<TranscoderOutput, Error>
     }
 
+    private var isShuttingDown = false
     private var active: ActiveAttempt?
     private var queue: [AttemptKey] = []
     private var pending: [AttemptKey: PendingAttempt] = [:]
 
-    func transcode(_ request: TranscoderRequest) async throws -> TranscoderOutput {
+    func transcode(_ request: TranscoderRequest, stagingBookmark: Data? = nil) async throws -> TranscoderOutput {
         try await withCheckedThrowingContinuation { continuation in
-            enqueue(request, continuation: continuation)
+            enqueue(request, stagingBookmark: stagingBookmark, continuation: continuation)
         }
     }
 
@@ -121,11 +125,13 @@ private actor TranscodeTaskRegistry {
 
     private func enqueue(
         _ request: TranscoderRequest,
+        stagingBookmark: Data?,
         continuation: CheckedContinuation<TranscoderOutput, Error>
     ) {
+        guard !isShuttingDown else { continuation.resume(throwing: CancellationError()); return }
         let key = AttemptKey(jobID: request.jobID, generation: request.attemptGeneration)
         if var current = active, current.key == key {
-            guard current.request == request else {
+            guard current.request == request, current.stagingBookmark == stagingBookmark else {
                 continuation.resume(throwing: TranscoderServiceError.conflictingAttempt)
                 return
             }
@@ -134,7 +140,7 @@ private actor TranscodeTaskRegistry {
             return
         }
         if var queued = pending[key] {
-            guard queued.request == request else {
+            guard queued.request == request, queued.stagingBookmark == stagingBookmark else {
                 continuation.resume(throwing: TranscoderServiceError.conflictingAttempt)
                 return
             }
@@ -143,23 +149,37 @@ private actor TranscodeTaskRegistry {
             return
         }
 
-        pending[key] = PendingAttempt(request: request, waiters: [continuation])
+        pending[key] = PendingAttempt(request: request, stagingBookmark: stagingBookmark, waiters: [continuation])
         queue.append(key)
         startNextIfIdle()
     }
 
+    func shutdown() async {
+        isShuttingDown = true
+        for attempt in pending.values {
+            for waiter in attempt.waiters { waiter.resume(throwing: CancellationError()) }
+        }
+        pending.removeAll()
+        queue.removeAll()
+        if let task = active?.task {
+            task.cancel()
+            _ = await task.result
+        }
+    }
+
     private func startNextIfIdle() {
-        guard active == nil else { return }
+        guard !isShuttingDown, active == nil else { return }
         while !queue.isEmpty {
             let key = queue.removeFirst()
             guard let next = pending.removeValue(forKey: key) else { continue }
             let progress = LatestProgress(jobID: key.jobID, generation: key.generation)
             let task = Task {
-                try await Self.perform(next.request, progress: progress.update)
+                try await Self.perform(next.request, stagingBookmark: next.stagingBookmark, progress: progress.update)
             }
             active = ActiveAttempt(
                 key: key,
                 request: next.request,
+                stagingBookmark: next.stagingBookmark,
                 waiters: next.waiters,
                 progress: progress,
                 task: task
@@ -191,8 +211,15 @@ private actor TranscodeTaskRegistry {
 
     private static func perform(
         _ request: TranscoderRequest,
+        stagingBookmark: Data?,
         progress: @escaping @Sendable (MediaPipelineProgress) -> Void
     ) async throws -> TranscoderOutput {
+        #if WALI_APP_STORE
+        guard let stagingBookmark else { throw WorkerGrantError.missingGrant }
+        let access = try WorkerScopedMediaAccess.open(StoreTranscoderRequest(request: request, stagingBookmark: stagingBookmark))
+        defer { access.close() }
+        let resolvedSourceURL = access.sourceURL
+        #else
         var bookmarkIsStale = false
         let resolvedSourceURL: URL
         do {
@@ -219,6 +246,8 @@ private actor TranscodeTaskRegistry {
                 resolvedSourceURL.stopAccessingSecurityScopedResource()
             }
         }
+
+        #endif
 
         let jobID = try JobID(request.jobID.uuidString.lowercased())
         let generation = try AttemptGeneration(request.attemptGeneration)
@@ -292,15 +321,22 @@ private enum TranscoderServiceError: LocalizedError {
 
 private final class TranscoderServiceEndpoint:
     NSObject,
-    WALITranscoderXPCProtocol,
     @unchecked Sendable
 {
     private let registry = TranscodeTaskRegistry()
 
     func transcode(_ requestData: Data, withReply reply: @escaping (Data?, NSError?) -> Void) {
         let request: TranscoderRequest
+        let stagingBookmark: Data?
         do {
+            #if WALI_APP_STORE
+            let storeRequest = try StoreTranscoderWireCodec.decodeRequest(from: requestData)
+            request = storeRequest.request
+            stagingBookmark = storeRequest.stagingBookmark
+            #else
             request = try TranscoderWireCodec.decodeRequest(from: requestData)
+            stagingBookmark = nil
+            #endif
         } catch {
             reply(nil, error as NSError)
             return
@@ -309,7 +345,7 @@ private final class TranscoderServiceEndpoint:
         let replyBox = TranscoderReplyBox(reply)
         Task {
             do {
-                let output = try await registry.transcode(request)
+                let output = try await registry.transcode(request, stagingBookmark: stagingBookmark)
                 replyBox.reply(try TranscoderWireCodec.encodeOutput(output), nil)
             } catch {
                 replyBox.reply(nil, error as NSError)
@@ -360,6 +396,37 @@ private final class TranscoderServiceEndpoint:
     }
 }
 
+#if WALI_APP_STORE
+extension TranscoderServiceEndpoint: WALIStoreTranscoderXPCProtocol {
+    func connectionInvalidated() {
+        Task {
+            await registry.shutdown()
+            exit(EXIT_SUCCESS)
+        }
+    }
+
+    func negotiate(_ request: Data, withReply reply: @escaping (Data?, NSError?) -> Void) {
+        do {
+            let value = try StoreTranscoderWireCodec.decodeHandshake(from: request)
+            reply(try StoreTranscoderWireCodec.encodeHandshake(value), nil)
+        } catch { reply(nil, error as NSError) }
+    }
+
+    func shutdown(withReply reply: @escaping (NSError?) -> Void) {
+        let box = CancellationReplyBox(reply)
+        Task {
+            await registry.shutdown()
+            box.reply(nil)
+            // The acknowledgement is enqueued before this service exits. The
+            // agent reports success only after receiving it; a lost reply fails.
+            DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(100)) { exit(EXIT_SUCCESS) }
+        }
+    }
+}
+#else
+extension TranscoderServiceEndpoint: WALITranscoderXPCProtocol {}
+#endif
+
 private final class TranscoderListenerDelegate:
     NSObject,
     NSXPCListenerDelegate,
@@ -372,7 +439,12 @@ private final class TranscoderListenerDelegate:
         shouldAcceptNewConnection connection: NSXPCConnection
     ) -> Bool {
         guard TranscoderClientValidator.isTrusted(connection) else { return false }
+        #if WALI_APP_STORE
+        connection.exportedInterface = NSXPCInterface(with: WALIStoreTranscoderXPCProtocol.self)
+        connection.invalidationHandler = { [endpoint] in endpoint.connectionInvalidated() }
+        #else
         connection.exportedInterface = NSXPCInterface(with: WALITranscoderXPCProtocol.self)
+        #endif
         connection.exportedObject = endpoint
         connection.resume()
         return true

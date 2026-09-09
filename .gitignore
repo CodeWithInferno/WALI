@@ -39,3 +39,7 @@ Packages/WALICore/.swiftpm/
 /progress.md
 /task_plan.md
 .gstack/
+
+# Separate generated Mac App Store graph and local signing settings.
+WALIStore.xcodeproj/
+Config/AppStoreSigning.local.xcconfig

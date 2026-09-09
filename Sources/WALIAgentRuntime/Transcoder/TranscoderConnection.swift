@@ -5,12 +5,16 @@ public enum TranscoderConnectionError: LocalizedError {
     case invalidProxy
     case emptyResponse
     case responseMismatch
+    case timeout
+    case shuttingDown
 
     public var errorDescription: String? {
         switch self {
         case .invalidProxy: "WALI could not create a transcoder connection."
         case .emptyResponse: "The transcoder returned an empty response."
         case .responseMismatch: "The transcoder response belongs to another attempt."
+        case .timeout: "The transcoder did not acknowledge the operation before its deadline."
+        case .shuttingDown: "The transcoder is shutting down."
         }
     }
 }
@@ -90,6 +94,8 @@ public actor TranscoderConnection {
     private let serviceName: String
     private var connection: NSXPCConnection?
     private var connectionID: UUID?
+    private var shutdownCompleted = false
+    private var shutdownStarted = false
 
     public init(serviceName: String = TranscoderServiceName.current) {
         self.serviceName = serviceName
@@ -103,13 +109,25 @@ public actor TranscoderConnection {
         _ request: TranscoderRequest,
         progress: @escaping @Sendable (TranscoderProgress) -> Void
     ) async throws -> TranscoderOutput {
+        #if WALI_APP_STORE
+        guard !shutdownStarted else { throw TranscoderConnectionError.shuttingDown }
+        let negotiatedConnectionID = try await negotiate(timeout: .seconds(5))
+        guard !shutdownStarted else { throw TranscoderConnectionError.shuttingDown }
+        let scoped = try StoreWorkerRequestFactory.make(request: request, persistentBookmark: request.sourceBookmark)
+        let requestData = try StoreTranscoderWireCodec.encodeRequest(scoped)
+        #else
         let requestData = try TranscoderWireCodec.encodeRequest(request)
+        #endif
         let emitter = ProgressEmitter(handler: progress)
         let pollingTask = Task {
             await pollProgress(for: request, emitter: emitter)
         }
         defer { pollingTask.cancel() }
+        #if WALI_APP_STORE
+        let responseData = try await perform(requestData, expectedConnectionID: negotiatedConnectionID)
+        #else
         let responseData = try await perform(requestData)
+        #endif
         let output = try TranscoderWireCodec.decodeOutput(from: responseData)
         guard output.jobID == request.jobID,
               output.attemptGeneration == request.attemptGeneration else {
@@ -145,14 +163,93 @@ public actor TranscoderConnection {
         }
     }
 
+    /// Store shutdown is acknowledged only after worker attempts and scopes end.
+    /// A successful retry is a no-op and never starts another XPC service.
+    public func shutdown() async throws {
+        if shutdownCompleted { return }
+        shutdownStarted = true
+        #if WALI_APP_STORE
+        let deadline = ContinuousClock.now.advanced(by: .seconds(StoreWorkerWire.shutdownTimeoutSeconds))
+        do {
+            let negotiatedConnectionID = try await negotiate(timeout: .seconds(5))
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard remaining > .zero else { throw TranscoderConnectionError.timeout }
+            guard let connection, connectionID == negotiatedConnectionID else { throw TranscoderConnectionError.responseMismatch }
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let once = OneShotContinuation<Void>(continuation)
+                let timer = Task {
+                    do { try await Task.sleep(for: remaining) } catch { return }
+                    once.resume(with: .failure(TranscoderConnectionError.timeout))
+                }
+                guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
+                    timer.cancel(); once.resume(with: .failure(error))
+                }) as? WALIStoreTranscoderXPCProtocol else {
+                    timer.cancel(); once.resume(with: .failure(TranscoderConnectionError.invalidProxy)); return
+                }
+                proxy.shutdown { error in
+                    timer.cancel()
+                    if let error { once.resume(with: .failure(error)) }
+                    else { once.resume(with: .success(())) }
+                }
+            }
+            shutdownCompleted = true
+            invalidate()
+        } catch {
+            invalidate()
+            throw error
+        }
+        #else
+        shutdownCompleted = true
+        invalidate()
+        #endif
+    }
+
+    #if WALI_APP_STORE
+    private func negotiate(timeout: Duration) async throws -> UUID {
+        let hello = StoreWorkerHandshake()
+        let data = try StoreTranscoderWireCodec.encodeHandshake(hello)
+        let connection = activeConnection()
+        guard let identifier = connectionID else { throw TranscoderConnectionError.invalidProxy }
+        let response: Data = try await withCheckedThrowingContinuation { continuation in
+            let once = OneShotContinuation<Data>(continuation)
+            let timer = Task {
+                do { try await Task.sleep(for: timeout) } catch { return }
+                once.resume(with: .failure(TranscoderConnectionError.timeout))
+            }
+            guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
+                timer.cancel(); once.resume(with: .failure(error))
+            }) as? WALIStoreTranscoderXPCProtocol else {
+                timer.cancel(); once.resume(with: .failure(TranscoderConnectionError.invalidProxy)); return
+            }
+            proxy.negotiate(data) { result, error in
+                timer.cancel()
+                if let error { once.resume(with: .failure(error)) }
+                else if let result { once.resume(with: .success(result)) }
+                else { once.resume(with: .failure(TranscoderConnectionError.emptyResponse)) }
+            }
+        }
+        guard connectionID == identifier,
+              try StoreTranscoderWireCodec.decodeHandshake(from: response) == hello else {
+            throw TranscoderConnectionError.responseMismatch
+        }
+        return identifier
+    }
+    #endif
+
     public func invalidate() {
         connection?.invalidate()
         connection = nil
         connectionID = nil
     }
 
-    private func perform(_ request: Data) async throws -> Data {
+    private func perform(_ request: Data, expectedConnectionID: UUID? = nil) async throws -> Data {
+        #if WALI_APP_STORE
+        guard let connection, let expectedConnectionID, connectionID == expectedConnectionID else {
+            throw TranscoderConnectionError.responseMismatch
+        }
+        #else
         let connection = activeConnection()
+        #endif
         return try await withCheckedThrowingContinuation { continuation in
             let oneShot = OneShotContinuation<Data>(continuation)
             guard let proxy = connection.remoteObjectProxyWithErrorHandler({ error in
@@ -224,7 +321,11 @@ public actor TranscoderConnection {
         let identifier = UUID()
         let newConnection = NSXPCConnection(serviceName: serviceName)
         let endHandler = ConnectionEndHandler(owner: self, identifier: identifier)
+        #if WALI_APP_STORE
+        newConnection.remoteObjectInterface = NSXPCInterface(with: WALIStoreTranscoderXPCProtocol.self)
+        #else
         newConnection.remoteObjectInterface = NSXPCInterface(with: WALITranscoderXPCProtocol.self)
+        #endif
         newConnection.interruptionHandler = { endHandler.notify() }
         newConnection.invalidationHandler = { endHandler.notify() }
         newConnection.resume()

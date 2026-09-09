@@ -20,6 +20,10 @@ public typealias EngineEffectHandler = @Sendable (
     EngineSnapshot
 ) async throws -> EngineEffectOutcome
 
+public typealias AgentPresentationHandler = @Sendable ([UUID], AgentSnapshot) async throws -> AgentSnapshot
+
+public typealias AgentShutdownHandler = @Sendable () async throws -> Void
+
 public typealias CatalogInstallHandler = @Sendable (
     AgentCatalogInstallRequest,
     UUID,
@@ -57,8 +61,28 @@ private actor TransactionGate {
     }
 }
 
+#if WALI_APP_STORE
+private final class ShutdownDrainResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    init(_ continuation: CheckedContinuation<Void, Error>) { self.continuation = continuation }
+    func finish(_ result: Result<Void, Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
+    }
+}
+#endif
+
 /// Maps the versioned wire protocol onto the transport-neutral engine.
 public actor AgentCommandRouter {
+    private let presentationHandler: AgentPresentationHandler?
+    private let shutdownHandler: AgentShutdownHandler?
+    private var shutdownTask: Task<Void, Error>?
+    private var isShuttingDown = false
+    private var activeCatalogTask: Task<CatalogInstallResult, Error>?
     private let engine: RuntimeEngine
     private let effectHandler: EngineEffectHandler
     private let catalogInstallHandler: CatalogInstallHandler?
@@ -75,9 +99,17 @@ public actor AgentCommandRouter {
         catalogInstallHandler: CatalogInstallHandler? = nil,
         catalogRevocationHandler: CatalogRevocationHandler? = nil,
         catalogTrustTransitionHandler: CatalogTrustTransitionHandler? = nil,
+        shutdownHandler: AgentShutdownHandler? = nil,
+        presentationHandler: AgentPresentationHandler? = nil,
         effectHandler: @escaping EngineEffectHandler
     ) {
-        engine = RuntimeEngine(restoring: snapshot)
+        var restored = snapshot
+        #if WALI_APP_STORE
+        restored.preferences.lockScreenContinuityEnabled = false
+        #endif
+        engine = RuntimeEngine(restoring: restored)
+        self.shutdownHandler = shutdownHandler
+        self.presentationHandler = presentationHandler
         self.effectHandler = effectHandler
         self.catalogInstallHandler = catalogInstallHandler
         self.catalogRevocationHandler = catalogRevocationHandler
@@ -86,14 +118,46 @@ public actor AgentCommandRouter {
 
     public func handle(_ request: AgentRequest) async -> AgentResponse {
         do {
+            #if WALI_APP_STORE
+            if isShuttingDown {
+                switch request.command {
+                case .quit, .snapshot, .handshake, .diagnosticsSnapshot: break
+                default: throw CancellationError()
+                }
+            }
+            #endif
             switch request.command {
             case .handshake, .snapshot, .diagnosticsSnapshot:
                 return response(for: request, snapshot: await engine.snapshot())
 
+            case let .preparePresentation(itemIDs):
+                let snapshot = await engine.snapshot()
+                #if WALI_APP_STORE
+                guard !itemIDs.isEmpty, itemIDs.count <= 32, Set(itemIDs).count == itemIDs.count,
+                      Set(itemIDs).isSubset(of: Set(snapshot.items.map(\.id))) else {
+                    throw AgentFailure(code: .invalidRequest, message: "The requested wallpaper is no longer available.")
+                }
+                guard let presentationHandler else { throw WALIAgentRuntimeError.storageUnavailable }
+                let projected = try await presentationHandler(itemIDs, snapshot.wireValue(notice: runtimeNotice))
+                guard !isShuttingDown else { throw CancellationError() }
+                let latest = await engine.snapshot()
+                guard latest.revision == snapshot.revision else {
+                    throw EngineError.staleRevision(expected: snapshot.revision.rawValue, actual: latest.revision.rawValue)
+                }
+                return AgentResponse(requestID: request.requestID, result: .snapshot(projected))
+                #else
+                return response(for: request, snapshot: snapshot)
+                #endif
+
             case let .importFiles(bookmarks):
                 let inputs = try bookmarks.map { bookmark in
+                    #if WALI_APP_STORE
+                    let accepted = try AgentSourceAuthorization.acceptTransient(bookmark)
+                    return (id: UUID(), fileName: accepted.url.lastPathComponent, bookmark: accepted.persistentBookmark)
+                    #else
                     let url = try Self.resolveBookmark(bookmark)
                     return (id: UUID(), fileName: url.lastPathComponent, bookmark: bookmark)
+                    #endif
                 }
                 return try await mutate(
                     request,
@@ -106,6 +170,9 @@ public actor AgentCommandRouter {
                 }
                 await transactionGate.acquire()
                 do {
+                    #if WALI_APP_STORE
+                    guard !isShuttingDown else { throw CancellationError() }
+                    #endif
                     if let prior = await engine.completedTransaction(
                         for: request.idempotencyKey
                     ) {
@@ -123,11 +190,17 @@ public actor AgentCommandRouter {
                             actual: snapshot.revision.rawValue
                         )
                     }
-                    let installed = try await catalogInstallHandler(
-                        install,
-                        request.idempotencyKey,
-                        snapshot.revision
-                    )
+                    #if WALI_APP_STORE
+                    let installTask = Task {
+                        try await catalogInstallHandler(install, request.idempotencyKey, snapshot.revision)
+                    }
+                    activeCatalogTask = installTask
+                    defer { activeCatalogTask = nil }
+                    let installed = try await installTask.value
+                    guard !isShuttingDown else { throw CancellationError() }
+                    #else
+                    let installed = try await catalogInstallHandler(install, request.idempotencyKey, snapshot.revision)
+                    #endif
                     let transaction = try await engine.perform(
                         .installCatalogItem(installed.item, completedImport: installed.completedImport),
                         idempotencyKey: request.idempotencyKey,
@@ -148,6 +221,9 @@ public actor AgentCommandRouter {
                 }
                 await transactionGate.acquire()
                 do {
+                    #if WALI_APP_STORE
+                    guard !isShuttingDown else { throw CancellationError() }
+                    #endif
                     try await catalogRevocationHandler(update)
                     let snapshot = await engine.snapshot()
                     await transactionGate.release()
@@ -163,6 +239,9 @@ public actor AgentCommandRouter {
                 }
                 await transactionGate.acquire()
                 do {
+                    #if WALI_APP_STORE
+                    guard !isShuttingDown else { throw CancellationError() }
+                    #endif
                     try await catalogTrustTransitionHandler(update)
                     let snapshot = await engine.snapshot()
                     await transactionGate.release()
@@ -204,6 +283,11 @@ public actor AgentCommandRouter {
                 return try await mutate(request, action: .restore(itemID: itemID))
 
             case let .setPreferences(preferences):
+                #if WALI_APP_STORE
+                guard !preferences.lockScreenContinuityEnabled else {
+                    throw AgentFailure(code: .invalidRequest, message: "This setting is unavailable in this distribution.")
+                }
+                #endif
                 return try await mutate(
                     request,
                     action: .setPreferences(preferences.engineValue)
@@ -234,6 +318,22 @@ public actor AgentCommandRouter {
                 return response(for: request, snapshot: await engine.snapshot())
 
             case .quit:
+                #if WALI_APP_STORE
+                isShuttingDown = true
+                activeCatalogTask?.cancel()
+                if shutdownTask == nil {
+                    guard let shutdownHandler else {
+                        throw AgentFailure(code: .internalFailure, message: "WALI could not stop its background service.")
+                    }
+                    shutdownTask = Task { try await shutdownHandler() }
+                }
+                do {
+                    try await shutdownTask?.value
+                } catch {
+                    shutdownTask = nil
+                    throw error
+                }
+                #else
                 await MainActor.run {
                     DistributedNotificationCenter.default().postNotificationName(
                         Notification.Name("com.wali.quitAll"),
@@ -244,6 +344,7 @@ public actor AgentCommandRouter {
                     )
                     NSApplication.shared.terminate(nil)
                 }
+                #endif
                 return response(for: request, snapshot: await engine.snapshot())
             }
         } catch {
@@ -261,7 +362,12 @@ public actor AgentCommandRouter {
     ) async throws -> EngineSnapshot {
         await transactionGate.acquire()
         do {
+            #if WALI_APP_STORE
+            guard !isShuttingDown else { throw CancellationError() }
+            #endif
+            try validateDistribution(action)
             _ = try await effectHandler(.preflight(action), await engine.snapshot())
+            try validateDistribution(action)
             let transaction = try await engine.perform(action, idempotencyKey: idempotencyKey)
             try await execute(transaction)
             await transactionGate.release()
@@ -278,9 +384,14 @@ public actor AgentCommandRouter {
     public func performInternal(_ actions: [EngineAction]) async throws -> EngineSnapshot {
         await transactionGate.acquire()
         do {
+            #if WALI_APP_STORE
+            guard !isShuttingDown else { throw CancellationError() }
+            #endif
             var snapshot = await engine.snapshot()
             for action in actions {
+                try validateDistribution(action)
                 _ = try await effectHandler(.preflight(action), snapshot)
+                try validateDistribution(action)
                 let transaction = try await engine.perform(action)
                 try await execute(transaction)
                 snapshot = transaction.snapshot
@@ -292,6 +403,28 @@ public actor AgentCommandRouter {
             throw error
         }
     }
+
+    #if WALI_APP_STORE
+    /// Worker drain unblocks catalog tasks; wait for their current engine
+    /// transaction before writing the final shutdown snapshot. A timeout leaves
+    /// Quit incomplete, while the queued waiter still releases the gate safely.
+    public func drainTransactionsForShutdown() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            let result = ShutdownDrainResult(continuation)
+            Task {
+                await transactionGate.acquire()
+                await transactionGate.release()
+                result.finish(.success(()))
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(5))
+                result.finish(.failure(AgentFailure(
+                    code: .internalFailure, message: "WALI is still finishing a pending operation. Try Quit again."
+                )))
+            }
+        }
+    }
+    #endif
 
     public func snapshot() async -> EngineSnapshot {
         await engine.snapshot()
@@ -316,7 +449,12 @@ public actor AgentCommandRouter {
     private func mutate(_ request: AgentRequest, action: EngineAction) async throws -> AgentResponse {
         await transactionGate.acquire()
         do {
+            #if WALI_APP_STORE
+            guard !isShuttingDown else { throw CancellationError() }
+            #endif
+            try validateDistribution(action)
             _ = try await effectHandler(.preflight(action), await engine.snapshot())
+            try validateDistribution(action)
             let transaction = try await engine.perform(
                 action,
                 idempotencyKey: request.idempotencyKey,
@@ -329,6 +467,15 @@ public actor AgentCommandRouter {
             await transactionGate.release()
             throw error
         }
+    }
+
+    private func validateDistribution(_ action: EngineAction) throws {
+        #if WALI_APP_STORE
+        guard !isShuttingDown else { throw CancellationError() }
+        if case let .setPreferences(preferences) = action, preferences.lockScreenContinuityEnabled {
+            throw AgentFailure(code: .invalidRequest, message: "This setting is unavailable in this distribution.")
+        }
+        #endif
     }
 
     private func execute(_ transaction: EngineTransaction) async throws {
@@ -360,14 +507,20 @@ public actor AgentCommandRouter {
     }
 
     private static var foregroundBundleIdentifier: String? {
+        #if WALI_APP_STORE
+        return Bundle.main.object(forInfoDictionaryKey: "WALIExpectedClientBundleIdentifier") as? String
+        #else
         let agentIdentifier = Bundle.main.bundleIdentifier ?? ""
         if agentIdentifier.contains(".debug.") { return "com.wali.debug.WALI" }
         if agentIdentifier.contains(".development.") { return "com.wali.development.WALI" }
         return "com.wali.WALI"
+        #endif
     }
 
     private static func failure(from error: Error) -> AgentFailure {
         switch error {
+        case let failure as AgentFailure:
+            failure
         case let EngineError.staleRevision(expected, actual):
             AgentFailure(
                 code: .staleRevision,

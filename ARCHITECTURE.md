@@ -1,6 +1,6 @@
 # WALI Architecture
 
-**Status:** Implemented pre-release repair candidate, 2026-09-04
+**Status:** Direct pre-release implementation; approved Store integration in progress, 2026-09-09
 **Scope:** Native macOS 15+ wallpaper engine and accepted marketplace foundation
 
 WALI is an engine-centered modular monolith hosted by `WALIAgent.app`. The
@@ -38,7 +38,7 @@ Arrows have one meaning each:
 - `==>` is versioned IPC; it is never a source import.
 - `-e->` is bundle containment only; the parent does not link the child.
 
-### Current compile and containment graph
+### Direct-distribution compile and containment graph
 
 ```text
 WALI.app --> WALIAppRuntime
@@ -47,13 +47,13 @@ WALICatalogRuntime --> WALICatalog
 WALIUI --> WALIModel
 
 WALIAgent.app --> WALIAgentRuntime
-WALIAgentRuntime --> {WALIUI, WALIModel, WALIWire, WALIEngine, WALICatalog}
+WALIAgentRuntime --> {WALIUI, WALIModel, WALIWire, WALIEngine, WALICatalog, WALILockScreenWire}
 
 WALITranscoder.xpc --> WALITranscoderRuntime
 WALITranscoderRuntime --> {WALIModel, WALIWire}
 
 WALILockScreenHelper.app --> WALILockScreenHelperRuntime
-WALILockScreenHelperRuntime --> WALIWire
+WALILockScreenHelperRuntime --> WALILockScreenWire
 
 WALIWire --> WALIModel
 WALIEngine --> WALIModel
@@ -95,6 +95,55 @@ entitlement and cannot authenticate the privileged helper. Development uses the
 its own app group; Release retains the `com.wali.*` production identities and
 requires configured distribution signing.
 
+### Approved Mac App Store distribution
+
+[ADR 0018](docs/adr/0018-sandboxed-mac-app-store-distribution.md) adds a separate
+Store graph using the same product implementation. `project.yml` generates the
+direct `WALI.xcodeproj`; `project-store.yml` generates `WALIStore.xcodeproj`.
+Both consume `project-common.yml` templates and have isolated build outputs.
+The Store graph includes exactly:
+
+```text
+WALI.app -e-> WALIAgent.app -e-> WALITranscoder.xpc
+WALI.app == authenticated, group-prefixed IPC ==> WALIAgent.app
+WALIAgent.app == bounded private XPC ==> WALITranscoder.xpc
+```
+
+Store never builds, links, embeds, registers, or calls the private Lock Screen
+helper, its adapters, or its `WALILockScreenWire` product. That small static wire
+product preserves the direct helper's existing selectors and encodings. All
+Store executables are sandboxed and retain Hardened Runtime. StoreDevelopment
+uses `com.wali.store.development.*`; AppStore uses `com.wali.store.*`. Their
+corresponding app groups and Mach services are disjoint from direct editions.
+The agent remains the sole authority for library state and media publication.
+
+The Store agent's authoritative store stays private to its sandbox container.
+Only the foreground and agent share `CatalogQuarantine` and bounded replaceable
+`Presentation` data through their approved app group. Shared bytes remain
+untrusted input or disposable presentation copies; the worker has no group or
+network entitlement and never gains authority over published media.
+
+Store source access uses bounded transient handoff, an agent-created persistent
+read-only bookmark, and fresh source/staging grants for each worker attempt.
+Do not substitute raw paths or assume one executable's persistent bookmark
+authorizes another. OS-enforced read-only scope, restart persistence, revocation,
+worker isolation, and balanced access lifetime require the signed tests in the
+[Store plan](docs/plans/2026-09-09-mac-app-store-distribution.md).
+
+Explicit background-playback consent precedes Store agent registration and XPC
+activation. Launch at login is a separate preference. Window closure preserves
+consented background work; Quit coordinates durable interruption, bounded worker
+and foreground acknowledgment, and process shutdown. Direct and Store editions
+have separate data and no automatic migration. Concurrent wallpaper rendering
+by both editions is not a supported mode.
+
+The helper-free structural build and deterministic policy tests have passed on
+an intermediate worktree artifact. Scoped-media/lifecycle integration, final
+integrated verification, signed feasibility, and submission remain pending.
+The marketplace stays in scope, with its independent privacy, moderation,
+deletions, production, and legal release gates. None of these checks establishes
+Apple review acceptance.
+
 ### Implemented topology and remaining environment proof
 
 The compile-time package split shown above is complete. The sole machine
@@ -132,6 +181,8 @@ anonymous endpoint is not an acceptable fallback.
   code.
 - `WALIWire` is reserved for explicit bounded/versioned envelopes, DTOs, and
   stable wire error codes. It does not expose engine or system-framework types.
+- `WALILockScreenWire` contains the direct-only fixed helper protocol and
+  bounded records, with no internal package dependencies. Store never links it.
 - `WALIEngine` owns transport-neutral use cases, command ordering,
   revisions, durable job semantics, and orchestration policy.
 - `WALIUI` contains reusable presentation only.

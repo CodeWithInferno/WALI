@@ -1,223 +1,94 @@
+---
 name: WALI
-
 options:
   bundleIdPrefix: com.wali
   createIntermediateGroups: true
   defaultConfig: Debug
   deploymentTarget:
-    macOS: "15.0"
+    macOS: '15.0'
   generateEmptyDirectories: true
-  minimumXcodeGenVersion: "2.44.1"
-  xcodeVersion: "26.2"
-
+  minimumXcodeGenVersion: 2.44.1
+  xcodeVersion: '26.2'
 configs:
   Debug: debug
   Development: debug
   Release: release
-
 configFiles:
   Debug: Config/Debug.xcconfig
   Development: Config/Development.xcconfig
   Release: Config/Release.xcconfig
-
 packages:
   WALICore:
     path: Packages/WALICore
   Supabase:
     url: https://github.com/supabase/supabase-swift.git
     exactVersion: 2.54.1
-
 settings:
   base:
-    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    MACOSX_DEPLOYMENT_TARGET: '15.0'
     SWIFT_STRICT_CONCURRENCY: complete
-    SWIFT_VERSION: "6.0"
-
+    SWIFT_VERSION: '6.0'
 targets:
   WALI:
-    type: application
-    platform: macOS
-    deploymentTarget: "15.0"
-    sources:
-      - path: Sources/WALIApp
-      - path: Resources/WALIAssets.xcassets
-      - path: Resources/ThirdPartyLicenses
-        type: folder
-        buildPhase: resources
-      - path: Config/LaunchAgents
-        buildPhase:
-          copyFiles:
-            destination: wrapper
-            subpath: Contents/Library/LaunchAgents
-    info:
-      path: Config/Generated/WALI-Info.plist
-      properties:
-        CFBundleDisplayName: WALI
-        CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        LSApplicationCategoryType: public.app-category.lifestyle
-        NSHighResolutionCapable: true
-        WALIControlServiceName: "$(WALI_AGENT_CONTROL_SERVICE_NAME)"
-        WALIAgentLaunchAgentPlistName: "$(WALI_AGENT_BUNDLE_IDENTIFIER).plist"
-        WALILockScreenHelperLaunchAgentPlistName: "$(WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER).plist"
-        WALIMarketplaceEnabled: "$(WALI_MARKETPLACE_ENABLED)"
-        WALIMarketplaceURL: "$(WALI_SUPABASE_URL)"
-        WALIMarketplacePublishableKey: "$(WALI_SUPABASE_PUBLISHABLE_KEY)"
-        WALIApprovedCDNHosts: "$(WALI_CATALOG_CDN_HOST)"
-        WALILegalBaseURL: "$(WALI_LEGAL_BASE_URL)"
-        WALICatalogSigningKeyID: "$(WALI_CATALOG_SIGNING_KEY_ID)"
-        WALICatalogSigningPublicKeyBase64: "$(WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64)"
-        WALICatalogRecoverySigningKeyID: "$(WALI_CATALOG_RECOVERY_SIGNING_KEY_ID)"
-        WALICatalogRecoverySigningPublicKeyBase64: "$(WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64)"
+    templates:
+    - CommonWALI
     settings:
-      base:
-        GENERATE_INFOPLIST_FILE: NO
-        PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_APP_BUNDLE_IDENTIFIER)"
-        PRODUCT_NAME: WALI
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        SKIP_INSTALL: NO
       configs:
         Development:
           CODE_SIGN_ENTITLEMENTS: Config/WALI.entitlements
         Release:
           CODE_SIGN_ENTITLEMENTS: Config/WALI.entitlements
           PROVISIONING_PROFILE_SPECIFIER: "$(WALI_APP_PROVISIONING_PROFILE)"
-    dependencies:
-      - target: WALIAppRuntime
-      - sdk: AVKit.framework
-      - target: WALIAgent
-        embed: true
-        link: false
-        codeSign: true
-        copy:
+    sources:
+    - path: Config/LaunchAgents
+      buildPhase:
+        copyFiles:
           destination: wrapper
-          subpath: Contents/Library/LoginItems
-      - target: WALILockScreenHelper
-        embed: true
-        link: false
-        codeSign: true
-        copy:
-          destination: wrapper
-          subpath: Contents/Library/LoginItems
-
-  WALIAppRuntime:
-    type: framework.static
-    platform: macOS
-    deploymentTarget: "15.0"
-    sources:
-      - path: Sources/WALIAppRuntime
-    settings:
-      base:
-        DEFINES_MODULE: YES
-        GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAppRuntime
-        PRODUCT_NAME: WALIAppRuntime
-        SKIP_INSTALL: YES
-    dependencies:
-      - package: WALICore
-        product: WALIModel
-      - package: WALICore
-        product: WALIWire
-      - target: WALICatalogRuntime
-      - target: WALIUI
-
-  WALICatalogRuntime:
-    type: framework.static
-    platform: macOS
-    deploymentTarget: "15.0"
-    sources:
-      - path: Sources/WALICatalogRuntime
-    settings:
-      base:
-        DEFINES_MODULE: YES
-        GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALICatalogRuntime
-        PRODUCT_NAME: WALICatalogRuntime
-        SKIP_INSTALL: YES
-    dependencies:
-      - package: WALICore
-        product: WALICatalog
-      - package: Supabase
-        product: Supabase
-
-  WALIAgent:
-    type: application
-    platform: macOS
-    deploymentTarget: "15.0"
-    sources:
-      - path: Sources/WALIAgent
-      - path: Resources/WALIAssets.xcassets
+          subpath: Contents/Library/LaunchAgents
     info:
-      path: Config/Generated/WALIAgent-Info.plist
       properties:
-        CFBundleDisplayName: WALI Agent
-        CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        LSUIElement: true
-        NSHighResolutionCapable: true
-        WALIControlServiceName: "$(WALI_AGENT_CONTROL_SERVICE_NAME)"
-        WALITranscoderServiceName: "$(WALI_TRANSCODER_BUNDLE_IDENTIFIER)"
-        WALILockScreenHelperServiceName: "$(WALI_LOCK_SCREEN_HELPER_SERVICE_NAME)"
-        WALILockScreenHelperBundleIdentifier: "$(WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER)"
-        WALIApprovedCDNHosts: "$(WALI_CATALOG_CDN_HOST)"
-        WALICatalogSigningKeyID: "$(WALI_CATALOG_SIGNING_KEY_ID)"
-        WALICatalogSigningPublicKeyBase64: "$(WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64)"
-        WALICatalogRecoverySigningKeyID: "$(WALI_CATALOG_RECOVERY_SIGNING_KEY_ID)"
-        WALICatalogRecoverySigningPublicKeyBase64: "$(WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64)"
+        WALILockScreenHelperLaunchAgentPlistName: "$(WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER).plist"
+    dependencies:
+    - target: WALILockScreenHelper
+      embed: true
+      link: false
+      codeSign: true
+      copy:
+        destination: wrapper
+        subpath: Contents/Library/LoginItems
+  WALIAppRuntime:
+    templates:
+    - CommonWALIAppRuntime
+  WALICatalogRuntime:
+    templates:
+    - CommonWALICatalogRuntime
+  WALIAgent:
+    templates:
+    - CommonWALIAgent
     settings:
-      base:
-        GENERATE_INFOPLIST_FILE: NO
-        PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
-        PRODUCT_NAME: WALIAgent
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        SKIP_INSTALL: YES
       configs:
         Development:
           CODE_SIGN_ENTITLEMENTS: Config/WALIAgent.entitlements
         Release:
           CODE_SIGN_ENTITLEMENTS: Config/WALIAgent.entitlements
           PROVISIONING_PROFILE_SPECIFIER: "$(WALI_AGENT_PROVISIONING_PROFILE)"
-    dependencies:
-      - target: WALIAgentRuntime
-      - target: WALITranscoder
-        embed: true
-        link: false
-        codeSign: true
-        copy:
-          destination: wrapper
-          subpath: Contents/XPCServices
-
+    info:
+      properties:
+        WALILockScreenHelperServiceName: "$(WALI_LOCK_SCREEN_HELPER_SERVICE_NAME)"
+        WALILockScreenHelperBundleIdentifier: "$(WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER)"
   WALIAgentRuntime:
-    type: framework.static
-    platform: macOS
-    deploymentTarget: "15.0"
-    sources:
-      - path: Sources/WALIAgentRuntime
-    settings:
-      base:
-        DEFINES_MODULE: YES
-        GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAgentRuntime
-        PRODUCT_NAME: WALIAgentRuntime
-        SKIP_INSTALL: YES
+    templates:
+    - CommonWALIAgentRuntime
     dependencies:
-      - package: WALICore
-        product: WALIModel
-      - package: WALICore
-        product: WALIWire
-      - package: WALICore
-        product: WALIEngine
-      - package: WALICore
-        product: WALICatalog
-      - target: WALIUI
-
+    - package: WALICore
+      product: WALILockScreenWire
   WALILockScreenHelper:
     type: application
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: '15.0'
     sources:
-      - path: Sources/WALILockScreenHelper
-      - path: Resources/WALIAssets.xcassets
+    - path: Sources/WALILockScreenHelper
+    - path: Resources/WALIAssets.xcassets
     info:
       path: Config/Generated/WALILockScreenHelper-Info.plist
       properties:
@@ -230,11 +101,11 @@ targets:
         WALIExpectedAgentBundleIdentifier: "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: NO
+        GENERATE_INFOPLIST_FILE: false
         PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER)"
         PRODUCT_NAME: WALILockScreenHelper
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        SKIP_INSTALL: YES
+        SKIP_INSTALL: true
       configs:
         Development:
           CODE_SIGN_ENTITLEMENTS: Config/WALILockScreenHelper.entitlements
@@ -242,194 +113,142 @@ targets:
           CODE_SIGN_ENTITLEMENTS: Config/WALILockScreenHelper.entitlements
           PROVISIONING_PROFILE_SPECIFIER: "$(WALI_HELPER_PROVISIONING_PROFILE)"
     dependencies:
-      - target: WALILockScreenHelperRuntime
-
+    - target: WALILockScreenHelperRuntime
   WALILockScreenHelperRuntime:
     type: framework.static
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: '15.0'
     sources:
-      - path: Sources/WALILockScreenHelperRuntime
-      - path: Sources/WALIAgentRuntime/LockScreen/AerialManifestEditor.swift
-      - path: Sources/WALIAgentRuntime/LockScreen/WallpaperStoreEditor.swift
+    - path: Sources/WALILockScreenHelperRuntime
+    - path: Sources/WALIAgentRuntime/LockScreen/AerialManifestEditor.swift
+    - path: Sources/WALIAgentRuntime/LockScreen/WallpaperStoreEditor.swift
     settings:
       base:
-        DEFINES_MODULE: YES
-        GENERATE_INFOPLIST_FILE: YES
+        DEFINES_MODULE: true
+        GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALILockScreenHelperRuntime
         PRODUCT_NAME: WALILockScreenHelperRuntime
-        SKIP_INSTALL: YES
+        SKIP_INSTALL: true
     dependencies:
-      - package: WALICore
-        product: WALIWire
-
+    - package: WALICore
+      product: WALILockScreenWire
   WALITranscoder:
-    type: xpc-service
-    platform: macOS
-    deploymentTarget: "15.0"
-    sources:
-      - path: Sources/WALITranscoder
-    info:
-      path: Config/Generated/WALITranscoder-Info.plist
-      properties:
-        CFBundleDisplayName: WALI Transcoder
-        CFBundleShortVersionString: "$(MARKETING_VERSION)"
-        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        WALIExpectedClientBundleIdentifier: "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
-        XPCService:
-          ServiceType: Application
-    settings:
-      base:
-        GENERATE_INFOPLIST_FILE: NO
-        PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_TRANSCODER_BUNDLE_IDENTIFIER)"
-        PRODUCT_NAME: WALITranscoder
-        SKIP_INSTALL: YES
-    dependencies:
-      - target: WALITranscoderRuntime
-
+    templates:
+    - CommonWALITranscoder
   WALITranscoderRuntime:
-    type: framework.static
-    platform: macOS
-    deploymentTarget: "15.0"
-    sources:
-      - path: Sources/WALITranscoderRuntime
-    settings:
-      base:
-        DEFINES_MODULE: YES
-        GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALITranscoderRuntime
-        PRODUCT_NAME: WALITranscoderRuntime
-        SKIP_INSTALL: YES
-    dependencies:
-      - package: WALICore
-        product: WALIModel
-      - package: WALICore
-        product: WALIWire
-
+    templates:
+    - CommonWALITranscoderRuntime
   WALIUI:
-    type: framework.static
-    platform: macOS
-    deploymentTarget: "15.0"
-    sources:
-      - path: Sources/WALIUI
-    settings:
-      base:
-        DEFINES_MODULE: YES
-        GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIUI
-        PRODUCT_NAME: WALIUI
-        SKIP_INSTALL: YES
-    dependencies:
-      - package: WALICore
-        product: WALIModel
-
+    templates:
+    - CommonWALIUI
   WALIAppTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: '15.0'
     sources:
-      - path: Tests/WALIAppTests
+    - path: Tests/WALIAppTests
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAppTests
     dependencies:
-      - target: WALIAppRuntime
-      - target: WALICatalogRuntime
-      - target: WALIUI
-      - package: WALICore
-        product: WALICatalog
-
+    - target: WALIAppRuntime
+    - package: WALICore
+      product: WALIModel
+    - package: WALICore
+      product: WALIWire
+    - target: WALICatalogRuntime
+    - target: WALIUI
+    - package: WALICore
+      product: WALICatalog
   WALICatalogRuntimeTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: '15.0'
     sources:
-      - path: Tests/WALICatalogRuntimeTests
+    - path: Tests/WALICatalogRuntimeTests
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALICatalogRuntimeTests
     dependencies:
-      - target: WALICatalogRuntime
-      - package: WALICore
-        product: WALICatalog
-
+    - target: WALICatalogRuntime
+    - package: WALICore
+      product: WALICatalog
   WALIAgentTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: '15.0'
     sources:
-      - path: Tests/WALIAgentTests
+    - path: Tests/WALIAgentTests
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAgentTests
     dependencies:
-      - target: WALIAgentRuntime
-      - package: WALICore
-        product: WALIWire
-      - package: WALICore
-        product: WALIEngine
-      - package: WALICore
-        product: WALIModel
-      - package: WALICore
-        product: WALICatalog
-
+    - target: WALIAgentRuntime
+    - package: WALICore
+      product: WALIWire
+    - package: WALICore
+      product: WALIEngine
+    - package: WALICore
+      product: WALIModel
+    - package: WALICore
+      product: WALICatalog
+    - package: WALICore
+      product: WALILockScreenWire
   WALITranscoderTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: '15.0'
     sources:
-      - path: Tests/WALITranscoderTests
+    - path: Tests/WALITranscoderTests
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALITranscoderTests
     dependencies:
-      - target: WALITranscoderRuntime
-
+    - target: WALITranscoderRuntime
+    - package: WALICore
+      product: WALIWire
   WALILockScreenHelperTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: '15.0'
     sources:
-      - path: Tests/WALILockScreenHelperTests
+    - path: Tests/WALILockScreenHelperTests
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALILockScreenHelperTests
     dependencies:
-      - target: WALILockScreenHelperRuntime
-      - package: WALICore
-        product: WALIWire
-
+    - target: WALILockScreenHelperRuntime
+    - package: WALICore
+      product: WALILockScreenWire
   WALIUITests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: '15.0'
     sources:
-      - path: Tests/WALIUITests
+    - path: Tests/WALIUITests
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIUITests
     dependencies:
-      - target: WALIUI
-
+    - target: WALIUI
   WALIEndToEndTests:
     type: bundle.ui-testing
     platform: macOS
-    deploymentTarget: "15.0"
+    deploymentTarget: '15.0'
     sources:
-      - path: UITests/WALIEndToEndTests
+    - path: UITests/WALIEndToEndTests
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: true
         PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIEndToEndTests
     dependencies:
-      - target: WALI
-
+    - target: WALI
 schemes:
   WALIAgentTests:
     build:
@@ -438,10 +257,9 @@ schemes:
     test:
       config: Debug
       targets:
-        - WALIAgentTests
+      - WALIAgentTests
     management:
       shared: true
-
   WALILockScreenHelperTests:
     build:
       targets:
@@ -449,10 +267,9 @@ schemes:
     test:
       config: Debug
       targets:
-        - WALILockScreenHelperTests
+      - WALILockScreenHelperTests
     management:
       shared: true
-
   WALI:
     build:
       targets:
@@ -463,13 +280,13 @@ schemes:
       config: Debug
       gatherCoverageData: true
       targets:
-        - WALIAppTests
-        - WALICatalogRuntimeTests
-        - WALIAgentTests
-        - WALITranscoderTests
-        - WALILockScreenHelperTests
-        - WALIUITests
-        - WALIEndToEndTests
+      - WALIAppTests
+      - WALICatalogRuntimeTests
+      - WALIAgentTests
+      - WALITranscoderTests
+      - WALILockScreenHelperTests
+      - WALIUITests
+      - WALIEndToEndTests
     profile:
       config: Release
     analyze:
@@ -478,3 +295,5 @@ schemes:
       config: Release
     management:
       shared: true
+include:
+- project-common.yml
