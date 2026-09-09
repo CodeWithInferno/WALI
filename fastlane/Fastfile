@@ -3,6 +3,7 @@ require "bundler"
 require "fileutils"
 require "json"
 require "shellwords"
+require "tempfile"
 
 opt_out_usage
 default_platform(:mac)
@@ -19,6 +20,15 @@ end
 def wali_verify(app, configuration)
   Bundler.with_unbundled_env do
     sh("env", "CONFIGURATION=#{configuration}", File.join(WALI_ROOT, "scripts", "verify-bundle.sh"), app)
+  end
+end
+
+def wali_write_checksum(path)
+  Tempfile.create([".wali-checksum-", ".sha256"], File.dirname(path)) do |file|
+    file.write("#{Digest::SHA256.file(path).hexdigest}  #{File.basename(path)}\n")
+    file.flush
+    file.fsync
+    File.rename(file.path, "#{path}.sha256")
   end
 end
 
@@ -85,7 +95,7 @@ platform :mac do
     UI.message("Native journeys and the final release review must pass before publication.")
   end
 
-  desc "Notarize and staple an existing candidate, then produce a verified distribution ZIP"
+  desc "Notarize and staple an existing candidate, then produce verified ZIP and branded DMG packages"
   lane :notarize_candidate do |options|
     wali_team
     profile = ENV.fetch("WALI_NOTARY_KEYCHAIN_PROFILE", "")
@@ -111,8 +121,38 @@ platform :mac do
     build = sh("/usr/libexec/PlistBuddy", "-c", "Print :CFBundleVersion", File.join(app, "Contents", "Info.plist"), log: false).strip
     output = File.join(WALI_RELEASE, "WALI-#{version}-#{build}-macOS.zip")
     sh("/usr/bin/ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, output)
-    File.write("#{output}.sha256", "#{Digest::SHA256.file(output).hexdigest}  #{File.basename(output)}\n")
+    wali_write_checksum(output)
     UI.success("Notarized distribution package: #{output}")
+
+    dmg_name = "WALI-#{version}-#{build}-macOS.dmg"
+    dmg = File.join(WALI_RELEASE, "candidate", dmg_name)
+    Bundler.with_unbundled_env do
+      sh("env", "CONFIGURATION=Release", "DMG_KIND=distribution",
+         File.join(WALI_ROOT, "scripts", "package-dmg.sh"), app, dmg)
+    end
+    FileUtils.rm_f("#{dmg}.sha256") # Signing and stapling will change these bytes.
+    # The app is already stapled. Package it unchanged, then notarize the outer
+    # container separately so the drag-to-Applications download has its own ticket.
+    identity = ENV.fetch("WALI_CODE_SIGN_IDENTITY", "Developer ID Application")
+    UI.user_error!("Use a Developer ID Application certificate.") unless identity.start_with?("Developer ID Application")
+    sh("/usr/bin/codesign", "--sign", identity, "--timestamp", dmg)
+    sh("/usr/bin/codesign", "--verify", "--strict", dmg)
+    dmg_response = sh(
+      "/usr/bin/xcrun", "notarytool", "submit", dmg,
+      "--keychain-profile", profile, "--wait", "--timeout", "30m", "--output-format", "json",
+      log: false
+    )
+    dmg_receipt = JSON.parse(dmg_response)
+    File.write(File.join(WALI_RELEASE, "dmg-notarization.json"), JSON.pretty_generate(dmg_receipt))
+    UI.user_error!("DMG notarization was not accepted; inspect .build/release/dmg-notarization.json.") unless dmg_receipt["status"] == "Accepted"
+    sh("/usr/bin/xcrun", "stapler", "staple", dmg)
+    sh("/usr/bin/xcrun", "stapler", "validate", dmg)
+    sh("/usr/sbin/spctl", "--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", dmg)
+    final_dmg = File.join(WALI_RELEASE, dmg_name)
+    File.rename(dmg, final_dmg)
+    dmg = final_dmg
+    wali_write_checksum(dmg)
+    UI.success("Notarized branded disk image: #{dmg}")
   end
 
   desc "Build and notarize a release package without publishing it"

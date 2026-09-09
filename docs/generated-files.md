@@ -11,6 +11,13 @@ Edit and review:
 - Swift sources, tests, scripts, fixtures, and public documentation; and
 - package manifests under `Packages/`.
 
+Brand artwork is a deliberate checked-in export exception. The supplied PNGs
+under `Resources/Branding/Sources/` and `scripts/generate-brand-assets.py`
+produce the reviewed SVG/PNG/ICNS exports and `Resources/WALIAssets.xcassets`.
+Keep those exports in source control so building the app requires only Xcode,
+not illustration tools. Regeneration instructions and source fidelity checks
+are in [the branding guide](design/2026-09-09-wali-branding.md).
+
 Do not edit a generated project or plist to make a persistent change.
 
 ## Generated and ignored

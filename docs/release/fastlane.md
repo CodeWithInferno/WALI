@@ -44,9 +44,48 @@ DEVELOPMENT_TEAM=YOUR_TEAM_ID WALI_NOTARY_KEYCHAIN_PROFILE=YOUR_PROFILE bundle e
 
 The lane submits a ZIP, requires an Accepted response, staples and validates the
 app ticket, checks Gatekeeper, then creates a fresh distribution ZIP and SHA-256
-file. The submission receipt stays in `.build/release/notarization.json`.
+file. It also packages the stapled app unchanged into a branded drag-to-Applications
+DMG, signs that container with Developer ID, submits it for notarization, staples
+and validates its ticket, checks Gatekeeper, and writes the final DMG SHA-256.
+The app and DMG receipts stay in `.build/release/notarization.json` and
+`.build/release/dmg-notarization.json`. The two final formats are
+`WALI-VERSION-BUILD-macOS.zip` and `WALI-VERSION-BUILD-macOS.dmg`.
 `fastlane mac release` runs archive and notarization together. No lane publishes
 to GitHub or changes the production backend.
+
+## Local branded disk image
+
+After building the matching configuration, package the existing app:
+
+```sh
+make build
+make package-dmg
+# Or select an existing build and output path explicitly:
+CONFIGURATION=Debug ./scripts/package-dmg.sh /path/to/WALI.app /path/to/WALI-local-Debug.dmg
+```
+
+The default output is `.build/packages/WALI-VERSION-BUILD-local-Debug.dmg`
+with a SHA-256 sidecar. Its volume is labeled `WALI Local Debug`. The Debug app
+retains its existing ad-hoc seals; this local disk image is not Developer ID
+signed or notarized and is not a distribution release. Development builds can
+be packaged with `CONFIGURATION=Development`. Packaging does not build, launch,
+install, or modify the source app. `APP_PATH` and `DMG_OUTPUT` can also be passed
+to `make package-dmg` when selecting both paths.
+
+The shared packager uses macOS `hdiutil`, `ditto`, `sips`, `tiffutil`, `SetFile`,
+the Xcode Swift interpreter, and Python 3's standard library. Set `PYTHON_BIN`
+to select a Python interpreter. It installs no dependencies, runs no Finder
+scripts, and performs no network requests. Temporary images mount without
+opening Finder and are detached on success or failure.
+
+The image contains the app and `/Applications` link at `(180, 235)` and
+`(480, 235)` within a 660-by-440 Finder window. `Resources/Branding` supplies
+`WALI-Volume.icns`, `dmg-background.png`, and `dmg-background@2x.png`; the
+background is combined into one Retina TIFF. The packager checks real bundle
+branding, writes a bounded `.DS_Store` layout with a native background alias,
+and verifies it again after compression and read-only remount. It also verifies
+the packaged bundle and compares its file bytes with the original. Finder's
+visual rendering remains a separate manual/CUA review.
 
 Current machine evidence (2026-09-04): fastlane 2.237.0 runs successfully;
 Development signing and bundle verification pass. Developer ID Application

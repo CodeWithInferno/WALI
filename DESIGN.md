@@ -22,6 +22,20 @@ Native application behavior follows Apple's macOS Human Interface Guidelines and
 - **Honest:** Performance and storage costs are visible in plain language.
 - **Personal:** The active wallpaper supplies atmosphere; WALI does not impose decorative gradients over it.
 
+## App identity
+
+WALI's identity uses the supplied folded W silhouette. Production artwork and
+export instructions live in [the branding guide](docs/design/2026-09-09-wali-branding.md).
+The Dock, Finder, standard About panel, and installer use a text-free white W
+on a cobalt app tile. The menu bar uses a monochrome template W, letting macOS
+provide contrast in every appearance; playback state remains in the accessible
+label and status panel. Small identity marks may appear in the status panel and
+Settings. Keep the shared window toolbar and its functional symbols unchanged.
+
+Brand artwork may retain its fixed cobalt color. Native controls continue to
+respect the person's macOS accent choice. Lockups with the WALI wordmark belong
+in larger brand and installer artwork, never inside small app or menu-bar icons.
+
 ## Signature element — Ambient Edge
 
 The selected wallpaper may extend beneath the sidebar and toolbar so the system material picks up its color. On macOS 26+, the sidebar overlays the detail column (`automaticallyAdjustsSafeAreaInsets`) and the Discover hero **draws the actual artwork under that glass**. Do not use `backgroundExtensionEffect()` for Discover: it mirrors and blurs a copy, which reads as a reflection instead of Liquid Glass. Empty states, Browse/Library grids, settings, and poster tiles stay on the semantic surface.

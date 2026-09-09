@@ -40,6 +40,7 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: Sources/WALIApp
+      - path: Resources/WALIAssets.xcassets
       - path: Config/LaunchAgents
         buildPhase:
           copyFiles:
@@ -70,6 +71,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_APP_BUNDLE_IDENTIFIER)"
         PRODUCT_NAME: WALI
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SKIP_INSTALL: NO
       configs:
         Development:
@@ -141,6 +143,7 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: Sources/WALIAgent
+      - path: Resources/WALIAssets.xcassets
     info:
       path: Config/Generated/WALIAgent-Info.plist
       properties:
@@ -163,6 +166,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
         PRODUCT_NAME: WALIAgent
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SKIP_INSTALL: YES
       configs:
         Development:
@@ -210,6 +214,7 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: Sources/WALILockScreenHelper
+      - path: Resources/WALIAssets.xcassets
     info:
       path: Config/Generated/WALILockScreenHelper-Info.plist
       properties:
@@ -225,6 +230,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER)"
         PRODUCT_NAME: WALILockScreenHelper
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SKIP_INSTALL: YES
       configs:
         Development:
