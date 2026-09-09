@@ -19,6 +19,11 @@ let package = Package(
             targets: ["WALIWire"]
         ),
         .library(
+            name: "WALILockScreenWire",
+            type: .static,
+            targets: ["WALILockScreenWire"]
+        ),
+        .library(
             name: "WALIEngine",
             type: .static,
             targets: ["WALIEngine"]
@@ -38,6 +43,10 @@ let package = Package(
             name: "WALIWire",
             dependencies: ["WALIModel"],
             path: "Sources/WALIWire"
+        ),
+        .target(
+            name: "WALILockScreenWire",
+            path: "Sources/WALILockScreenWire"
         ),
         .target(
             name: "WALIEngine",
@@ -61,6 +70,11 @@ let package = Package(
             name: "WALIWireTests",
             dependencies: ["WALIWire"],
             path: "Tests/WALIWireTests"
+        ),
+        .testTarget(
+            name: "WALILockScreenWireTests",
+            dependencies: ["WALILockScreenWire"],
+            path: "Tests/WALILockScreenWireTests"
         ),
         .testTarget(
             name: "WALIEngineTests",

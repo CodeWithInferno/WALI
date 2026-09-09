@@ -1,0 +1,14 @@
+#include "Base.xcconfig"
+#include? "Marketplace.StoreDevelopment.local.xcconfig"
+
+WALI_APP_BUNDLE_IDENTIFIER = com.wali.store.development.WALI
+WALI_AGENT_BUNDLE_IDENTIFIER = com.wali.store.development.WALIAgent
+WALI_TRANSCODER_BUNDLE_IDENTIFIER = com.wali.store.development.WALITranscoder
+WALI_APP_GROUP_IDENTIFIER = group.com.wali.store.development.shared
+WALI_AGENT_CONTROL_SERVICE_NAME = group.com.wali.store.development.shared.agent-control
+ENABLE_HARDENED_RUNTIME = YES
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = Apple Development
+ENABLE_TESTABILITY = YES
+ONLY_ACTIVE_ARCH = YES
+SWIFT_OPTIMIZATION_LEVEL = -Onone

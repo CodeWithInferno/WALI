@@ -873,6 +873,12 @@ RUBY
     # Overlay the current governed marketplace baseline. The synthetic sources
     # remain intentionally tiny, but their direct imports mirror the registered
     # package/build graph so legacy mutation cases exercise one clean baseline.
+    mkdir -p "${root}/Packages/WALICore/Sources/WALILockScreenWire" "${root}/Packages/WALICore/Tests/WALILockScreenWireTests"
+    printf 'import Foundation\npublic enum HelperWireMarker {}\n' > "${root}/Packages/WALICore/Sources/WALILockScreenWire/Wire.swift"
+    printf 'import XCTest\n@testable import WALILockScreenWire\n' > "${root}/Packages/WALICore/Tests/WALILockScreenWireTests/WireTests.swift"
+    printf 'import Foundation\nimport WALILockScreenWire\n' > "${root}/Sources/WALILockScreenHelperRuntime/HelperRuntime.swift"
+    printf 'import XCTest\n@testable import WALILockScreenHelperRuntime\nimport WALILockScreenWire\n' > "${root}/Tests/WALILockScreenHelperTests/HelperTests.swift"
+    printf 'import WALILockScreenWire\n' >> "${root}/Sources/WALIAgentRuntime/Agent.swift"
     mkdir -p \
         "${root}/Packages/WALICore/Sources/WALICatalog" \
         "${root}/Packages/WALICore/Tests/WALICatalogTests" \
@@ -894,19 +900,26 @@ RUBY
         "${root}/Sources/WALICatalogRuntime/CatalogRuntime.swift"
     printf 'import SwiftUI\nimport WALIModel\nimport WALIWire\nimport WALIUI\nimport WALICatalogRuntime\n' > \
         "${root}/Sources/WALIAppRuntime/App.swift"
-    printf 'import XCTest\n@testable import WALIAppRuntime\n@testable import WALICatalogRuntime\nimport WALIUI\nimport WALICatalog\n' > \
+    printf 'import XCTest\nimport WALIModel\nimport WALIWire\n@testable import WALIAppRuntime\n@testable import WALICatalogRuntime\nimport WALIUI\nimport WALICatalog\n' > \
         "${root}/Tests/WALIAppTests/WALIAppTests.swift"
     printf 'import XCTest\n@testable import WALICatalogRuntime\nimport WALICatalog\n' > \
         "${root}/Tests/WALICatalogRuntimeTests/CatalogRuntimeTests.swift"
-    printf 'import XCTest\n@testable import WALIAgentRuntime\nimport WALIWire\nimport WALIEngine\nimport WALIModel\nimport WALICatalog\n' > \
+    printf 'import XCTest\n@testable import WALIAgentRuntime\nimport WALIWire\nimport WALILockScreenWire\nimport WALIEngine\nimport WALIModel\nimport WALICatalog\n' > \
         "${root}/Tests/WALIAgentTests/AgentTests.swift"
-    printf 'import XCTest\n@testable import WALITranscoderRuntime\n' > \
+    printf 'import XCTest\nimport WALIWire\n@testable import WALITranscoderRuntime\n' > \
         "${root}/Tests/WALITranscoderTests/TranscoderTests.swift"
     printf 'import XCTest\n@testable import WALIUI\n' > \
         "${root}/Tests/WALIUITests/UITests.swift"
     printf 'import XCTest\n' > "${root}/UITests/WALIEndToEndTests/EndToEndTests.swift"
 
-    cp "${REPOSITORY_ROOT}/project.yml" "${root}/project.yml"
+    "${RUBY_BIN}" -r"${REPOSITORY_ROOT}/scripts/check-store-graph" -rpsych -e \
+        'File.write(ARGV[1], Psych.dump(WALIProjectSpec.load(ARGV[0], "project.yml").reject { |key, _| %w[include targetTemplates].include?(key) }))' \
+        "${REPOSITORY_ROOT}" "${root}/project.yml"
+    cp "${REPOSITORY_ROOT}/project-common.yml" "${REPOSITORY_ROOT}/project-store.yml" "${root}/"
+    mkdir -p "${root}/Config"
+    cp "${REPOSITORY_ROOT}/Config/StoreDevelopment.xcconfig" "${REPOSITORY_ROOT}/Config/AppStore.xcconfig" \
+        "${REPOSITORY_ROOT}/Config/Store-"*.entitlements "${root}/Config/"
+    cp -R "${REPOSITORY_ROOT}/Config/StoreLaunchAgents" "${root}/Config/StoreLaunchAgents"
     cp "${REPOSITORY_ROOT}/Packages/WALICore/Package.swift" \
         "${root}/Packages/WALICore/Package.swift"
     cp "${REPOSITORY_ROOT}/docs/architecture/modules.yml" \
@@ -989,7 +1002,14 @@ new_marketplace_fixture() {
         "${root}/docs/security" \
         "${root}/Fixtures/Catalog/invalid" \
         "${root}/Packages/WALICore"
-    cp "${REPOSITORY_ROOT}/project.yml" "${root}/project.yml"
+    "${RUBY_BIN}" -r"${REPOSITORY_ROOT}/scripts/check-store-graph" -rpsych -e \
+        'File.write(ARGV[1], Psych.dump(WALIProjectSpec.load(ARGV[0], "project.yml").reject { |key, _| %w[include targetTemplates].include?(key) }))' \
+        "${REPOSITORY_ROOT}" "${root}/project.yml"
+    cp "${REPOSITORY_ROOT}/project-common.yml" "${REPOSITORY_ROOT}/project-store.yml" "${root}/"
+    mkdir -p "${root}/Config"
+    cp "${REPOSITORY_ROOT}/Config/StoreDevelopment.xcconfig" "${REPOSITORY_ROOT}/Config/AppStore.xcconfig" \
+        "${REPOSITORY_ROOT}/Config/Store-"*.entitlements "${root}/Config/"
+    cp -R "${REPOSITORY_ROOT}/Config/StoreLaunchAgents" "${root}/Config/StoreLaunchAgents"
     cp "${REPOSITORY_ROOT}/Packages/WALICore/Package.swift" \
         "${root}/Packages/WALICore/Package.swift"
     cp "${REPOSITORY_ROOT}/docs/architecture/modules.yml" \
@@ -1437,11 +1457,11 @@ expect_failure \
 extra_test_package_dependency_fixture="$(new_fixture extra-test-package-dependency)"
 mutate_yaml "${extra_test_package_dependency_fixture}/project.yml" '
     data["targets"]["WALIAppTests"]["dependencies"] << {
-      "package" => "WALICore", "product" => "WALIModel"
+      "package" => "WALICore", "product" => "WALIEngine"
     }
 '
 mutate_yaml "${extra_test_package_dependency_fixture}/docs/architecture/modules.yml" \
-    'data["xcode_test_targets"]["WALIAppTests"]["package_dependencies"] = ["WALIModel"]'
+    'data["xcode_test_targets"]["WALIAppTests"]["package_dependencies"] << "WALIEngine"'
 expect_failure \
     "test dependency without direct import" \
     "${extra_test_package_dependency_fixture}" \

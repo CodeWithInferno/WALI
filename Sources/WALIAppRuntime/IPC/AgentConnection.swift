@@ -82,7 +82,11 @@ private final class AgentConnectionEndHandler: @unchecked Sendable {
 
 /// Reconnecting foreground transport for the local agent's single XPC method.
 @MainActor
-public final class AgentConnection {
+public final class AgentConnection: AgentGateway {
+    #if WALI_APP_STORE
+    public var onAgentWillTerminate: (@MainActor @Sendable () -> Void)?
+    public var onConnectionEnded: (@MainActor @Sendable () -> Void)?
+    #endif
     private let serviceName: String
     private let responseTimeout: Duration
     private let catalogInstallResponseTimeout: Duration
@@ -127,6 +131,8 @@ public final class AgentConnection {
         }
     }
 
+    public var isConnected: Bool { connection != nil }
+
     public func invalidate() {
         connection?.invalidate()
         connection = nil
@@ -134,6 +140,9 @@ public final class AgentConnection {
     }
 
     private func timeout(for command: AgentCommand) -> Duration {
+        #if WALI_APP_STORE
+        if case .quit = command { return .seconds(40) }
+        #endif
         if case .installCatalogRelease = command {
             return catalogInstallResponseTimeout
         }
@@ -141,7 +150,7 @@ public final class AgentConnection {
     }
 
     private func perform(_ request: Data, timeout: Duration) async throws -> Data {
-        let connection = activeConnection()
+        let connection = try activeConnection()
         return try await withCheckedThrowingContinuation { continuation in
             let oneShot = AgentOneShotContinuation<Data>(continuation)
             Task {
@@ -158,11 +167,24 @@ public final class AgentConnection {
         }
     }
 
-    private func activeConnection() -> NSXPCConnection {
+    private func activeConnection() throws -> NSXPCConnection {
         if let connection { return connection }
 
         let identifier = UUID()
+        #if WALI_APP_STORE
+        let requirement = try StoreAgentPeerRequirement.configured()
+        guard serviceName.hasPrefix("group.com.wali.store."), serviceName.hasSuffix(".shared.agent-control") else {
+            throw AgentConnectionError.invalidProxy
+        }
+        #endif
         let newConnection = NSXPCConnection(machServiceName: serviceName)
+        #if WALI_APP_STORE
+        newConnection.setCodeSigningRequirement(requirement)
+        newConnection.exportedInterface = NSXPCInterface(with: WALIAppLifecycleXPCProtocol.self)
+        newConnection.exportedObject = StoreAppLifecycleEndpoint { [weak self] in
+            self?.onAgentWillTerminate?()
+        }
+        #endif
         let endHandler = AgentConnectionEndHandler(owner: self, identifier: identifier)
         newConnection.remoteObjectInterface = NSXPCInterface(with: WALIAgentXPCProtocol.self)
         newConnection.interruptionHandler = { endHandler.notify() }
@@ -177,6 +199,9 @@ public final class AgentConnection {
         guard connectionID == identifier else { return }
         connection = nil
         connectionID = nil
+        #if WALI_APP_STORE
+        onConnectionEnded?()
+        #endif
     }
 }
 
@@ -186,6 +211,10 @@ public enum AgentServiceName {
            !configured.isEmpty {
             return configured
         }
+        #if WALI_APP_STORE
+        return ""
+        #else
         return "com.wali.WALIAgent.control"
+        #endif
     }
 }

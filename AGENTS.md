@@ -61,9 +61,41 @@ access to those identifiers. Release retains `com.wali.*` and
 `group.com.wali.shared` and requires configured distribution signing. The credential-free test path compiles the UI-test
 target but does not launch its runner.
 
+## Store distribution work
+
+Accepted [ADR 0018](docs/adr/0018-sandboxed-mac-app-store-distribution.md) and
+[the Store delivery plan](docs/plans/2026-09-09-mac-app-store-distribution.md)
+govern the separate sandboxed product. `project.yml` remains the direct entry;
+`project-store.yml` generates `WALIStore.xcodeproj` from shared
+`project-common.yml` templates. Do not change the direct identifiers, library,
+helper behavior, or Developer ID workflow to make Store tests pass.
+
+```bash
+make store-generate
+bundle exec fastlane mac store_feasibility structural_only:true
+bundle exec fastlane mac store_test
+```
+
+Structural output is credential-free and does not prove sandbox permissions,
+service registration, or signed runtime behavior. The signed feasibility and
+App Store archive lanes use distinct profiles and output directories; see
+`docs/release/fastlane.md`. Do not send Store packages through Developer ID
+notarization or call an archive an upload/review result.
+
+Store contains only foreground app, agent, and private transcoder. All are
+sandboxed; `WALILockScreenWire`, private Lock Screen code, helper resources, and
+FDA settings must be absent by construction. Agent authority remains in its
+private container. App-group quarantine/presentation bytes are untrusted or
+rebuildable, and the worker has no group/network access. Preserve scoped grants,
+explicit background consent, complete bounded Quit, and separate data identities.
+No automatic migration or simultaneous playback across editions is promised.
+
+Marketplace privacy/schema changes require their own applicable approval;
+Store sandbox approval does not authorize bypassing marketplace release gates.
+
 ## Runtime topology
 
-### Current implementation
+### Current direct-distribution implementation
 
 ```text
 WALI.app ──► app runtime/UI, catalog adapter ──► bounded AgentGateway
@@ -99,6 +131,7 @@ must stop at package-product boundaries.
 
 - `WALIModel`: immutable values, IDs, policies, and reducer state.
 - `WALIWire`: explicit bounded/versioned DTOs; it may depend on `WALIModel`.
+- `WALILockScreenWire`: direct-only helper records/protocol; no Store dependency.
 - `WALIEngine`: transport-neutral use cases, jobs, revisions, and orchestration;
   it depends on `WALIModel`, not UI/media/SQLite/XPC.
 - `WALIUI`: reusable presentation depending on model values.

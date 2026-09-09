@@ -83,11 +83,15 @@ public actor CatalogInstallCoordinator {
             expectedByteCount: defaultArtifact.byteCount
         )
         do {
+            #if WALI_APP_STORE
+            let sourceBookmark = try AgentSourceAuthorization.createPersistent(forOwnedSource: ownedSourceURL)
+            #else
             let sourceBookmark = try ownedSourceURL.bookmarkData(
                 options: [.minimalBookmark],
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
+            #endif
             let startedAt = Date()
             let context = try await runtimeStore.beginImport(
                 sourceURL: ownedSourceURL,
@@ -159,6 +163,9 @@ public actor CatalogInstallCoordinator {
                     generation: context.generation,
                     outcome: .failed
                 )
+                #if WALI_APP_STORE
+                try? await runtimeStore.failCatalogImportForFreshRetry(jobID: context.jobID)
+                #endif
                 throw error
             }
         } catch {
@@ -181,6 +188,9 @@ public actor CatalogInstallCoordinator {
         bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.wali.WALIAgent",
         fileManager: FileManager = .default
     ) throws -> URL {
+        #if WALI_APP_STORE
+        return try StoreSharedDirectories.quarantine(fileManager: fileManager)
+        #else
         let base = try fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -192,6 +202,7 @@ public actor CatalogInstallCoordinator {
         return base
             .appendingPathComponent(namespace, isDirectory: true)
             .appendingPathComponent("CatalogQuarantine", isDirectory: true)
+        #endif
     }
 }
 

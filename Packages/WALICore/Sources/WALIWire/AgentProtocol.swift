@@ -35,6 +35,7 @@ public enum AgentCommand: Codable, Sendable, Hashable {
     case handshake(clientVersion: String)
     case snapshot
     case diagnosticsSnapshot
+    case preparePresentation(itemIDs: [UUID])
     case importFiles(bookmarks: [Data])
     case installCatalogRelease(AgentCatalogInstallRequest)
     case updateCatalogTrustTransition(AgentCatalogTrustTransitionUpdate)

@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-import WALIWire
+import WALILockScreenWire
 
 final class FixedWallpaperStore: LockScreenStoreOperating, @unchecked Sendable {
     struct Roots: Sendable {

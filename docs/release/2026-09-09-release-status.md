@@ -10,7 +10,7 @@ It must not be used as a claim that a signed binary or Store submission exists.
 - Remediation pins official Fastlane source with Rubyzip 3.6.0, accounts for all seven resolved Swift packages, and distributes exact pinned license notices. The expanded inventory contains 58 entries, including the Fastlane Git revision.
 - Release tooling now binds source, app and package digests, verifies final CI and tag targets, and verifies GitHub upload digests before publication. Credential-free regression fixtures and Fastlane loading passed. Actual signing, notary and publication execution remain pending.
 - The remediation passed a fresh `make verify`: 161 architecture fixtures, 23 bundle fixtures, 18 signature fixtures, eight dependency regressions, four DMG metadata tests, release provenance regressions, package/native tests and coverage, fresh Debug build, bundled notices and final branding verification. Follow-up receipt/remote-upload tamper regressions also passed.
-- Final commit, hosted checks, and merge: pending completion of the release-preparation patch.
+- Final PR head `c7e7b37d88272fc152427a92ba69f6bf0a9f9a6e` passed source, contracts, Swift, backend, and media checks. PR 25 merged at 22:24 UTC as `998bfc09b795ee2c7bfa9d269cf32b2ad445afd8`. Primary main was fast-forwarded without deleting untracked output. The merge-commit checks are a separate publication requirement. The first main run failed one carousel test because its 30 ms sleep expired while the model was still loading; contracts, backend, media and security passed. The correction reproduced that failure with a 75 ms scripted response, then passed 15 focused repetitions and all 20 coordinator tests. [PR 26](https://github.com/CodeWithInferno/WALI/pull/26) passed all five applicable checks and the owner merged it as `e390281cd1661945a8118713ac929b246ef0cb59` at 22:57 UTC. Primary main was fast-forwarded; the new merge commit passed Marketplace CI and the security scan.
 
 ## Production deployment
 
@@ -40,15 +40,18 @@ No customer content or identity rows were queried for this verification.
 Still pending: hosted Apple provider/audience configuration (read attempt
 returned HTTP 403), production trust anchors and signed revocations, isolated
 worker deployment, operator roles, effective legal documents, backup/restore
-evidence and the full native production journey. Public creator activation is
-not complete. No staging key or synthetic account was promoted to production.
+evidence and the full native production journey. Google Cloud authentication was restored for the WALI project; the existing
+worker is explicitly staging and has not been repurposed. Public creator
+activation is not complete. No staging key or synthetic account was promoted to production.
 
 ## Apple distribution
 
 Developer ID Application is installed for the selected owner team. The actual
 Fastlane archive attempt failed because production provisioning profiles were
 missing for the foreground app, agent and Lock Screen helper. The Apple account
-has been identified; secure user authentication is pending. Passwords, two-factor
+has been identified; secure user authentication is pending. A subsequent Fastlane
+automatic-provisioning probe reported `No Accounts` and a wildcard profile
+without Sign in with Apple; it did not produce an archive. Passwords, two-factor
 codes, Apple sessions and private signing material must remain outside source
 and release assets.
 
@@ -71,3 +74,37 @@ The [initial review](app-store-review-2026-09-09.md),
 [marketplace readiness plan](../plans/marketplace-store-readiness.md) preserve the
 remaining findings. Actual legal owner/contact/public website and the production
 account/deletion/moderation paths are still required before submission.
+
+The isolated Store implementation now has a helper-free structural build,
+explicit Store graphs/settings, template-only menu identity, unchanged direct
+helper-wire compatibility, and deterministic signature/profile/package gates.
+Final integrated Store hostless tests passed 145 cases. StoreDevelopment and
+optimized AppStore structural artifacts also passed; every AppStore executable
+contains arm64 and x86_64 slices with minimum macOS 15.0. The full direct
+`make verify` passed 161 architecture fixtures, 89 package tests and 176 native
+tests, with coverage, bundle, license and branding checks. Both Store release
+configurations exclude LLVM coverage instrumentation, and the affected Debug
+build/bundle were rechecked after that build-setting change. Persistent CI now
+runs both Store structural builds and hostless Store suites; release lanes
+require that Store job alongside the five existing checks. None of these results
+establishes a signed sandbox journey or Store submission. The new Fastlane
+upload/submission path has passed 51 credential-free refusal fixtures. Actual credentialed execution
+remains separate evidence. Creator
+blocking remains the proposed [ADR 0019](../adr/0019-private-creator-blocking.md).
+
+
+## Public release, source cleanup and media-quality follow-up
+
+The owner additionally requested public downloads, an open-source cleanup and
+an actual app demonstration. Credential/personalization and history review is
+in progress before changing repository visibility. Neither a public repository
+nor a public downloadable release has been established by that request alone.
+
+The requested batch contains 24 original MP4s totaling 1,098,137,015 bytes. A
+local baseline records SHA-256, dimensions, frame rate, codec, color metadata,
+audio and duration without modifying the originals. Public redistribution
+license/attribution remains unresolved. Production upload and downloaded-output
+quality comparisons have not run. The comparison must cover the published
+`video_default` and the file the native player uses; the lower-resolution
+preview is a separate output. Record actual production paths before filming
+or presenting the demo as release evidence.

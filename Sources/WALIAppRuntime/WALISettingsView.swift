@@ -13,7 +13,11 @@ public struct WALISettingsView: View {
         storage: WALIStoragePresentation = .init(),
         onSave: @escaping (WALIPreferencesPresentation) -> Void
     ) {
-        _draft = State(initialValue: preferences)
+        var initial = preferences
+        #if WALI_APP_STORE
+        initial.lockScreenContinuityEnabled = false
+        #endif
+        _draft = State(initialValue: initial)
         self.storage = storage
         self.onSave = onSave
     }
@@ -51,6 +55,7 @@ public struct WALISettingsView: View {
                     }
                 }
 
+                #if !WALI_APP_STORE
                 Section("Lock Screen") {
                     Toggle(
                         "Show the main display wallpaper after locking",
@@ -81,6 +86,8 @@ public struct WALISettingsView: View {
                         .font(.caption)
                     }
                 }
+
+                #endif
 
                 Section("Storage") {
                     LabeledContent("Used", value: storage.usedBytes.formatted(.byteCount(style: .file)))
@@ -134,6 +141,7 @@ public struct WALISettingsView: View {
         return "\(storage.usedBytes.formatted(.byteCount(style: .file))) of \(limit.formatted(.byteCount(style: .file)))"
     }
 
+    #if !WALI_APP_STORE
     private var fullDiskAccessSettingsURL: URL {
         URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
             ?? URL(fileURLWithPath: "/System/Applications/System Settings.app")
@@ -146,4 +154,5 @@ public struct WALISettingsView: View {
         )
         NSWorkspace.shared.activateFileViewerSelecting([helperURL])
     }
+    #endif
 }

@@ -1,6 +1,6 @@
 import Foundation
 import Security
-import WALIWire
+import WALILockScreenWire
 
 public enum LockScreenOperation: String, CaseIterable, Sendable {
     case status

@@ -6,6 +6,8 @@ import WALIModel
 public actor RuntimeStore {
     public let paths: LibraryPaths
     private var state: RuntimeSnapshot?
+    private var isShuttingDown = false
+    private var hasStartedImportWork = false
 
     public init(paths: LibraryPaths) {
         self.paths = paths
@@ -34,6 +36,47 @@ public actor RuntimeStore {
             try persist()
         }
         return try await reconcileAfterCrash()
+    }
+
+    /// Stops all new import mutations before worker drain. A durable interrupted
+    /// attempt can resume only in a newly opened store after process restart.
+    /// Successful attempts retain their existing terminal result; the gate
+    /// prevents their late claims from publishing while shutdown is in progress.
+    public func interruptActiveImportsForShutdown() throws {
+        isShuttingDown = true
+        guard var current = state else { throw StorageError.stateNotOpened }
+        for index in current.importJobs.indices {
+            let persisted = current.importJobs[index]
+            guard persisted.job.header.phase == .attemptActive,
+                  let generation = persisted.job.header.attemptGeneration else { continue }
+            var attempts = persisted.job.attempts
+            attempts[attempts.count - 1] = .init(jobID: persisted.job.header.id, generation: generation, state: .terminal(.interrupted))
+            let header = try DurableJob(
+                schema: persisted.job.schema, id: persisted.job.header.id, kind: .waliImport,
+                idempotencyKey: persisted.job.header.idempotencyKey,
+                expectedEngineRevision: persisted.job.header.expectedEngineRevision,
+                phase: .attemptTerminal, attemptGeneration: generation,
+                cancellationMarker: nil, terminalOutcome: nil
+            )
+            let job = try ImportJob(schema: persisted.job.schema, header: header, attempts: attempts, committedResult: nil)
+            current.importJobs[index] = try PersistedImportJob(
+                job: job, sourceURL: persisted.sourceURL, sourceBookmark: persisted.sourceBookmark,
+                stagingDirectoryName: persisted.stagingDirectoryName,
+                createdAt: persisted.createdAt, updatedAt: Date()
+            )
+        }
+        try commit(current)
+        for persisted in current.importJobs where persisted.job.header.phase != .terminal {
+            let directory = paths.staging.appendingPathComponent(persisted.stagingDirectoryName, isDirectory: true)
+            if FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+        }
+    }
+
+    private func requireAcceptingImports() throws {
+        guard !isShuttingDown else { throw StorageError.jobNotInstallable }
+        hasStartedImportWork = true
     }
 
     public func snapshot() throws -> RuntimeSnapshot {
@@ -77,6 +120,7 @@ public actor RuntimeStore {
         expectedDigest: ContentDigest,
         expectedByteCount: UInt64
     ) throws -> URL {
+        try requireAcceptingImports()
         guard state != nil else { throw StorageError.stateNotOpened }
         let directoryName = "catalog-source-\(UUID().uuidString.lowercased())"
         let directory = paths.staging.appendingPathComponent(directoryName, isDirectory: true)
@@ -99,7 +143,55 @@ public actor RuntimeStore {
         }
     }
 
+    /// Catalog provenance is not persisted with an unfinished local worker job.
+    /// Startup therefore retires it visibly; a fresh marketplace request must
+    /// re-establish current signature/revocation context before another attempt.
+    public func recoverCatalogImportsRequiringFreshVerification() throws -> Int {
+        guard !isShuttingDown, !hasStartedImportWork, var current = state else { throw StorageError.jobNotInstallable }
+        let pending = current.importJobs.filter { $0.job.header.phase != .terminal && isAdoptedCatalogSource($0.sourceURL) }
+        for persisted in pending { try retireCatalogJob(persisted, in: &current) }
+        if !pending.isEmpty { try commit(current) }
+        for source in Set(pending.map(\.sourceURL)) { try removeAdoptedCatalogSource(source) }
+        return pending.count
+    }
+
+    public func failCatalogImportForFreshRetry(jobID: JobID) throws {
+        try requireAcceptingImports()
+        guard var current = state,
+              let persisted = current.importJobs.first(where: { $0.job.header.id == jobID }),
+              persisted.job.header.phase == .attemptTerminal, isAdoptedCatalogSource(persisted.sourceURL) else { return }
+        try retireCatalogJob(persisted, in: &current)
+        try commit(current)
+        try removeAdoptedCatalogSource(persisted.sourceURL)
+    }
+
+    private func isAdoptedCatalogSource(_ source: URL) -> Bool {
+        let directory = source.standardizedFileURL.deletingLastPathComponent()
+        return directory.deletingLastPathComponent() == paths.staging.standardizedFileURL &&
+            directory.lastPathComponent.hasPrefix("catalog-source-") && source.lastPathComponent == "catalog-source.mp4"
+    }
+
+    private func retireCatalogJob(_ persisted: PersistedImportJob, in current: inout RuntimeSnapshot) throws {
+        var attempts = persisted.job.attempts
+        if let last = attempts.last, last.state.terminalOutcome == nil {
+            attempts[attempts.count - 1] = .init(jobID: last.jobID, generation: last.generation, state: .terminal(.interrupted))
+        }
+        let header = try DurableJob(schema: persisted.job.schema, id: persisted.job.header.id, kind: .waliImport,
+            idempotencyKey: persisted.job.header.idempotencyKey, expectedEngineRevision: persisted.job.header.expectedEngineRevision,
+            phase: .terminal, attemptGeneration: persisted.job.header.attemptGeneration, cancellationMarker: nil, terminalOutcome: .failed)
+        let job = try ImportJob(schema: persisted.job.schema, header: header, attempts: attempts, committedResult: nil)
+        guard let index = current.importJobs.firstIndex(where: { $0.job.header.id == job.header.id }) else { throw StorageError.missingJob }
+        current.importJobs[index] = try PersistedImportJob(job: job, sourceURL: persisted.sourceURL,
+            sourceBookmark: persisted.sourceBookmark, stagingDirectoryName: persisted.stagingDirectoryName,
+            createdAt: persisted.createdAt, updatedAt: Date())
+    }
+
     public func removeAdoptedCatalogSource(_ sourceURL: URL) throws {
+        #if WALI_APP_STORE
+        if try snapshot().importJobs.contains(where: {
+            $0.sourceURL.standardizedFileURL == sourceURL.standardizedFileURL && $0.job.header.phase != .terminal
+        }) { return }
+        #endif
         let directory = sourceURL.standardizedFileURL.deletingLastPathComponent()
         guard directory.deletingLastPathComponent() == paths.staging.standardizedFileURL,
               directory.lastPathComponent.hasPrefix("catalog-source-"),
@@ -131,6 +223,7 @@ public actor RuntimeStore {
         idempotencyKey: IdempotencyKey,
         expectedEngineRevision: EngineRevision
     ) throws -> LocalImportContext {
+        try requireAcceptingImports()
         guard sourceURL.isFileURL else { throw StorageError.invalidCandidate }
         guard let current = state else { throw StorageError.stateNotOpened }
         if let existing = current.importJobs.first(where: {
@@ -193,6 +286,7 @@ public actor RuntimeStore {
     }
 
     public func markImportDispatched(jobID: JobID, generation: AttemptGeneration) throws {
+        try requireAcceptingImports()
         let persisted = try persistedJob(jobID: jobID, generation: generation)
         guard persisted.job.attempts.last?.state == .created else {
             if persisted.job.attempts.last?.state == .dispatched { return }
@@ -217,6 +311,7 @@ public actor RuntimeStore {
     /// successful attempt awaiting installation may also be retried explicitly
     /// after a restart; uncommitted objects remain invisible and are collected.
     public func retryImport(jobID: JobID) throws -> LocalImportContext {
+        try requireAcceptingImports()
         guard let persisted = try snapshot().importJobs.first(where: {
             $0.job.header.id == jobID
         }), persisted.job.header.phase == .attemptTerminal ||
@@ -295,6 +390,7 @@ public actor RuntimeStore {
         generation: AttemptGeneration,
         outcome: ImportAttemptTerminalKind
     ) throws {
+        try requireAcceptingImports()
         let persisted = try persistedJob(jobID: jobID, generation: generation)
         if persisted.job.attempts.last?.state == .terminal(outcome) { return }
         guard persisted.job.attempts.last?.state == .dispatched else {
@@ -378,6 +474,7 @@ public actor RuntimeStore {
         sourceBookmark: Data? = nil,
         stagingDirectoryName: String
     ) throws {
+        try requireAcceptingImports()
         guard var current = state else { throw StorageError.stateNotOpened }
         let existing = current.importJobs.first { $0.job.header.id == job.header.id }
         let record = try PersistedImportJob(
@@ -471,6 +568,7 @@ public actor RuntimeStore {
         job: ImportJob,
         record: CommittedLibraryRecord
     ) throws {
+        try requireAcceptingImports()
         guard job.header.phase == .terminal,
               job.header.terminalOutcome == .succeeded,
               let generation = job.header.attemptGeneration
@@ -540,6 +638,7 @@ public actor RuntimeStore {
         generation: AttemptGeneration,
         record: CommittedLibraryRecord
     ) throws {
+        try requireAcceptingImports()
         let persisted = try persistedJob(jobID: jobID, generation: generation)
         guard persisted.job.header.phase == .awaitingInstallation,
               persisted.job.attempts.last?.state == .terminal(.succeeded)
@@ -683,6 +782,7 @@ public actor RuntimeStore {
     }
 
     private func requireInstallableJob(_ candidate: StagedArtifactCandidate) throws {
+        try requireAcceptingImports()
         guard let persisted = try snapshot().importJobs.first(where: {
             $0.job.header.id == candidate.jobID
         }) else {
@@ -864,7 +964,7 @@ public actor RuntimeStore {
                 try FileManager.default.removeItem(at: stagingURL)
             }
         }
-        let retainedStagingNames = Set(current.importJobs.compactMap { persisted in
+        var retainedStagingNames = Set(current.importJobs.compactMap { persisted in
             switch persisted.job.header.phase {
             case .attemptActive, .awaitingInstallation:
                 persisted.stagingDirectoryName
@@ -872,6 +972,11 @@ public actor RuntimeStore {
                 nil
             }
         })
+        #if WALI_APP_STORE
+        for persisted in current.importJobs where persisted.job.header.phase != .terminal && isAdoptedCatalogSource(persisted.sourceURL) {
+            retainedStagingNames.insert(persisted.sourceURL.deletingLastPathComponent().lastPathComponent)
+        }
+        #endif
         let abandonedStaging = try removeAbandonedStagingDirectories(
             retaining: retainedStagingNames
         )

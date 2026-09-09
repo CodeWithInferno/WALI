@@ -117,6 +117,23 @@ public struct CatalogInstallPreparer: Sendable {
         bundleIdentifier: String,
         fileManager: FileManager = .default
     ) throws -> URL {
+        #if WALI_APP_STORE
+        let expected = bundleIdentifier.hasPrefix("com.wali.store.development.")
+            ? "group.com.wali.store.development.shared" : "group.com.wali.store.shared"
+        guard bundleIdentifier.hasPrefix("com.wali.store."),
+              Bundle.main.object(forInfoDictionaryKey: "WALIApplicationGroupIdentifier") as? String == expected,
+              let root = fileManager.containerURL(forSecurityApplicationGroupIdentifier: expected) else {
+            throw CatalogDownloadError.destinationUnavailable
+        }
+        let directory = root.appendingPathComponent("CatalogQuarantine", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true,
+              directory.resolvingSymlinksInPath().deletingLastPathComponent() == root.resolvingSymlinksInPath() else {
+            throw CatalogDownloadError.destinationUnavailable
+        }
+        return directory
+        #else
         let base = try fileManager.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
@@ -128,6 +145,7 @@ public struct CatalogInstallPreparer: Sendable {
         return base
             .appendingPathComponent(namespace, isDirectory: true)
             .appendingPathComponent("CatalogQuarantine", isDirectory: true)
+        #endif
     }
 
     public func discard(quarantineReference: UUID) {

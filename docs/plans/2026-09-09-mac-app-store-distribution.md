@@ -1,11 +1,47 @@
 # Mac App Store distribution implementation plan
 
-Date: 2026-09-09. Status: approved; implementation pending in a separate Tess
-worktree. Architecture authority is accepted
+Date: 2026-09-09. Status: approved; implementation in progress in the Tess
+`wali-app-store` worktree on `codex/wali-app-store`. Architecture authority is accepted
 [ADR 0018](../adr/0018-sandboxed-mac-app-store-distribution.md).
 The [initial Store review](../release/app-store-review-2026-09-09.md) is the
 separate product/production readiness register. Approval does not close any
 implementation, signed feasibility, production, or submission gate.
+
+## Implementation evidence
+
+- Branding and release preparation merged in [PR 25](https://github.com/CodeWithInferno/WALI/pull/25).
+  The bounded asynchronous carousel-test correction merged in
+  [PR 26](https://github.com/CodeWithInferno/WALI/pull/26), producing main
+  `e390281cd1661945a8118713ac929b246ef0cb59`. Both Marketplace CI and the
+  security scan passed on that merge commit.
+- The implementation was isolated through the Tess `wali-app-store` feature.
+  Final integrated direct `make verify` passed 161 architecture fixtures,
+  89 package tests, and 176 native tests, plus bundle, coverage, branding,
+  license and release checks. The affected Debug build and bundle were
+  rechecked after release-only coverage settings changed.
+- The Store hostless suites passed 145 tests. StoreDevelopment and universal
+  optimized AppStore structural builds passed graph, bundle and resource
+  validation. Both AppStore architectures and all executable wrappers exclude
+  LLVM coverage instrumentation. Direct helper selectors and wire bytes retain
+  explicit compatibility tests.
+- Consent, event-driven service recovery, bounded complete quit, scoped media
+  grants, private agent authority, bounded presentation copies, and interrupted
+  catalog recovery are implemented and covered through their deterministic
+  interfaces. These results do not establish actual signed sandbox behavior.
+- Persistent CI now builds both Store configurations, runs hostless Store tests,
+  and inspects the universal artifact without credentials. Release lanes require
+  the six source, contracts, Swift, Store, backend and media checks for the exact
+  committed source before publication.
+- Fastlane structural, test, archive, upload and submission lanes exist. The
+  exported package is inspected again before upload; matching GitHub release,
+  metadata, screenshots, processed Apple build and review submission identities
+  are checked separately. Credential-free submission fixtures passed 51 cases.
+- The Apple provisioning probe reported `No Accounts`; the available wildcard
+  profile lacks Sign in with Apple. Secure login, correct profiles, signed
+  runtime journeys, notarization, public release and Store submission remain
+  open. No structural artifact has been published as a signed candidate.
+- [ADR 0019](../adr/0019-private-creator-blocking.md) remains a separate proposed
+  marketplace schema/privacy decision, without approval or implementation.
 
 ## Recorded approval
 
@@ -54,14 +90,14 @@ Preserve uncommitted work and existing user data. Keep the signed GitHub release
 work independent of the Store implementation; never describe a local ad-hoc
 artifact or Developer ID notarization as Store submission evidence.
 
-The release owner will finish the current primary-checkout verification and
-release-preparation commit, then create the Store implementation worktree through
-Tess and provide its exact path. Do not create raw Git worktrees or modify Store
-product code/configuration in the primary checkout while that release proceeds.
+The release-preparation PR is merged and the Store worktree was created through
+Tess under that feature. Continue Store product changes in that isolated
+worktree; the primary checkout remains the direct-release baseline. Do not create
+raw Git worktrees or mix Store work into the primary release checkout.
 
 Exit: approval is recorded; the release-preparation commit and direct evidence
 are identified; the Tess worktree path and file owners are assigned. Product
-implementation starts only in that supplied worktree.
+implementation starts only in that isolated worktree.
 
 ## First bounded implementation slice
 
@@ -87,7 +123,7 @@ cross-process file-access semantics.
    It compiles without signing or launching and labels its outputs as unsigned
    structural evidence. It must not mark sandbox behavior or any signed matrix
    row as passed. The mode's proposed invocation is
-   `fastlane mac store_feasibility structural_only:true`; it does not exist yet.
+   `fastlane mac store_feasibility structural_only:true`; this lane is now implemented.
 5. Run direct package/affected adapter tests, both graph checks, and the Store
    structural compile. Record exact outputs and all remaining runtime gates.
 
@@ -97,11 +133,11 @@ Signing, service activation, durable scoped imports, presentation sharing, and
 complete quit remain explicitly unverified. Begin the next slice only after
 this baseline is green; do not publish the structural build.
 
-### Proposed file ownership in the Store worktree
+### Active file ownership in the Store worktree
 
-The release owner confirms these assignments when supplying the Tess path.
-These are responsibility boundaries, not permission to edit the current
-primary checkout or another active task's files.
+The release owner confirmed these assignments for the Tess feature above.
+These are responsibility boundaries; do not edit the primary checkout or
+another active task's files.
 
 | Workstream | Exclusive file ownership | First slice / subsequent slice |
 |---|---|---|

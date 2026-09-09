@@ -1,0 +1,9 @@
+// Copy to ignored AppStoreSigning.local.xcconfig. Use Store-specific profiles.
+// Private keys stay in Keychain; this file contains no credentials.
+WALI_STORE_DEVELOPMENT_TEAM = REPLACE_WITH_TEAM_ID
+WALI_STORE_CODE_SIGN_IDENTITY = Apple Distribution
+// App requires the Store group and Sign in with Apple; agent requires that group.
+WALI_APP_STORE_PROVISIONING_PROFILE =
+WALI_AGENT_STORE_PROVISIONING_PROFILE =
+// The independently sandboxed XPC worker has no app group or network capability.
+WALI_TRANSCODER_STORE_PROVISIONING_PROFILE =

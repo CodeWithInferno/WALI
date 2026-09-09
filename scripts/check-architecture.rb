@@ -8,15 +8,18 @@ require "psych"
 require "rexml/document"
 require "rexml/xpath"
 require "set"
+require_relative "check-store-graph"
 
 class ArchitectureChecker
   REQUIRED_MODULE_IDS = %w[
-    WALICore WALIModel WALIWire WALIEngine WALIUI WALIAppRuntime
+    WALICore WALIModel WALIWire WALILockScreenWire WALIEngine WALIUI WALIAppRuntime
     WALICatalog WALICatalogRuntime WALIAgentRuntime WALITranscoderRuntime
     WALI WALIAgent WALITranscoder WALILockScreenHelperRuntime WALILockScreenHelper
   ].freeze
 
   REQUIRED_SURFACES = {
+    "store_distribution" => "distribution_identity",
+    "store_wire_contracts" => "wire_channel",
     "sqlite_schema" => "sqlite_schema",
     "artifact_manifest" => "artifact_manifest",
     "model_records" => "model_records",
@@ -131,13 +134,15 @@ class ArchitectureChecker
     ["WALITranscoderRuntime", "WALIWire"],
     ["WALIUI", "WALIModel"],
     ["WALICatalogRuntime", "WALICatalog"],
-    ["WALILockScreenHelperRuntime", "WALIWire"]
+    ["WALILockScreenHelperRuntime", "WALILockScreenWire"],
+    ["WALIAgentRuntime", "WALILockScreenWire"]
   ]).freeze
   TARGET_PACKAGE_EDGES = (REQUIRED_PACKAGE_EDGES + Set.new([
     ["WALICatalogRuntime", "WALIModel"]
   ])).freeze
   TARGET_EMBED_ONLY_EDGES = REQUIRED_EMBED_ONLY_EDGES
   REQUIRED_PACKAGE_PRODUCTS = {
+    "WALILockScreenWire" => {"kind" => "library", "linkage" => "static", "targets" => ["WALILockScreenWire"]},
     "WALIModel" => {
       "kind" => "library", "linkage" => "static", "targets" => ["WALIModel"]
     },
@@ -152,6 +157,8 @@ class ArchitectureChecker
     }
   }.freeze
   REQUIRED_PACKAGE_TARGETS = {
+    "WALILockScreenWire" => {"kind" => "regular", "path" => "Sources/WALILockScreenWire", "dependencies" => []},
+    "WALILockScreenWireTests" => {"kind" => "test", "path" => "Tests/WALILockScreenWireTests", "dependencies" => ["WALILockScreenWire"]},
     "WALIModel" => {
       "kind" => "regular", "path" => "Sources/WALIModel", "dependencies" => []
     },
@@ -227,6 +234,20 @@ class ArchitectureChecker
       "missing docs/compatibility/surfaces.yml"
     )
     @project = load_yaml("project.yml", "missing project.yml") || {}
+    if @project.key?("include") || @project.key?("targetTemplates")
+      Array(@project["include"]).each do |included|
+        if included.is_a?(String) && included == "project-common.yml"
+          load_yaml(included, "missing #{included}")
+        else
+          error("project.yml may only include the shared project-common.yml")
+        end
+      end
+      begin
+        @project = WALIProjectSpec.load(@root, "project.yml")
+      rescue StandardError => exception
+        error("project.yml template resolution failed: #{exception.message}")
+      end
+    end
 
     validate_modules(modules_document) if modules_document
     validate_project if modules_document && @project.is_a?(Hash)
@@ -235,6 +256,7 @@ class ArchitectureChecker
     validate_surfaces(surfaces_document) if surfaces_document
     validate_rules
     validate_adrs
+    validate_distribution_graphs(modules_document) if modules_document
     validate_generated_project_ignore
 
     @errors.each { |message| warn "Architecture violation: #{message}" }
@@ -2074,6 +2096,29 @@ class ArchitectureChecker
         %w[url path bookmark media_bytes command script unknown_operation],
         "#{id} rejected_payload_classes"
       )
+    when "store_wire_contracts"
+      expected = {
+        "policy_adr" => "docs/adr/0018-sandboxed-mac-app-store-distribution.md", "module" => "WALIWire",
+        "source_path" => "Packages/WALICore/Sources/WALIWire/StoreProtocol.swift", "direct_wire_unchanged" => true,
+        "shared_envelope_maximum_bytes" => 4_194_304,
+        "import_grant" => {"message_version" => 1, "maximum_bookmark_bytes" => 262_144, "maximum_encoded_bytes" => 368_640, "persistence" => "transient_only"},
+        "worker_request" => {"message_version" => 2, "maximum_source_bookmark_bytes" => 262_144, "maximum_staging_bookmark_bytes" => 262_144, "staging_scope" => "exact_job_uuid_and_generation_directory"},
+        "worker_handshake" => {"protocol_version" => 2, "message_version" => 2, "maximum_encoded_bytes" => 4096, "correlation" => "exact_nonce_echo_before_any_grants", "added_selectors" => ["negotiate:withReply:", "shutdownWithReply:"]},
+        "presentation_demand" => {"command" => "preparePresentation", "envelope_message_version" => 1, "maximum_unique_item_ids" => 32, "caller_paths" => "forbidden", "authority" => "committed_agent_snapshot"},
+        "lifecycle_callback" => {"message_version" => 1, "selector" => "agentWillTerminateWithReply:", "payload" => "none"},
+        "regression_paths" => ["Packages/WALICore/Tests/WALIWireTests/StoreWireTests.swift", "Tests/WALIAgentTests/StoreScopedStorageTests.swift", "Tests/WALITranscoderTests/WorkerGrantTests.swift"],
+        "remaining_gate" => "signed_cross_process_scope_and_recovery_journeys"
+      }
+      error("Store wire contract registry differs from accepted bounded contract") unless details == expected
+    when "store_distribution"
+      require_exact_fields(details, %w[policy_adr cross_distribution_migration signing_gate configurations], "#{id} details")
+      error("Store distribution ADR must be 0018") unless details["policy_adr"] == "docs/adr/0018-sandboxed-mac-app-store-distribution.md"
+      error("Store cross-distribution migration must be none") unless details["cross_distribution_migration"] == "none"
+      error("Store signed feasibility remains required") unless details["signing_gate"] == "signed_sandbox_feasibility_pending"
+      expected = StoreGraphChecker::CONFIGS.transform_values do |part|
+        {"WALI" => "com.wali.#{part}.WALI", "WALIAgent" => "com.wali.#{part}.WALIAgent", "WALITranscoder" => "com.wali.#{part}.WALITranscoder", "application_group" => "group.com.wali.#{part}.shared", "app_agent_service" => "group.com.wali.#{part}.shared.agent-control"}
+      end
+      error("Store distribution identity registry mismatch") unless details["configurations"] == expected
     when "bundle_identifiers"
       require_exact_fields(details, %w[configurations], "#{id} details")
       validate_bundle_configurations(id, details["configurations"])
@@ -2631,6 +2676,30 @@ class ArchitectureChecker
     metadata_scopes(entry.split("=", 2).last)
   end
 
+  def validate_distribution_graphs(document)
+    distributions = document["distributions"]
+    unless distributions.is_a?(Hash) && distributions.keys.sort == %w[direct store]
+      error("modules.yml must declare direct and store distributions")
+      return
+    end
+    direct = distributions["direct"]
+    expected_direct = {"project_spec" => "project.yml", "generated_project" => "WALI.xcodeproj", "configurations" => CONFIGURATIONS}
+    error("direct distribution registry differs from approved graph") unless direct == expected_direct
+    store = distributions["store"]
+    expected_store = {
+      "project_spec" => "project-store.yml", "generated_project" => "WALIStore.xcodeproj",
+      "configurations" => %w[StoreDevelopment AppStore], "production_targets" => StoreGraphChecker::PRODUCTION,
+      "excluded_modules" => %w[WALILockScreenWire WALILockScreenHelperRuntime WALILockScreenHelper],
+      "excluded_sources" => ["Sources/WALIAgentRuntime/LockScreen/**"], "compilation_condition" => "WALI_APP_STORE",
+      "policy_adr" => "docs/adr/0018-sandboxed-mac-app-store-distribution.md", "verification_gate" => "signed_sandbox_feasibility_pending"
+    }
+    error("store distribution registry differs from approved graph") unless store == expected_store
+    %w[project-store.yml project-common.yml].each { |path| load_yaml(path, "missing #{path}") }
+    StoreGraphChecker.new(@root).check!
+  rescue StoreGraphChecker::Error => exception
+    error("Store graph: #{exception.message}")
+  end
+
   def validate_generated_project_ignore
     output, status = Open3.capture2e("git", "-C", @root, "rev-parse", "--is-inside-work-tree")
     return unless status.success? && output.strip == "true"
@@ -2640,6 +2709,8 @@ class ArchitectureChecker
       "WALI.xcodeproj/project.pbxproj"
     )
     error("generated WALI.xcodeproj must be ignored") unless ignore_status.success?
+    _, store_ignored = Open3.capture2e("git", "-C", @root, "check-ignore", "--quiet", "--no-index", "WALIStore.xcodeproj/project.pbxproj")
+    error("generated WALIStore.xcodeproj must be ignored") unless store_ignored.success?
   end
 
   def require_fields(value, fields, label)

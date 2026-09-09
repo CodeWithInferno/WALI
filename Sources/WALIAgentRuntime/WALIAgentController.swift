@@ -4,6 +4,9 @@ import WALIEngine
 import WALIModel
 import WALIUI
 import WALIWire
+#if !WALI_APP_STORE
+import WALILockScreenWire
+#endif
 
 public enum WALIAgentRuntimeError: LocalizedError {
     case storageUnavailable
@@ -20,15 +23,25 @@ public enum WALIAgentRuntimeError: LocalizedError {
 /// Long-lived composition root for engine, renderer, storage and XPC service.
 @MainActor
 public final class WALIAgentController: WALIUIActionHandling {
+    #if WALI_APP_STORE
+    public static let shared = WALIAgentController()
+    public private(set) var quitPrepared = false
+    private var isShuttingDown = false
+    #endif
     public let model = WALIAppModel()
 
     private let renderer = WallpaperRenderer()
     private let diagnostics = ProcessDiagnostics()
     private let stateStore: EngineSnapshotStore?
     private let runtimeStore: RuntimeStore?
+    #if WALI_APP_STORE
+    private let presentationCache: StorePresentationCache?
+    #endif
+    #if !WALI_APP_STORE
     private let lockScreenHelper: LockScreenHelperConnection?
     private let lockScreenMetadataDirectory: URL?
     private var hasAttemptedLockScreenActivation = false
+    #endif
     private let transcoder: TranscoderConnection
     private let catalogInstallCoordinator: CatalogInstallCoordinator?
     private var router: AgentCommandRouter?
@@ -38,16 +51,23 @@ public final class WALIAgentController: WALIUIActionHandling {
     private var importTasks: [UUID: Task<Void, Never>] = [:]
     private var importContexts: [UUID: LocalImportContext] = [:]
     private var importProgressUpdates: [UUID: ImportProgressUpdate] = [:]
+    #if !WALI_APP_STORE
     private var lockScreenTask: Task<Void, Never>?
     private var lockScreenPlaybackRestartTask: Task<Void, Never>?
+    #endif
 
     public init() {
         let transcoder = TranscoderConnection()
         self.transcoder = transcoder
         let libraryPaths = try? LibraryPaths.applicationSupport()
+        #if !WALI_APP_STORE
         lockScreenMetadataDirectory = libraryPaths?.metadata
+        #endif
         stateStore = try? EngineSnapshotStore()
         runtimeStore = libraryPaths.map(RuntimeStore.init(paths:))
+        #if WALI_APP_STORE
+        presentationCache = libraryPaths.flatMap { try? StorePresentationCache(paths: $0) }
+        #endif
         if let runtimeStore,
            let libraryPaths,
            let trustStore = try? CatalogTrustStore.configured(
@@ -74,20 +94,27 @@ public final class WALIAgentController: WALIUIActionHandling {
         } else {
             catalogInstallCoordinator = nil
         }
+        #if !WALI_APP_STORE
         lockScreenHelper = libraryPaths.map { LockScreenHelperConnection.live(libraryPaths: $0) }
+        #endif
     }
 
     public func start() {
         guard startupTask == nil else { return }
+        #if WALI_APP_STORE
+        guard !isShuttingDown else { return }
+        #endif
         renderer.onSnapshotChange = { [weak self] snapshot in
             self?.rendererDidChange(snapshot)
         }
+        #if !WALI_APP_STORE
         renderer.onPresentationRefresh = { [weak self] in
             self?.scheduleLockScreenReconciliation()
         }
         renderer.onSessionLock = { [weak self] in
             self?.scheduleLockScreenPlaybackRestart()
         }
+        #endif
         renderer.start()
         startupTask = Task { @MainActor [weak self] in
             await self?.bootstrap()
@@ -97,10 +124,12 @@ public final class WALIAgentController: WALIUIActionHandling {
     public func shutdown() {
         startupTask?.cancel()
         startupTask = nil
+        #if !WALI_APP_STORE
         lockScreenTask?.cancel()
         lockScreenTask = nil
         lockScreenPlaybackRestartTask?.cancel()
         lockScreenPlaybackRestartTask = nil
+        #endif
         for task in purgeTasks.values { task.cancel() }
         purgeTasks.removeAll()
         for task in importTasks.values { task.cancel() }
@@ -112,6 +141,47 @@ public final class WALIAgentController: WALIUIActionHandling {
         serviceHost = nil
         renderer.shutdown()
     }
+
+    #if WALI_APP_STORE
+    /// Also used by the agent's native Quit menu and application termination.
+    public func prepareForQuit() async throws {
+        guard !quitPrepared else { return }
+        if let router {
+            let response = await router.handle(.init(command: .quit))
+            if case let .failure(error) = response.result { throw error }
+        } else {
+            try await performStoreShutdown()
+        }
+    }
+
+    private func performStoreShutdown() async throws {
+        isShuttingDown = true
+        startupTask?.cancel()
+        for task in purgeTasks.values { task.cancel() }
+        for task in importTasks.values { task.cancel() }
+        renderer.shutdown()
+        model.snapshot.renderer = .stopped
+        // This durable gate rejects late local and catalog publication before
+        // cancellation or a lost XPC connection can deliver another result.
+        if let runtimeStore { try await runtimeStore.interruptActiveImportsForShutdown() }
+        try await transcoder.shutdown()
+        try await router?.drainTransactionsForShutdown()
+        if let stateStore, let router { try await stateStore.save(await router.snapshot()) }
+        importTasks.removeAll()
+        importContexts.removeAll()
+        importProgressUpdates.removeAll()
+        purgeTasks.removeAll()
+        try await serviceHost?.notifyForegroundTermination()
+        quitPrepared = true
+    }
+
+    private func terminateAfterQuitReply() {
+        guard quitPrepared else { return }
+        serviceHost?.stop()
+        serviceHost = nil
+        NSApplication.shared.terminate(nil)
+    }
+    #endif
 
     public func send(_ action: WALIUIAction) {
         Task { @MainActor [weak self] in
@@ -129,10 +199,16 @@ public final class WALIAgentController: WALIUIActionHandling {
             present(error)
         }
 
+        #if WALI_APP_STORE
+        var interruptedCatalogInstalls = 0
+        #endif
         var durableSnapshot: RuntimeSnapshot?
         if let runtimeStore {
             do {
                 _ = try await runtimeStore.open()
+                #if WALI_APP_STORE
+                interruptedCatalogInstalls = try await runtimeStore.recoverCatalogImportsRequiringFreshVerification()
+                #endif
                 durableSnapshot = try await runtimeStore.snapshot()
                 if let durableSnapshot {
                     restored = Self.reconcile(restored, with: durableSnapshot)
@@ -142,6 +218,15 @@ public final class WALIAgentController: WALIUIActionHandling {
             }
         }
 
+        #if WALI_APP_STORE
+        guard !isShuttingDown, !Task.isCancelled else { return }
+        restored.preferences.lockScreenContinuityEnabled = false
+        let shutdownHandler: AgentShutdownHandler? = { [weak self] in
+            try await self?.performStoreShutdown()
+        }
+        #else
+        let shutdownHandler: AgentShutdownHandler? = nil
+        #endif
         let router = AgentCommandRouter(
             restoring: restored,
             catalogInstallHandler: { [weak self] install, idempotencyKey, revision in
@@ -173,6 +258,15 @@ public final class WALIAgentController: WALIUIActionHandling {
                     throw CatalogTrustStoreError.invalidConfiguration
                 }
                 try await coordinator.updateTrustTransition(update)
+            },
+            shutdownHandler: shutdownHandler,
+            presentationHandler: { [weak self] itemIDs, snapshot in
+                #if WALI_APP_STORE
+                guard let cache = self?.presentationCache else { throw WALIAgentRuntimeError.storageUnavailable }
+                return try cache.prepare(itemIDs, snapshot: snapshot)
+                #else
+                return snapshot
+                #endif
             }
         ) { [weak self] step, snapshot in
             guard let self else { return .unchanged }
@@ -185,9 +279,45 @@ public final class WALIAgentController: WALIUIActionHandling {
             }
         }
         self.router = router
+        #if WALI_APP_STORE
+        if interruptedCatalogInstalls > 0 {
+            await router.replaceRuntimeNotice(.init(
+                kind: .warning,
+                title: "Catalog Installs Need Retry",
+                message: "Catalog installs were interrupted. Retry them from Marketplace to verify current availability and permissions."
+            ))
+        }
+        guard !isShuttingDown, !Task.isCancelled else { return }
+        #endif
 
-        let host = AgentServiceHost { [weak self] request in
-            let response = await router.handle(request)
+        #if WALI_APP_STORE
+        let presentationCache = self.presentationCache
+        #endif
+        let host = AgentServiceHost(afterQuitReply: { [weak self] in
+            #if WALI_APP_STORE
+            await self?.terminateAfterQuitReply()
+            #endif
+        }) { [weak self] request in
+            var response = await router.handle(request)
+            #if WALI_APP_STORE
+            if case let .snapshot(snapshot) = response.result {
+                // Quit needs no presentation files, which may already be closed.
+                switch request.command {
+                case .quit, .preparePresentation: return response
+                default: break
+                }
+                do {
+                    guard let presentationCache else { throw WALIAgentRuntimeError.storageUnavailable }
+                    response = AgentResponse(requestID: response.requestID, result: .snapshot(
+                        try presentationCache.project(snapshot)
+                    ))
+                } catch {
+                    return AgentResponse(requestID: response.requestID, result: .failure(
+                        AgentFailure(code: .storageUnavailable, message: error.localizedDescription)
+                    ))
+                }
+            }
+            #endif
             guard case .diagnosticsSnapshot = request.command,
                   let sample = await self?.takeDiagnosticsSample() else {
                 return response
@@ -198,12 +328,14 @@ public final class WALIAgentController: WALIUIActionHandling {
         host.start()
 
         renderDesiredState(restored)
+        #if !WALI_APP_STORE
         do {
             try await reconcileLockScreen(restored)
             await router.replaceRuntimeNotice(nil)
         } catch {
             await router.replaceRuntimeNotice(Self.lockScreenNotice(for: error))
         }
+        #endif
         renderer.setUserPaused(restored.isPausedByUser || restored.preferences.startPaused)
         for item in restored.trashedItems {
             scheduleTrashPurge(item.id)
@@ -216,6 +348,10 @@ public final class WALIAgentController: WALIUIActionHandling {
     }
 
     private func perform(_ action: WALIUIAction) async {
+        #if WALI_APP_STORE
+        if case .quit = action { NSApplication.shared.terminate(nil); return }
+        guard !isShuttingDown else { return }
+        #endif
         guard let router else { return }
         do {
             let state = await router.snapshot()
@@ -225,6 +361,9 @@ public final class WALIAgentController: WALIUIActionHandling {
                 command: command
             )
             let response = await router.handle(request)
+            #if WALI_APP_STORE
+            guard !isShuttingDown else { return }
+            #endif
             switch response.result {
             case let .snapshot(snapshot):
                 model.snapshot = snapshot.agentPresentation
@@ -242,10 +381,15 @@ public final class WALIAgentController: WALIUIActionHandling {
     ) throws -> AgentCommand? {
         switch action {
         case let .importVideos(urls):
+            #if WALI_APP_STORE
+            _ = urls
+            throw AgentFailure(code: .invalidRequest, message: "Import videos from the WALI library window.")
+            #else
             let bookmarks = try urls.map {
                 try $0.bookmarkData(options: [.withSecurityScope])
             }
             return .importFiles(bookmarks: bookmarks)
+            #endif
         case let .applyWallpaper(itemID, displayIDs, contentFit):
             return .apply(
                 itemID: itemID,
@@ -286,6 +430,7 @@ public final class WALIAgentController: WALIUIActionHandling {
             )
             return .openForegroundApp
         case .quit:
+            #if !WALI_APP_STORE
             DistributedNotificationCenter.default().postNotificationName(
                 Notification.Name("com.wali.quitAll"),
                 object: Bundle.main.object(forInfoDictionaryKey: "WALIControlServiceName") as? String
@@ -293,19 +438,24 @@ public final class WALIAgentController: WALIUIActionHandling {
                 userInfo: nil,
                 deliverImmediately: true
             )
+            #endif
             return .quit
         }
     }
 
     private func preflight(_ action: EngineAction, snapshot: EngineSnapshot) async throws {
+        #if WALI_APP_STORE
+        if case let .setPreferences(proposed) = action, proposed.lockScreenContinuityEnabled {
+            throw AgentFailure(code: .invalidRequest, message: "This setting is unavailable in this distribution.")
+        }
+        #else
         guard case let .setPreferences(proposed) = action,
               !snapshot.preferences.lockScreenContinuityEnabled,
               proposed.lockScreenContinuityEnabled else { return }
-        guard let lockScreenHelper else {
-            throw WALIAgentRuntimeError.storageUnavailable
-        }
+        guard let lockScreenHelper else { throw WALIAgentRuntimeError.storageUnavailable }
         _ = try await lockScreenHelper.status()
         _ = try await lockScreenHelperReleaseIntent(from: snapshot)
+        #endif
     }
 
     private func execute(
@@ -345,12 +495,14 @@ public final class WALIAgentController: WALIUIActionHandling {
             }
         case .render, .stopRendering, .reconcileRendering:
             renderDesiredState(authoritative)
+            #if !WALI_APP_STORE
             do {
                 try await reconcileLockScreen(authoritative)
                 return .replaceRuntimeNotice(nil)
             } catch {
                 return .replaceRuntimeNotice(Self.lockScreenNotice(for: error))
             }
+            #endif
         case .setPlaybackPaused:
             renderer.setUserPaused(authoritative.isPausedByUser)
         case let .startImport(jobID, bookmark):
@@ -378,6 +530,9 @@ public final class WALIAgentController: WALIUIActionHandling {
         bookmark: Data,
         snapshot: EngineSnapshot
     ) {
+        #if WALI_APP_STORE
+        guard !isShuttingDown else { return }
+        #endif
         guard importTasks[jobID] == nil,
               snapshot.imports.first(where: { $0.id == jobID })?.phase == .queued else {
             return
@@ -398,7 +553,13 @@ public final class WALIAgentController: WALIUIActionHandling {
     ) async {
         do {
             guard let runtimeStore else { throw WALIAgentRuntimeError.storageUnavailable }
+            #if WALI_APP_STORE
+            let sourceAccess = try AgentSourceAuthorization.openPersistent(bookmark)
+            defer { sourceAccess.close() }
+            let sourceURL = sourceAccess.url
+            #else
             let sourceURL = try Self.resolveBookmark(bookmark)
+            #endif
             let context = try await runtimeStore.beginImport(
                 sourceURL: sourceURL,
                 sourceBookmark: bookmark,
@@ -450,12 +611,19 @@ public final class WALIAgentController: WALIUIActionHandling {
             importProgressUpdates.removeValue(forKey: jobID)
         }
         guard let runtimeStore, let router else { return }
+        #if !WALI_APP_STORE
         let hasSecurityScope = context.sourceURL.startAccessingSecurityScopedResource()
         defer {
             if hasSecurityScope { context.sourceURL.stopAccessingSecurityScopedResource() }
         }
+        #endif
 
         do {
+            #if WALI_APP_STORE
+            guard let sourceBookmark else { throw WALIAgentRuntimeError.invalidImportState }
+            let sourceAccess = try AgentSourceAuthorization.openPersistent(sourceBookmark, expectedURL: context.sourceURL)
+            defer { sourceAccess.close() }
+            #endif
             try await runtimeStore.markImportDispatched(
                 jobID: context.jobID,
                 generation: context.generation
@@ -467,9 +635,11 @@ public final class WALIAgentController: WALIUIActionHandling {
                 detail: "Inspecting source video"
             ))
             let durableUUID = try Self.uuid(for: context.jobID)
+            #if !WALI_APP_STORE
             guard let sourceBookmark else {
                 throw WALIAgentRuntimeError.invalidImportState
             }
+            #endif
             let output = try await transcoder.transcode(
                 TranscoderRequest(
                     jobID: durableUUID,
@@ -556,6 +726,9 @@ public final class WALIAgentController: WALIUIActionHandling {
     }
 
     private func failImport(jobID: UUID, error: Error) async {
+        #if WALI_APP_STORE
+        guard !isShuttingDown else { return }
+        #endif
         guard let router else { return }
         let current = await router.snapshot()
         if let job = current.imports.first(where: { $0.id == jobID }),
@@ -796,6 +969,9 @@ public final class WALIAgentController: WALIUIActionHandling {
     }
 
     private func renderDesiredState(_ snapshot: EngineSnapshot) {
+        #if WALI_APP_STORE
+        guard !isShuttingDown else { return }
+        #endif
         let lowPowerResponse: PresentationLowPowerResponse
         switch snapshot.preferences.lowPowerBehavior {
         case .pause: lowPowerResponse = .pause
@@ -825,6 +1001,7 @@ public final class WALIAgentController: WALIUIActionHandling {
         renderer.setAssignments(assignments)
     }
 
+    #if !WALI_APP_STORE
     private func scheduleLockScreenReconciliation() {
         lockScreenTask?.cancel()
         lockScreenTask = Task { @MainActor [weak self] in
@@ -972,7 +1149,11 @@ public final class WALIAgentController: WALIUIActionHandling {
         )
     }
 
+    #endif
     private func rendererDidChange(_ snapshot: WallpaperRendererSnapshot) {
+        #if WALI_APP_STORE
+        guard !isShuttingDown else { return }
+        #endif
         Task { @MainActor [weak self] in
             await self?.synchronizeRenderer(snapshot)
         }
@@ -1079,8 +1260,14 @@ public final class WALIAgentController: WALIUIActionHandling {
     }
 
     private func publishSnapshot() async {
+        #if WALI_APP_STORE
+        guard !isShuttingDown else { return }
+        #endif
         guard let router else { return }
         let response = await router.handle(AgentRequest(command: .snapshot))
+        #if WALI_APP_STORE
+        guard !isShuttingDown else { return }
+        #endif
         if case let .snapshot(snapshot) = response.result {
             model.snapshot = snapshot.agentPresentation
         }
@@ -1096,6 +1283,9 @@ public final class WALIAgentController: WALIUIActionHandling {
     }
 
     private func present(_ error: Error) {
+        #if WALI_APP_STORE
+        guard !isShuttingDown else { return }
+        #endif
         model.snapshot.notice = .init(
             kind: .error,
             title: "WALI Needs Attention",

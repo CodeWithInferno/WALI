@@ -204,7 +204,30 @@ Clicking the menu-bar icon opens a compact, popover-like window containing:
 
 Performance sampling is demand-driven: 1 Hz while the popover or diagnostics view is visible, then suspended. The monitor must not create meaningful background energy use.
 
+## Store background playback and distribution scope
+
+The Store edition follows [ADR 0018](docs/adr/0018-sandboxed-mac-app-store-distribution.md).
+Before starting its background service, explain that WALI keeps wallpaper and
+accepted imports running after the library window closes, and offer an explicit
+**Allow Background Playback** action. System Login Items approval is a separate
+state with a direct settings action and retry; it must not silently become user
+consent. **Launch at Login** remains a separate opt-in preference.
+
+**Quit WALI**, including Command-Q and the menu-bar action, finishes bounded
+shutdown of the foreground app, agent, and active worker attempts. If durable
+cleanup or acknowledgment fails, show a clear error and allow retry; do not
+claim Quit succeeded while required work is still active. Closing a window
+continues consented background playback.
+
+Store has no Lock Screen continuity controls, FDA links, or hidden helper flow.
+Both editions retain the same WALI brand, native desktop library, and intended
+marketplace capabilities. Their libraries/settings are separate; do not imply
+automatic migration or supported simultaneous playback. These are product
+requirements, not a claim that signed Store runtime acceptance has passed.
+
 ## Lock Screen continuity
+
+This section applies only to the direct Developer ID distribution.
 
 WALI renders the signed-in user's desktop and follows that desktop across Spaces, display reconnects, wake, and unlock. macOS does not expose a public API for an app to draw arbitrary content inside the protected Lock Screen or FileVault login surface.
 

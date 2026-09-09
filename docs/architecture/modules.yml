@@ -18,6 +18,10 @@ swift_packages:
           linkage: static
           targets:
             - WALIWire
+        WALILockScreenWire:
+          kind: library
+          linkage: static
+          targets: [WALILockScreenWire]
         WALIEngine:
           kind: library
           linkage: static
@@ -38,6 +42,14 @@ swift_packages:
           path: Sources/WALIWire
           dependencies:
             - WALIModel
+        WALILockScreenWire:
+          kind: regular
+          path: Sources/WALILockScreenWire
+          dependencies: []
+        WALILockScreenWireTests:
+          kind: test
+          path: Tests/WALILockScreenWireTests
+          dependencies: [WALILockScreenWire]
         WALIEngine:
           kind: regular
           path: Sources/WALIEngine
@@ -80,6 +92,10 @@ swift_packages:
           linkage: static
           targets:
             - WALIWire
+        WALILockScreenWire:
+          kind: library
+          linkage: static
+          targets: [WALILockScreenWire]
         WALIEngine:
           kind: library
           linkage: static
@@ -100,6 +116,14 @@ swift_packages:
           path: Sources/WALIWire
           dependencies:
             - WALIModel
+        WALILockScreenWire:
+          kind: regular
+          path: Sources/WALILockScreenWire
+          dependencies: []
+        WALILockScreenWireTests:
+          kind: test
+          path: Tests/WALILockScreenWireTests
+          dependencies: [WALILockScreenWire]
         WALIEngine:
           kind: regular
           path: Sources/WALIEngine
@@ -140,6 +164,8 @@ xcode_test_targets:
       - WALICatalogRuntime
       - WALIUI
     package_dependencies:
+      - WALIModel
+      - WALIWire
       - WALICatalog
   WALICatalogRuntimeTests:
     type: bundle.unit-test
@@ -155,6 +181,7 @@ xcode_test_targets:
       - WALIAgentRuntime
     package_dependencies:
       - WALIWire
+      - WALILockScreenWire
       - WALIEngine
       - WALIModel
       - WALICatalog
@@ -163,14 +190,14 @@ xcode_test_targets:
     source_path: Tests/WALITranscoderTests
     build_dependencies:
       - WALITranscoderRuntime
-    package_dependencies: []
+    package_dependencies: [WALIWire]
   WALILockScreenHelperTests:
     type: bundle.unit-test
     source_path: Tests/WALILockScreenHelperTests
     build_dependencies:
       - WALILockScreenHelperRuntime
     package_dependencies:
-      - WALIWire
+      - WALILockScreenWire
   WALIUITests:
     type: bundle.unit-test
     source_path: Tests/WALIUITests
@@ -266,6 +293,9 @@ modules:
       - bounded_agent_worker_protocol
       - size_checked_wire_codecs
       - xpc_protocol_interfaces
+      - store_transient_import_grants
+      - negotiated_store_worker_revision_two
+      - store_payload_free_lifecycle_callback
     target_responsibility: Bounded versioned transport-neutral DTOs and stable wire errors.
     current_target:
       build_system: swift_package
@@ -299,6 +329,48 @@ modules:
       - ServiceManagement
       - CloudKit
       - Network
+
+  WALILockScreenWire:
+    presence: current
+    source_path: Packages/WALICore/Sources/WALILockScreenWire
+    owner_role: security_responder
+    stability: stable_contract
+    current_capabilities:
+    - bounded_fixed_helper_protocol
+    - direct_distribution_only
+    target_responsibility: >-
+      Direct-distribution-only fixed Lock Screen helper DTOs and Objective-C selectors; never linked into the Store
+      graph.
+    current_target:
+      build_system: swift_package
+      name: WALILockScreenWire
+      type: library.static
+      package_reference: WALICore
+      product: WALILockScreenWire
+      target: WALILockScreenWire
+    target_target:
+      build_system: swift_package
+      name: WALILockScreenWire
+      type: library.static
+      package_reference: WALICore
+      product: WALILockScreenWire
+      target: WALILockScreenWire
+    current_allowed_internal_imports: []
+    target_allowed_internal_imports: []
+    current_allowed_internal_reexports: []
+    target_allowed_internal_reexports: []
+    forbidden_frameworks:
+    - SwiftUI
+    - AppKit
+    - AVFoundation
+    - VideoToolbox
+    - Metal
+    - SQLite3
+    - CoreData
+    - SwiftData
+    - ServiceManagement
+    - CloudKit
+    - Network
 
   WALIEngine:
     presence: current
@@ -515,9 +587,9 @@ modules:
       name: WALILockScreenHelperRuntime
       type: framework.static
     current_allowed_internal_imports:
-      - WALIWire
+      - WALILockScreenWire
     target_allowed_internal_imports:
-      - WALIWire
+      - WALILockScreenWire
     current_allowed_internal_reexports: []
     target_allowed_internal_reexports: []
     forbidden_frameworks:
@@ -595,12 +667,14 @@ modules:
     current_allowed_internal_imports:
       - WALIModel
       - WALIWire
+      - WALILockScreenWire
       - WALIEngine
       - WALICatalog
       - WALIUI
     target_allowed_internal_imports:
       - WALIModel
       - WALIWire
+      - WALILockScreenWire
       - WALIEngine
       - WALICatalog
       - WALIUI
@@ -766,7 +840,9 @@ edges:
       - from: WALICatalogRuntime
         to: WALICatalog
       - from: WALILockScreenHelperRuntime
-        to: WALIWire
+        to: WALILockScreenWire
+      - from: WALIAgentRuntime
+        to: WALILockScreenWire
     embed_only:
       - from: WALI
         to: WALIAgent
@@ -815,7 +891,9 @@ edges:
       - from: WALICatalogRuntime
         to: WALICatalog
       - from: WALILockScreenHelperRuntime
-        to: WALIWire
+        to: WALILockScreenWire
+      - from: WALIAgentRuntime
+        to: WALILockScreenWire
     embed_only:
       - from: WALI
         to: WALIAgent
@@ -823,3 +901,37 @@ edges:
         to: WALITranscoder
       - from: WALI
         to: WALILockScreenHelper
+
+# Current/target edges above remain the direct distribution authority.
+distributions:
+  direct:
+    project_spec: project.yml
+    generated_project: WALI.xcodeproj
+    configurations:
+    - Debug
+    - Development
+    - Release
+  store:
+    project_spec: project-store.yml
+    generated_project: WALIStore.xcodeproj
+    configurations:
+    - StoreDevelopment
+    - AppStore
+    production_targets:
+    - WALI
+    - WALIAppRuntime
+    - WALICatalogRuntime
+    - WALIAgent
+    - WALIAgentRuntime
+    - WALITranscoder
+    - WALITranscoderRuntime
+    - WALIUI
+    excluded_modules:
+    - WALILockScreenWire
+    - WALILockScreenHelperRuntime
+    - WALILockScreenHelper
+    excluded_sources:
+    - Sources/WALIAgentRuntime/LockScreen/**
+    compilation_condition: WALI_APP_STORE
+    policy_adr: docs/adr/0018-sandboxed-mac-app-store-distribution.md
+    verification_gate: signed_sandbox_feasibility_pending

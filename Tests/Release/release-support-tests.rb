@@ -87,10 +87,11 @@ Dir.mktmpdir("wali-release-fixtures-") do |directory|
   File.write("#{zip}.sha256", "incorrect checksum\n")
   rejects("mismatched sidecar") { WALIReleaseSupport.verify_assets!(manifest, directory: directory) }
 
-  runs = %w[source contracts swift backend media].map do |name|
+  runs = %w[source contracts swift store backend media].map do |name|
     {"name" => name, "head_sha" => commit, "status" => "completed", "conclusion" => "success", "app" => {"slug" => "github-actions"}}
   end
   WALIReleaseSupport.verify_ci!(runs, commit: commit)
+  rejects("missing Store check") { WALIReleaseSupport.verify_ci!(runs.reject { |run| run["name"] == "store" }, commit: commit) }
   rejects("missing security check") { WALIReleaseSupport.verify_ci!(runs.drop(1), commit: commit) }
   rejects("checks from an older commit") { WALIReleaseSupport.verify_ci!(runs, commit: "0" * 40) }
   %w[failure skipped].each do |conclusion|

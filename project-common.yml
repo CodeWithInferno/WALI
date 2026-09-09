@@ -1,0 +1,204 @@
+---
+targetTemplates:
+  CommonWALI:
+    type: application
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Sources/WALIApp
+    - path: Resources/WALIAssets.xcassets
+    - path: Resources/ThirdPartyLicenses
+      type: folder
+      buildPhase: resources
+    info:
+      path: Config/Generated/WALI-Info.plist
+      properties:
+        CFBundleDisplayName: WALI
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.lifestyle
+        NSHighResolutionCapable: true
+        WALIControlServiceName: "$(WALI_AGENT_CONTROL_SERVICE_NAME)"
+        WALIAgentLaunchAgentPlistName: "$(WALI_AGENT_BUNDLE_IDENTIFIER).plist"
+        WALIMarketplaceEnabled: "$(WALI_MARKETPLACE_ENABLED)"
+        WALIMarketplaceURL: "$(WALI_SUPABASE_URL)"
+        WALIMarketplacePublishableKey: "$(WALI_SUPABASE_PUBLISHABLE_KEY)"
+        WALIApprovedCDNHosts: "$(WALI_CATALOG_CDN_HOST)"
+        WALILegalBaseURL: "$(WALI_LEGAL_BASE_URL)"
+        WALICatalogSigningKeyID: "$(WALI_CATALOG_SIGNING_KEY_ID)"
+        WALICatalogSigningPublicKeyBase64: "$(WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64)"
+        WALICatalogRecoverySigningKeyID: "$(WALI_CATALOG_RECOVERY_SIGNING_KEY_ID)"
+        WALICatalogRecoverySigningPublicKeyBase64: "$(WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64)"
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: false
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_APP_BUNDLE_IDENTIFIER)"
+        PRODUCT_NAME: WALI
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SKIP_INSTALL: false
+    dependencies:
+    - target: WALIAppRuntime
+    - sdk: AVKit.framework
+    - target: WALIAgent
+      embed: true
+      link: false
+      codeSign: true
+      copy:
+        destination: wrapper
+        subpath: Contents/Library/LoginItems
+  CommonWALIAppRuntime:
+    type: framework.static
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Sources/WALIAppRuntime
+    settings:
+      base:
+        DEFINES_MODULE: true
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAppRuntime
+        PRODUCT_NAME: WALIAppRuntime
+        SKIP_INSTALL: true
+    dependencies:
+    - package: WALICore
+      product: WALIModel
+    - package: WALICore
+      product: WALIWire
+    - target: WALICatalogRuntime
+    - target: WALIUI
+  CommonWALICatalogRuntime:
+    type: framework.static
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Sources/WALICatalogRuntime
+    settings:
+      base:
+        DEFINES_MODULE: true
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALICatalogRuntime
+        PRODUCT_NAME: WALICatalogRuntime
+        SKIP_INSTALL: true
+    dependencies:
+    - package: WALICore
+      product: WALICatalog
+    - package: Supabase
+      product: Supabase
+  CommonWALIAgent:
+    type: application
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Sources/WALIAgent
+    - path: Resources/WALIAssets.xcassets
+    info:
+      path: Config/Generated/WALIAgent-Info.plist
+      properties:
+        CFBundleDisplayName: WALI Agent
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSUIElement: true
+        NSHighResolutionCapable: true
+        WALIControlServiceName: "$(WALI_AGENT_CONTROL_SERVICE_NAME)"
+        WALITranscoderServiceName: "$(WALI_TRANSCODER_BUNDLE_IDENTIFIER)"
+        WALIApprovedCDNHosts: "$(WALI_CATALOG_CDN_HOST)"
+        WALICatalogSigningKeyID: "$(WALI_CATALOG_SIGNING_KEY_ID)"
+        WALICatalogSigningPublicKeyBase64: "$(WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64)"
+        WALICatalogRecoverySigningKeyID: "$(WALI_CATALOG_RECOVERY_SIGNING_KEY_ID)"
+        WALICatalogRecoverySigningPublicKeyBase64: "$(WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64)"
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: false
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
+        PRODUCT_NAME: WALIAgent
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SKIP_INSTALL: true
+    dependencies:
+    - target: WALIAgentRuntime
+    - target: WALITranscoder
+      embed: true
+      link: false
+      codeSign: true
+      copy:
+        destination: wrapper
+        subpath: Contents/XPCServices
+  CommonWALIAgentRuntime:
+    type: framework.static
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Sources/WALIAgentRuntime
+    settings:
+      base:
+        DEFINES_MODULE: true
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIAgentRuntime
+        PRODUCT_NAME: WALIAgentRuntime
+        SKIP_INSTALL: true
+    dependencies:
+    - package: WALICore
+      product: WALIModel
+    - package: WALICore
+      product: WALIWire
+    - package: WALICore
+      product: WALIEngine
+    - package: WALICore
+      product: WALICatalog
+    - target: WALIUI
+  CommonWALITranscoder:
+    type: xpc-service
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Sources/WALITranscoder
+    info:
+      path: Config/Generated/WALITranscoder-Info.plist
+      properties:
+        CFBundleDisplayName: WALI Transcoder
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        WALIExpectedClientBundleIdentifier: "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
+        XPCService:
+          ServiceType: Application
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: false
+        PRODUCT_BUNDLE_IDENTIFIER: "$(WALI_TRANSCODER_BUNDLE_IDENTIFIER)"
+        PRODUCT_NAME: WALITranscoder
+        SKIP_INSTALL: true
+    dependencies:
+    - target: WALITranscoderRuntime
+  CommonWALITranscoderRuntime:
+    type: framework.static
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Sources/WALITranscoderRuntime
+    settings:
+      base:
+        DEFINES_MODULE: true
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALITranscoderRuntime
+        PRODUCT_NAME: WALITranscoderRuntime
+        SKIP_INSTALL: true
+    dependencies:
+    - package: WALICore
+      product: WALIModel
+    - package: WALICore
+      product: WALIWire
+  CommonWALIUI:
+    type: framework.static
+    platform: macOS
+    deploymentTarget: '15.0'
+    sources:
+    - path: Sources/WALIUI
+    settings:
+      base:
+        DEFINES_MODULE: true
+        GENERATE_INFOPLIST_FILE: true
+        PRODUCT_BUNDLE_IDENTIFIER: com.wali.WALIUI
+        PRODUCT_NAME: WALIUI
+        SKIP_INSTALL: true
+    dependencies:
+    - package: WALICore
+      product: WALIModel
