@@ -937,6 +937,7 @@ RUBY
         "${REPOSITORY_ROOT}/docs/adr/0015-hostile-media-canonicalization.md" \
         "${REPOSITORY_ROOT}/docs/adr/0016-minimal-engagement-and-ranking-data.md" \
         "${REPOSITORY_ROOT}/docs/adr/0017-marketplace-hevc-main10.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0018-sandboxed-mac-app-store-distribution.md" \
         "${root}/docs/adr/"
 
     printf '%s\n' "${root}"
@@ -1011,6 +1012,7 @@ new_marketplace_fixture() {
         "${REPOSITORY_ROOT}/docs/adr/0015-hostile-media-canonicalization.md" \
         "${REPOSITORY_ROOT}/docs/adr/0016-minimal-engagement-and-ranking-data.md" \
         "${REPOSITORY_ROOT}/docs/adr/0017-marketplace-hevc-main10.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0018-sandboxed-mac-app-store-distribution.md" \
         "${root}/docs/adr/"
     cp "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.json" \
         "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.signature" \
