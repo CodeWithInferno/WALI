@@ -75,6 +75,12 @@ The [initial review](app-store-review-2026-09-09.md),
 remaining findings. Actual legal owner/contact/public website and the production
 account/deletion/moderation paths are still required before submission.
 
+The Store source merged in [PR 27](https://github.com/CodeWithInferno/WALI/pull/27)
+at 23:38 UTC as `d1cfb0ddacfe188fa95a4d2c371f0f836e1f368b`. All six
+applicable checks passed on head `9fb9094ce9e382e527d1c2523e7252ee1d999d5c`.
+Primary main was fast-forwarded and retained the existing branding output.
+The merge-commit checks are a separate publication requirement.
+
 The isolated Store implementation now has a helper-free structural build,
 explicit Store graphs/settings, template-only menu identity, unchanged direct
 helper-wire compatibility, and deterministic signature/profile/package gates.
@@ -108,3 +114,36 @@ quality comparisons have not run. The comparison must cover the published
 `video_default` and the file the native player uses; the lower-resolution
 preview is a separate output. Record actual production paths before filming
 or presenting the demo as release evidence.
+
+The OSS preparation includes a pinned Gitleaks history job, contributor and
+maintainer guidance, narrow local-secret/evidence ignores, and corrected public
+repository links. The reviewed full remote-history scan found only the two
+historical fixture locations repeated in two commits. All 48 hosted build-record
+artifacts were expanded and scanned; their alerts matched Python's public GPG
+verification fingerprint. No privileged secret was confirmed in those inputs.
+Unfetched/deleted refs, all historical Actions logs, private ignored files and
+future artifacts are outside that result; repository visibility is unchanged.
+
+A production base-host packet passed 17 offline safety tests and a read-only
+cloud preflight. Infrastructure creation awaits explicit owner approval; no new
+cloud resources, credentials or worker services were installed. The video
+comparison harness passed 14 tests and reverified all 24 original hashes; no
+production downloads or visual-quality assessment have occurred. The public
+app recording remains dependent on the intended production journey and media
+rights, rather than a fixture or edited simulation.
+
+
+The cleanup adds a manual [GitHub Actions release workflow](github-actions.md)
+that uses the existing Fastlane lanes and binds candidate transport, native-review
+approval, notarization and publication to the same source and app digest. Its
+12 credential-free tests passed 138 assertions, including credential cleanup
+and refusal cases; independent source review found no remaining concrete
+blocker. Hosted environments, signing material and an actual run remain pending.
+
+The media image now packages complete pinned FFmpeg/Kvazaar source archives,
+full upstream licenses, the existing accepted LGPL patch, and the exact explicit
+rebuild inputs. Seven refusal fixtures passed; both upstream archives and their
+license bytes were checked. CI verifies all 16 compliance files in the actual
+immutable image before running the hostile-media corpus. Compiler, codec and
+runtime controls are unchanged. No production image was built or published
+while preparing this change.

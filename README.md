@@ -1,5 +1,10 @@
 # WALI
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="Resources/Branding/wali-lockup-horizontal-white.svg">
+  <img src="Resources/Branding/wali-lockup-horizontal-blue.svg" alt="WALI ribbon logo" width="280">
+</picture>
+
 WALI is an open-source, native macOS live-wallpaper system focused on efficient playback, honest resource use, automatic video preparation, and first-class Mac interaction.
 
 > **Status:** functional local pre-release. The native library, per-display
@@ -11,6 +16,23 @@ WALI is an open-source, native macOS live-wallpaper system focused on efficient 
 > moderation policy, legal approval, recovery/capacity evidence, distribution signing,
 > notarization, and physical-hardware checks. See the dated
 > [evidence ledger](docs/release/marketplace-public-beta-evidence.md).
+
+## Try the local app
+
+With the [development requirements](#development) installed:
+
+```sh
+git clone https://github.com/CodeWithInferno/WALI.git
+cd WALI
+make build
+open .build/xcode/DerivedData/Build/Products/Debug/WALI.app
+```
+
+Import a video you have permission to use, wait for preparation, then choose a
+display in the library. The menu bar provides playback controls and Quit.
+Local wallpaper use requires no marketplace account. Connected marketplace
+work uses a separately configured environment; see [backend setup](supabase/README.md).
+For contributions, start with [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Product direction
 
@@ -45,14 +67,19 @@ notarized release packages are still gated on actual distribution credentials
 and the remaining release evidence; a local Debug DMG is not a distribution
 release.
 
-A separate sandboxed Mac App Store edition is being implemented under
+The separate sandboxed Mac App Store implementation merged in
+[PR 27](https://github.com/CodeWithInferno/WALI/pull/27) under
 [ADR 0018](docs/adr/0018-sandboxed-mac-app-store-distribution.md). It retains the
-native desktop and intended marketplace product, omits private Lock Screen
-integration, and uses its own library/settings identity. Its helper-free
-structural build has passed; integrated tests, signed sandbox journeys,
-production readiness, and App Store submission remain separate open gates.
+native desktop and marketplace product, omits private Lock Screen integration,
+and uses its own library/settings identity. All six applicable PR checks passed,
+including 145 Store hostless tests and both Store structural builds. Signed
+sandbox journeys, production readiness, and App Store submission remain open.
 See the [release ledger](docs/release/2026-09-09-release-status.md) and
 [Fastlane workflow](docs/release/fastlane.md) for the current evidence and commands.
+The manual [GitHub Actions release workflow](docs/release/github-actions.md)
+archives a signed candidate, waits for native review of its exact digest, then
+notarizes and publishes those same bytes. Hosted signing setup and the first
+real run remain pending.
 
 ## Architecture
 
@@ -146,8 +173,8 @@ environment gates; see the
 signatures so macOS can register the background agent. Lock Screen continuity
 stays unavailable because an ad-hoc peer cannot be authenticated strongly enough
 for Full Disk Access. Hostless test builds may remain unsealed; linker-produced
-Mach-O signatures alone do not seal an app bundle. Debug compiles the UI-test target
-and runs every hostless unit suite, but it uses `com.wali.debug.*`, omits
+Mach-O signatures alone do not seal an app bundle. `make test` compiles the UI-test target
+and runs every hostless unit suite. Debug uses `com.wali.debug.*`, omits
 app-group entitlements, and cannot validate shared-container behavior.
 Development uses `com.wali.development.*`, automatic Apple Development signing,
 and `group.com.wali.development.shared`; the supplied team must be authorized

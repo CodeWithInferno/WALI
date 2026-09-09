@@ -46,6 +46,24 @@ RUN curl --fail --location --proto '=https' --tlsv1.2 \
     && make -j2 \
     && make install
 
+# Keep the complete checked sources, licenses, and explicit rebuild inputs with
+# the binaries. No generated outputs or ambient build-context files are copied.
+COPY Containerfile THIRD_PARTY_NOTICES.md LICENSE SOURCE-LICENSES.sha256 /opt/wali/share/media-compliance/build-context/
+COPY patches/ffmpeg-7.1.2-libkvazaar-10bit.patch /opt/wali/share/media-compliance/build-context/patches/
+COPY policy/ffmpeg-policy.json /opt/wali/share/media-compliance/build-context/policy/
+COPY bin/process-media bin/verify-media /opt/wali/share/media-compliance/build-context/bin/
+RUN mkdir -p /opt/wali/share/media-compliance/sources \
+      /opt/wali/share/media-compliance/licenses/ffmpeg \
+      /opt/wali/share/media-compliance/licenses/kvazaar \
+    && install -m 0644 /build/ffmpeg.tar.xz /opt/wali/share/media-compliance/sources/ffmpeg-${FFMPEG_VERSION}.tar.xz \
+    && install -m 0644 /build/kvazaar.tar.xz /opt/wali/share/media-compliance/sources/kvazaar-${KVAZAAR_VERSION}.tar.xz \
+    && install -m 0644 /build/ffmpeg/COPYING.LGPLv2.1 /build/ffmpeg/LICENSE.md /opt/wali/share/media-compliance/licenses/ffmpeg/ \
+    && install -m 0644 /build/kvazaar/LICENSE /build/kvazaar/LICENSE.EXT.greatest /opt/wali/share/media-compliance/licenses/kvazaar/ \
+    && install -m 0644 /opt/wali/share/media-compliance/build-context/THIRD_PARTY_NOTICES.md /opt/wali/share/media-compliance/ \
+    && install -m 0644 /opt/wali/share/media-compliance/build-context/SOURCE-LICENSES.sha256 /opt/wali/share/media-compliance/ \
+    && cd /opt/wali/share/media-compliance \
+    && sha256sum --check --strict SOURCE-LICENSES.sha256
+
 FROM --platform=linux/amd64 docker.io/library/debian:bookworm-slim@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867
 ARG DEBIAN_SNAPSHOT=20260824T000000Z
 RUN rm -f /etc/apt/sources.list.d/debian.sources \
@@ -57,6 +75,7 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources \
 
 COPY --from=build /opt/ffmpeg /opt/ffmpeg
 COPY --from=build /opt/kvazaar/lib /opt/wali/lib
+COPY --from=build /opt/wali/share/media-compliance /opt/wali/share/media-compliance
 COPY policy/ffmpeg-policy.json /opt/wali/policy/ffmpeg-policy.json
 COPY bin/process-media bin/verify-media /opt/wali/bin/
 

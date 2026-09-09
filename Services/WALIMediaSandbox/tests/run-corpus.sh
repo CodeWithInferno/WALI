@@ -7,6 +7,7 @@ readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 run_static_checks() {
   bash -n "$ROOT/bin/process-media" "$ROOT/bin/verify-media"
   python3 -m json.tool "$ROOT/policy/ffmpeg-policy.json" >/dev/null
+  python3 "$ROOT/../../Tests/Release/media-license-tests.py" --source-root "$ROOT"
   grep -q -- '--disable-network' "$ROOT/Containerfile"
   grep -q -- '--disable-gpl' "$ROOT/Containerfile"
   grep -q -- '--disable-nonfree' "$ROOT/Containerfile"
@@ -34,6 +35,14 @@ run_runtime_corpus() {
   local work
   work="$(mktemp -d)"
   trap 'chmod -R u+rwX -- "$work" 2>/dev/null || true; rm -rf -- "$work"' RETURN
+  local provenance_digests_file="$work/media-license-digests.txt"
+  timeout 30s "$runtime" run --rm --name="wali-corpus-licenses-$$" \
+    --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+    --pids-limit=64 --cpus=1 --memory=1g --memory-swap=1g \
+    "$WALI_SANDBOX_IMAGE" /usr/bin/find /opt/wali/share/media-compliance -type f \
+    -exec /usr/bin/sha256sum '{}' + >"$provenance_digests_file"
+  python3 "$ROOT/../../Tests/Release/media-license-tests.py" --source-root "$ROOT" --image-digests "$provenance_digests_file"
+
   mkdir -p "$work/input" "$work/output"
   printf '' >"$work/empty.mp4"
   printf '\x00\x00\x00\x20ftypisomtruncated' >"$work/truncated.mp4"
