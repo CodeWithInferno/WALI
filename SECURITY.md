@@ -6,7 +6,16 @@ WALI is pre-alpha. There are no supported release lines yet.
 
 Do not open a public issue for vulnerabilities involving code execution, path traversal, signature validation, cross-process authorization, update integrity, catalog signing, or destructive data loss.
 
-Until a private reporting address is published, contact the repository owner through a private channel associated with the hosting account. Include:
+Use GitHub's [private vulnerability reporting form](https://github.com/CodeWithInferno/WALI/security/advisories/new)
+when the repository's Security page offers **Report a vulnerability**. The link
+alone does not establish that the hosted feature is enabled or monitored. If it
+is unavailable, request a private reporting route from the repository owner
+without posting exploit details, affected private data, or credentials. No
+separate monitored security address or response deadline is currently published
+in this policy. Maintainers must verify the route before public publication;
+see the [publication checklist](docs/maintainers/publication.md).
+
+In the private report, include:
 
 - affected commit or version;
 - macOS version and hardware;
@@ -67,3 +76,13 @@ Marketplace fixtures are synthetic and contain no production credentials,
 private object URL, user media, rights evidence, or proprietary competitor
 asset. Never report a security test as production-safe merely because a checksum,
 antivirus scanner, container, or model accepted an input.
+
+## Source scanning
+
+The Security scan workflow retains Trivy checkout scanning and adds pinned
+Gitleaks scanning of all history reachable from the CI checkout's refs. It uses
+redacted reports and requires no project credential. Dependency review is
+enforced on public pull requests where GitHub makes that API available. These
+jobs do not certify private reporting, push protection, remote artifacts, or
+deleted/unfetched refs. The [scanner runbook](docs/security/secret-scanning.md)
+describes exact historical finding reviews and the final publication scan.

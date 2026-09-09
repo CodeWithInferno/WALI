@@ -1,0 +1,34 @@
+name: Bug report
+description: Report a reproducible product or contributor-workflow problem.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For security-sensitive bugs, follow SECURITY.md instead of posting exploit details here.
+        Remove personal media, credentials, private URLs, and account data from all attachments.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Include the distribution/build configuration and whether this is an upstream or fork build.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: macOS and hardware
+      description: Include macOS version, Apple Silicon or Intel, and display topology if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Describe the smallest steps, expected result, and actual result with synthetic or rights-cleared media.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Include relevant command results, screenshots, or logs after removing private information.

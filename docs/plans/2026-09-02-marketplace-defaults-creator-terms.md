@@ -73,7 +73,7 @@
 ### Task 4: Validate and describe the supplied staging media
 
 **Files:**
-- Source input: `/Users/pratham/Desktop/down/*.mp4`
+- Source input: `<local-source-directory>/*.mp4`
 - Create: `docs/content/staging-catalog.local.example.yml` only if a reusable redacted format is needed
 - Create outside Git: a generated staging ingestion manifest containing filenames, hashes, dimensions, duration, codec, and provenance
 
