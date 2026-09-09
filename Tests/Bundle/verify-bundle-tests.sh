@@ -83,9 +83,12 @@ new_fixture() {
 
     mkdir -p \
         "${app_path}/Contents/MacOS" \
+        "${app_path}/Contents/Resources" \
         "${app_path}/Contents/Library/LoginItems/WALIAgent.app/Contents/MacOS" \
         "${app_path}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/WALITranscoder.xpc/Contents/MacOS" \
         "${app_path}/Contents/Library/LoginItems/WALILockScreenHelper.app/Contents/MacOS"
+
+    cp -R "${ROOT_DIR}/Resources/ThirdPartyLicenses" "${app_path}/Contents/Resources/ThirdPartyLicenses"
 
     write_bundle_plists \
         "${app_path}" \

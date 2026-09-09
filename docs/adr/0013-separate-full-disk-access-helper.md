@@ -1,12 +1,21 @@
 # 0013: Separate the Full Disk Access Lock Screen helper
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-09-01
 - owner_role: security_responder
 - accepted_by: project_owner
 - approval_reference: project-owner AFK marketplace implementation directive 2026-09-01
 - supersedes: 0008, 0009, 0010
 - supersedes_scope: 0008=lock_screen_privileged_process_ownership;0009=lock_screen_privileged_process_ownership;0010=lock_screen_privileged_process_ownership
+- superseded_by: 0018
+- superseded_scope: 0018=store_helper_presence,store_agent_sandbox_requirement
+
+> **Scoped supersession:** [ADR 0018](0018-sandboxed-mac-app-store-distribution.md)
+> limits this record's helper-presence and unsandboxed-agent decisions to direct
+> distribution. The Store graph excludes private Lock Screen integration and
+> requires a sandboxed agent. Direct-distribution privileges, behavior,
+> authentication, restoration, and signed acceptance requirements remain
+> unchanged. Store implementation and signed feasibility are separate gates.
 
 ## Context
 

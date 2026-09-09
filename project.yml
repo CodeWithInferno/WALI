@@ -41,6 +41,9 @@ targets:
     sources:
       - path: Sources/WALIApp
       - path: Resources/WALIAssets.xcassets
+      - path: Resources/ThirdPartyLicenses
+        type: folder
+        buildPhase: resources
       - path: Config/LaunchAgents
         buildPhase:
           copyFiles:

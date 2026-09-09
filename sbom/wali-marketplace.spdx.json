@@ -12,6 +12,7 @@
     "licenseListVersion": "3.26"
   },
   "documentDescribes": [
+    "SPDXRef-Package-gem-fastlane-2.239.0",
     "SPDXRef-Package-generic-ffmpeg-7.1.2",
     "SPDXRef-Package-generic-google-siglip-base-patch16-224-7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed",
     "SPDXRef-Package-generic-kvazaar-2.3.1",
@@ -61,9 +62,34 @@
     "SPDXRef-Package-pypi-transformers-5.16.1",
     "SPDXRef-Package-pypi-typer-0.27.2",
     "SPDXRef-Package-pypi-typing-extensions-4.16.0",
-    "SPDXRef-Package-pypi-wali-classifier-0.1.0"
+    "SPDXRef-Package-pypi-wali-classifier-0.1.0",
+    "SPDXRef-Package-swift-supabase-swift-2.54.1",
+    "SPDXRef-Package-swift-swift-asn1-1.7.2",
+    "SPDXRef-Package-swift-swift-clocks-1.1.1",
+    "SPDXRef-Package-swift-swift-concurrency-extras-1.4.1",
+    "SPDXRef-Package-swift-swift-crypto-4.5.1",
+    "SPDXRef-Package-swift-swift-http-types-1.6.0",
+    "SPDXRef-Package-swift-xctest-dynamic-overlay-1.13.1"
   ],
   "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-gem-fastlane-2.239.0",
+      "name": "fastlane",
+      "versionInfo": "2.239.0",
+      "downloadLocation": "git+https://github.com/fastlane/fastlane.git@3a4fc36716dec206b3f5441f19f0a5193733c828",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:gem/fastlane@2.239.0"
+        }
+      ]
+    },
     {
       "SPDXID": "SPDXRef-Package-generic-ffmpeg-7.1.2",
       "name": "ffmpeg",
@@ -985,6 +1011,132 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:pypi/wali-classifier@0.1.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-swift-supabase-swift-2.54.1",
+      "name": "supabase-swift",
+      "versionInfo": "2.54.1",
+      "downloadLocation": "git+https://github.com/supabase/supabase-swift.git@b118484ae0eb4a6b6ce1b216711d660baf6ec1aa",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:swift/supabase-swift@2.54.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-swift-swift-asn1-1.7.2",
+      "name": "swift-asn1",
+      "versionInfo": "1.7.2",
+      "downloadLocation": "git+https://github.com/apple/swift-asn1.git@d9a5b37470adc940d22c3bcd5ca6953a516b727f",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:swift/swift-asn1@1.7.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-swift-swift-clocks-1.1.1",
+      "name": "swift-clocks",
+      "versionInfo": "1.1.1",
+      "downloadLocation": "git+https://github.com/pointfreeco/swift-clocks@82440fa0a8b1c381a6d1e8e0fc7bbba53ec63204",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:swift/swift-clocks@1.1.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-swift-swift-concurrency-extras-1.4.1",
+      "name": "swift-concurrency-extras",
+      "versionInfo": "1.4.1",
+      "downloadLocation": "git+https://github.com/pointfreeco/swift-concurrency-extras@5fa253428866f2360c3754e88537f700ed2656b5",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:swift/swift-concurrency-extras@1.4.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-swift-swift-crypto-4.5.1",
+      "name": "swift-crypto",
+      "versionInfo": "4.5.1",
+      "downloadLocation": "git+https://github.com/apple/swift-crypto.git@47d3869a7291f085c1fb9fb1e6d3b97a793f45c6",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:swift/swift-crypto@4.5.1"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-swift-swift-http-types-1.6.0",
+      "name": "swift-http-types",
+      "versionInfo": "1.6.0",
+      "downloadLocation": "git+https://github.com/apple/swift-http-types.git@db774a277f60063a32d854f2980299caf06da041",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:swift/swift-http-types@1.6.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-swift-xctest-dynamic-overlay-1.13.1",
+      "name": "xctest-dynamic-overlay",
+      "versionInfo": "1.13.1",
+      "downloadLocation": "git+https://github.com/pointfreeco/xctest-dynamic-overlay@d9308ad679143c26a30dec52daefe82f54af2b82",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "supplier": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:swift/xctest-dynamic-overlay@1.13.1"
         }
       ]
     }

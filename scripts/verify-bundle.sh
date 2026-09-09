@@ -379,6 +379,8 @@ if [[ "${CONFIGURATION}" != "Debug" ]]; then
 fi
 
 
+ruby "${ROOT_DIR}/scripts/verify-third-party-licenses.rb" "${APP_PATH}"
+
 if [[ "${CONFIGURATION}" == "Development" ]]; then
     signing_summary="strict Apple Development signatures"
 elif [[ "${CONFIGURATION}" == "Release" ]]; then

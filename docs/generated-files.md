@@ -8,6 +8,7 @@ Edit and review:
 
 - `project.yml` for Xcode targets, settings, dependencies, and bundle layout;
 - `Config/*.xcconfig` and checked-in entitlements for build policy;
+- `Config/Package.resolved` for the reviewed remote Swift dependency graph;
 - Swift sources, tests, scripts, fixtures, and public documentation; and
 - package manifests under `Packages/`.
 
@@ -17,6 +18,11 @@ produce the reviewed SVG/PNG/ICNS exports and `Resources/WALIAssets.xcassets`.
 Keep those exports in source control so building the app requires only Xcode,
 not illustration tools. Regeneration instructions and source fidelity checks
 are in [the branding guide](design/2026-09-09-wali-branding.md).
+
+`Resources/ThirdPartyLicenses` preserves the license and notice files from each
+exact Swift revision. Its manifest records the upstream filenames, versions,
+revisions, and file digests. These reviewed files are bundled with the app;
+they remain available after a clean without downloading source dependencies.
 
 Do not edit a generated project or plist to make a persistent change.
 
@@ -41,9 +47,21 @@ make verify
 make clean
 ```
 
-`make generate` resolves the supported XcodeGen executable and recreates the
-project. `make clean` removes every repository-local generated project and
-build output. Build and test scripts regenerate before invoking Xcode.
+`make generate` resolves the supported XcodeGen executable, recreates the
+project, and copies `Config/Package.resolved` into its generated workspace.
+Build and test scripts require the versions in that lock. `make clean` removes
+every repository-local generated project and build output, while preserving
+the canonical lock and notices. Build and test scripts regenerate before
+invoking Xcode.
+
+For an intentional Swift dependency update, update the exact root version in
+`project.yml`, generate the project, and explicitly run
+`xcodebuild -resolvePackageDependencies -project WALI.xcodeproj -scheme WALI`.
+Review and copy the resulting workspace `Package.resolved` back to
+`Config/Package.resolved`, then refresh each affected license/notice file from
+its exact upstream Git revision and update the license manifest. Run
+`scripts/generate-sbom.sh` and `scripts/check-licenses.sh` before building.
+Generated workspace locks are never staged.
 
 After changing `project.yml`, configuration, package products, or bundle
 metadata, run focused checks followed by `make verify`. Release bundle checks
