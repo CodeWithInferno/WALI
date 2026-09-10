@@ -65,7 +65,7 @@ module WALIReleaseSupport
   end
 
   def verify_ci!(runs, commit:)
-    required = %w[source contracts swift store backend media]
+    required = %w[source history-secrets contracts swift store backend media]
     missing = required.reject do |name|
       runs.any? do |run|
         run["name"] == name && run["head_sha"] == commit &&

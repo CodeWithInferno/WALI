@@ -56,7 +56,7 @@ license_policy:
   source_and_notice_retention: required
   spdx_sbom: required
   reviewed_exceptions:
-    LGPL-2.1-or-later: FFmpeg is isolated, unmodified, dynamically linked, and built without GPL or nonfree features.
+    LGPL-2.1-or-later: FFmpeg is isolated and dynamically linked, includes the in-tree libkvazaar 10-bit LGPL patch accepted in ADR 0017, and is built without GPL or nonfree features.
     MPL-2.0: Python certificate and progress-bar libraries remain unmodified and are separately inventoried.
     LicenseRef-Debian-Image-Mixed: Debian package licenses are preserved in the pinned image and require image-level SBOM scanning before release.
 

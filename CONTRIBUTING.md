@@ -40,9 +40,12 @@ these seams to make a feature faster to write.
 
 ```bash
 make verify
-CONFIGURATION=Release ./scripts/build.sh
-CONFIGURATION=Release ./scripts/verify-bundle.sh
 ```
+
+This is the normal credential-free contribution gate. It builds the native UI
+test target and runs hostless unit tests; it does not launch a signed UI runner
+or prove live helper registration. For a documentation-only change, report the
+relevant link, formatting, and policy checks instead of claiming native tests.
 
 7. Include exact verification results and screenshots for visual changes.
 
@@ -57,6 +60,45 @@ Wallpaper contributions need item-level source, rights holder, redistribution
 grant, attribution, source/canonical digests, reviewer, and date in
 `docs/content/seed-catalog.yml` or the authoritative marketplace rights record.
 An empty seed catalog is preferred to uncertain rights.
+
+## Local setup and forks
+
+Use the versions in [README](README.md#development) and the checked-in CI
+workflow: macOS 15+, Xcode 26.2+, Swift 6.2+, XcodeGen 2.44.1+, and system Ruby.
+Start with `make build` and `make verify`; neither requires an Apple developer
+account or marketplace credentials. Use media whose rights you control when
+trying the local wallpaper flow.
+
+The broader marketplace suite needs Docker, Supabase CLI 2.116.0+, Deno 2.9.6,
+Go 1.25.0, and uv 0.8.17 with Python 3.12. The exact CI pins and dependency locks
+are authoritative. Follow [local backend setup](supabase/README.md#local-setup)
+before running the database targets. Local Supabase tests exercise the backend;
+the native app deliberately rejects loopback HTTP and private/numeric hosts.
+See [native marketplace integration](supabase/README.md#native-marketplace-integration)
+for that separate environment requirement.
+
+Debug uses isolated `com.wali.debug.*` identifiers and ad-hoc seals. Signed
+Development uses upstream identifiers and app groups, so changing only
+`DEVELOPMENT_TEAM` does not make an arbitrary fork provisionable. Use Debug for
+ordinary contributions. A fork that needs signed integration must review a
+consistent namespace for bundle IDs, app groups, launch services, entitlements,
+peer requirements, and profiles; preserve the security contract and follow the
+ADR process. Do not borrow upstream signing or production credentials.
+
+## Maintainer release gates
+
+Signed checks are additional maintainer responsibilities, not prerequisites for
+ordinary fork contributions. Follow [the Fastlane runbook](docs/release/fastlane.md)
+with the authorized team and local signing configuration. A passing `make verify`
+is not a notarized release, a signed sandbox journey, or production acceptance.
+The upstream publishing lane deliberately targets the upstream repository; it
+is not a general fork deployment command.
+
+Keep private keys, profiles, environment files, authentication screenshots, and
+raw reports outside commits and release attachments. Checked-in examples must
+contain placeholders or synthetic fixtures only. The
+[publication checklist](docs/maintainers/publication.md) covers private reporting,
+media rights, source scans, hosted controls, and evidence before publication.
 
 ## Architecture changes
 

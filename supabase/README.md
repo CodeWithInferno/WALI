@@ -26,9 +26,21 @@ identity, secret, or third-party wallpaper. Local fixture accounts use password
 `creator-a@example.invalid`, `user-b@example.invalid`, and
 `moderator@example.invalid`.
 
-Copy `Config/Marketplace.example.xcconfig` to the ignored
-`Config/Marketplace.local.xcconfig` and fill only the public project URL,
-publishable key, approved CDN host, and catalog verification public key.
+## Native marketplace integration
+
+The local commands above test the database and Edge Functions. They do not make
+the local HTTP endpoint usable by the native app: `CatalogEnvironment` requires
+HTTPS with a public hostname and no explicit port, and catalog host validation
+rejects loopback/private-style names and numeric IPs. Keep those trust checks.
+The local wallpaper core can be developed without configuring marketplace access.
+
+For a connected native journey, use an explicitly authorized isolated hosted
+development project with a public HTTPS endpoint, approved CDN host, and its own
+catalog signing/verification setup. Hosted setup is a separate reviewed operation;
+these local targets do not provision it. Then copy
+`Config/Marketplace.example.xcconfig` to the ignored
+`Config/Marketplace.local.xcconfig` and fill only that environment's public project
+URL, publishable key, approved CDN host, and catalog verification public key.
 Service-role keys, database passwords, signing private keys, and VM credentials
 must never enter the app configuration or repository.
 

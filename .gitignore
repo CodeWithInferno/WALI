@@ -40,6 +40,34 @@ Packages/WALICore/.swiftpm/
 /task_plan.md
 .gstack/
 
+# Local environments; retain explicitly named placeholder examples/templates.
+.env
+.env.*
+*.env
+*.env.*
+!.env.example
+!.env.sample
+!.env.template
+!*.env.example
+!*.env.sample
+!*.env.template
+
+# Local signing/authentication material; never force-add a real private key.
+*.p8
+*.p12
+*.pfx
+*.key
+*.pem
+*.mobileprovision
+*.provisionprofile
+!*.key.example
+!*.pem.example
+!*.public.key
+!*.public.pem
+Config/*Signing.local.xcconfig
+
+# Private generated review evidence and scanner reports.
+/output/
 # Separate generated Mac App Store graph and local signing settings.
 WALIStore.xcodeproj/
 Config/AppStoreSigning.local.xcconfig

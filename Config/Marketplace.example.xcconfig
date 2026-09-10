@@ -9,4 +9,4 @@ WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64 = REPLACE_WITH_PUBLIC_KEY_ONLY
 WALI_CATALOG_RECOVERY_SIGNING_KEY_ID = catalog-recovery-1
 WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64 = REPLACE_WITH_OFFLINE_RECOVERY_PUBLIC_KEY_ONLY
 // Public HTTPS location containing the versioned docs/legal files.
-WALI_LEGAL_BASE_URL = https:/$()/github.com/TryCleanMcp/WALI/blob/main/docs/legal
+WALI_LEGAL_BASE_URL = https:/$()/github.com/CodeWithInferno/WALI/blob/main/docs/legal

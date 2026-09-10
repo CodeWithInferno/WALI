@@ -1,0 +1,7 @@
+# Exact historical false positives reviewed on 2026-09-09.
+# Static test idempotency UUID and a private-key TYPE declaration; no key bytes.
+# See docs/security/secret-scanning.md. New commits/lines/rules are not exempt.
+140270db19cc02a072ff64c1d9157307d4581413:Tests/WALIAgentTests/CatalogInstallTests.swift:generic-api-key:353
+140270db19cc02a072ff64c1d9157307d4581413:Tests/WALILockScreenHelperTests/LockScreenHelperTests.swift:generic-api-key:147
+2611e67839d3e24f48686c60fa05522d813e49d0:Tests/WALIAgentTests/CatalogInstallTests.swift:generic-api-key:353
+2611e67839d3e24f48686c60fa05522d813e49d0:Tests/WALILockScreenHelperTests/LockScreenHelperTests.swift:generic-api-key:147

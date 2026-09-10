@@ -1,0 +1,161 @@
+name: Signed GitHub release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Committed version tag (reviewed notes must exist at docs/release/notes/TAG.md)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  checks: read
+
+concurrency:
+  group: wali-production-release
+  cancel-in-progress: false
+
+env:
+  WALI_RELEASE_TAG: ${{ inputs.tag }}
+  FASTLANE_SKIP_UPDATE_CHECK: "1"
+  FASTLANE_HIDE_CHANGELOG: "1"
+  FASTLANE_SKIP_ACTION_SUMMARY: "1"
+  FASTLANE_OPT_OUT_USAGE: "1"
+  BUNDLE_FROZEN: "true"
+  BUNDLE_PATH: vendor/bundle
+
+jobs:
+  preflight:
+    if: github.repository == 'CodeWithInferno/WALI' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check release adapter without credentials
+        run: /usr/bin/ruby Tests/Release/ci-release-tests.rb
+      - name: Require current main, CI, release notes and configured environments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: /usr/bin/ruby scripts/ci-release.rb preflight
+
+  candidate:
+    needs: preflight
+    runs-on: macos-26
+    timeout-minutes: 90
+    environment: release-signing
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      archive_sha: ${{ steps.archive.outputs.archive_sha }}
+      receipt_sha: ${{ steps.archive.outputs.receipt_sha }}
+      app_sha: ${{ steps.archive.outputs.app_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select the tested Xcode and Swift
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.2.app
+          xcodebuild -version | grep -Fx 'Xcode 26.2'
+          xcrun swift --version | grep -E 'Swift version 6\.2([. ]|$)'
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          ruby-version: "3.4.7"
+          bundler: "4.0.16"
+          bundler-cache: false
+      - name: Install locked Fastlane dependencies
+        run: bundle install --jobs 4
+      - name: Install verified XcodeGen
+        run: |
+          archive="$RUNNER_TEMP/xcodegen.zip"
+          curl --fail --location --proto '=https' --tlsv1.2 https://github.com/yonaskolb/XcodeGen/releases/download/2.44.1/xcodegen.zip --output "$archive"
+          printf '%s  %s\n' a2e905fb68446e9bb4008cdfe2e13e3f176d0cbcca828b71770f8e53fca91b73 "$archive" | shasum -a 256 --check
+          unzip -q "$archive" -d "$RUNNER_TEMP/wali-xcodegen"
+          test "$("$RUNNER_TEMP/wali-xcodegen/xcodegen/bin/xcodegen" --version)" = 'Version: 2.44.1'
+          echo "$RUNNER_TEMP/wali-xcodegen/xcodegen/bin" >> "$GITHUB_PATH"
+      - name: Archive the signed production candidate with Fastlane
+        id: archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEVELOPMENT_TEAM: ${{ vars.WALI_TEAM_ID }}
+          WALI_MARKETPLACE_CONFIG_JSON: ${{ vars.WALI_MARKETPLACE_CONFIG_JSON }}
+          WALI_SIGNING_P12_BASE64: ${{ secrets.WALI_SIGNING_P12_BASE64 }}
+          WALI_SIGNING_P12_PASSWORD: ${{ secrets.WALI_SIGNING_P12_PASSWORD }}
+          WALI_APP_PROFILE_BASE64: ${{ secrets.WALI_APP_PROFILE_BASE64 }}
+          WALI_AGENT_PROFILE_BASE64: ${{ secrets.WALI_AGENT_PROFILE_BASE64 }}
+          WALI_HELPER_PROFILE_BASE64: ${{ secrets.WALI_HELPER_PROFILE_BASE64 }}
+        run: /usr/bin/ruby scripts/ci-release.rb candidate
+      - name: Remove signing material even after failure or cancellation
+        if: always()
+        run: /usr/bin/ruby scripts/ci-release.rb cleanup
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        id: upload
+        with:
+          name: signed-candidate-${{ github.run_id }}
+          path: |
+            .build/ci-release/candidate/WALI-candidate.zip
+            .build/ci-release/candidate/archive.json
+          if-no-files-found: error
+          # Only these two explicit transport files; never upload the signing journal.
+          include-hidden-files: true
+          retention-days: 7
+          compression-level: 0
+
+  publish:
+    name: Review the exact candidate, then notarize and publish
+    needs: candidate
+    runs-on: macos-26
+    timeout-minutes: 100
+    environment:
+      name: production
+      url: https://github.com/CodeWithInferno/WALI/actions/runs/${{ github.run_id }}
+    permissions:
+      contents: write
+      actions: read
+      checks: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select the tested Xcode and Swift
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.2.app
+          xcodebuild -version | grep -Fx 'Xcode 26.2'
+          xcrun swift --version | grep -E 'Swift version 6\.2([. ]|$)'
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          ruby-version: "3.4.7"
+          bundler: "4.0.16"
+          bundler-cache: false
+      - name: Install locked Fastlane dependencies
+        run: bundle install --jobs 4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.artifact_id }}
+          path: .build/ci-release/download
+          merge-multiple: true
+      - name: Verify approval and exact candidate, notarize, then publish through Fastlane
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEVELOPMENT_TEAM: ${{ vars.WALI_TEAM_ID }}
+          WALI_CANDIDATE_ARCHIVE_SHA: ${{ needs.candidate.outputs.archive_sha }}
+          WALI_CANDIDATE_RECEIPT_SHA: ${{ needs.candidate.outputs.receipt_sha }}
+          WALI_CANDIDATE_APP_SHA: ${{ needs.candidate.outputs.app_sha }}
+          WALI_SIGNING_P12_BASE64: ${{ secrets.WALI_SIGNING_P12_BASE64 }}
+          WALI_SIGNING_P12_PASSWORD: ${{ secrets.WALI_SIGNING_P12_PASSWORD }}
+          WALI_NOTARY_KEY_BASE64: ${{ secrets.WALI_NOTARY_KEY_BASE64 }}
+          WALI_NOTARY_KEY_ID: ${{ vars.WALI_NOTARY_KEY_ID }}
+          WALI_NOTARY_ISSUER_ID: ${{ vars.WALI_NOTARY_ISSUER_ID }}
+        run: /usr/bin/ruby scripts/ci-release.rb publish
+      - name: Remove signing material even after failure or cancellation
+        if: always()
+        run: /usr/bin/ruby scripts/ci-release.rb cleanup

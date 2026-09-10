@@ -74,7 +74,7 @@ stapled-app digest so outer-DMG notarization can be retried.
 ## Publish the verified GitHub release
 
 After native journeys and the release review pass, merge the reviewed source
-and archive that exact `main` commit. Wait for its `source`, `contracts`,
+and archive that exact `main` commit. Wait for its `source`, `history-secrets`, `contracts`,
 `swift`, `store`, `backend`, and `media` GitHub Actions checks to succeed. Supply the
 existing GitHub credential as `GITHUB_API_TOKEN` through a protected process
 environment; never put it in a command argument, checked-in file, or log.
@@ -214,7 +214,7 @@ The metadata draft is not an upload input. No lane chooses those answers for the
 owner or establishes runtime acceptance from a successful source build.
 
 Publish the matching Developer ID release first. `store_upload` and
-`store_submit` both recheck current merged main and its six required CI jobs,
+`store_submit` both recheck current merged main and its seven required CI jobs,
 the signed exported Store PKG, the exact version/build/team, and the published
 GitHub tag and package/provenance digests. Keep the matching direct release
 artifacts under `.build/release`; a draft GitHub release does not satisfy this

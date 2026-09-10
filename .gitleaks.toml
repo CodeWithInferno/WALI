@@ -1,0 +1,4 @@
+title = "WALI source secret scan"
+
+[extend]
+useDefault = true

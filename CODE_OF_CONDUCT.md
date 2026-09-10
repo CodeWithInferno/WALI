@@ -29,7 +29,13 @@ Maintainers may edit, reject, remove, or restrict contributions and participatio
 
 ## Reporting
 
-Report conduct concerns privately to the repository owner through a private channel associated with the hosting account. Do not open a public issue containing sensitive personal information. Reports will be handled as confidentially as practical.
+Report conduct concerns privately to the repository owner. A monitored private
+conduct contact has not yet been published in this policy; request a private
+route without posting incident details or personal information. Do not use a
+public issue to disclose a sensitive report. Maintainers must publish and verify
+a route before public community launch, as recorded in the
+[publication checklist](docs/maintainers/publication.md). Reports should be
+handled as confidentially as practical; this policy promises no response deadline.
 
 ## Scope
 
