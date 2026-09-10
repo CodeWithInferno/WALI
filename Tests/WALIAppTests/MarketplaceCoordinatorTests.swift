@@ -624,6 +624,88 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         CatalogHomeSection(id: id, title: title, kind: .editorial, cursor: nil, items: [])
     }
 
+    func testEmailAuthenticationResumesFavoriteAndSavedOnlyAfterAdmission() async {
+        for saved in [false, true] {
+            let gateway = ScriptedCatalogGateway(homeSteps: [], detailValue: Self.detail())
+            let auth = EmailAuthProbe()
+            let coordinator = MarketplaceCoordinator(
+                authenticationMethod: .emailOTP, gateway: gateway, authStore: auth, emailAuth: auth
+            )
+            coordinator.loadDetail(wallpaperID: Self.wallpaperID)
+            await assertEmailEventually { coordinator.model.detailState == .ready }
+            if saved { coordinator.toggleSaved() } else { coordinator.toggleFavorite() }
+            coordinator.emailSignIn.email = "person@example.test"
+            coordinator.requestEmailCode()
+            await assertEmailEventually { coordinator.emailSignIn.phase == .code }
+            coordinator.emailSignIn.code = "123456"
+            coordinator.verifyEmailCode()
+            await assertEmailEventually { auth.hasPendingVerification }
+            await auth.commitAdmission()
+            let before = await gateway.interactionCallCount
+            XCTAssertEqual(before, 0)
+            auth.completeVerification()
+            await assertEmailEventually { await gateway.interactionCallCount == 1 }
+            XCTAssertEqual(coordinator.model.accountState, .signedIn(userID: auth.accepted.userID))
+            coordinator.stop()
+        }
+    }
+
+    func testEmailAuthenticationResumesReportForItsOriginalRelease() async {
+        let gateway = ScriptedCatalogGateway(homeSteps: [], detailValue: Self.detail())
+        let auth = EmailAuthProbe()
+        let coordinator = MarketplaceCoordinator(
+            authenticationMethod: .emailOTP, gateway: gateway, reportGateway: gateway,
+            authStore: auth, emailAuth: auth
+        )
+        coordinator.loadDetail(wallpaperID: Self.wallpaperID)
+        await assertEmailEventually { coordinator.model.detailState == .ready }
+        coordinator.reportSelectedWallpaper(kind: .technicalIssue, detail: "Video playback needs review.")
+        coordinator.emailSignIn.email = "person@example.test"
+        coordinator.requestEmailCode()
+        await assertEmailEventually { coordinator.emailSignIn.phase == .code }
+        coordinator.emailSignIn.code = "123456"
+        coordinator.verifyEmailCode()
+        await assertEmailEventually { auth.hasPendingVerification }
+        await auth.commitAdmission()
+        let before = await gateway.recordedReports()
+        XCTAssertTrue(before.isEmpty)
+        auth.completeVerification()
+        await assertEmailEventually { await gateway.recordedReports().count == 1 }
+        let reports = await gateway.recordedReports()
+        XCTAssertEqual(reports.first?.wallpaperID, Self.wallpaperID)
+        XCTAssertEqual(reports.first?.releaseID, Self.detail().summary.currentReleaseID)
+        coordinator.stop()
+    }
+
+    func testEmailAdmissionCannotResumeAfterDetailLeavesOrWindowCloses() async {
+        for closesWindow in [false, true] {
+            let gateway = ScriptedCatalogGateway(homeSteps: [], detailValue: Self.detail())
+            let auth = EmailAuthProbe()
+            let coordinator = MarketplaceCoordinator(
+                authenticationMethod: .emailOTP, gateway: gateway, authStore: auth, emailAuth: auth
+            )
+            coordinator.loadDetail(wallpaperID: Self.wallpaperID)
+            await assertEmailEventually { coordinator.model.detailState == .ready }
+            coordinator.toggleFavorite()
+            coordinator.emailSignIn.email = "person@example.test"
+            coordinator.requestEmailCode()
+            await assertEmailEventually { coordinator.emailSignIn.phase == .code }
+            coordinator.emailSignIn.code = "123456"
+            coordinator.verifyEmailCode()
+            await assertEmailEventually { auth.hasPendingVerification }
+            await auth.commitAdmission()
+            if closesWindow { coordinator.stop() }
+            else { coordinator.cancelDetail(wallpaperID: Self.wallpaperID) }
+            auth.completeVerification()
+            await assertEmailEventually { !coordinator.emailSignIn.isPresented && auth.completedVerifications == 1 }
+            let calls = await gateway.interactionCallCount
+            XCTAssertEqual(calls, 0)
+            XCTAssertEqual(coordinator.model.actionState, .idle, "No deferred mutation may even be queued")
+            XCTAssertEqual(auth.signOutCalls, 0)
+            coordinator.stop()
+        }
+    }
+
     private static let wallpaperID = "11111111-1111-4111-8111-111111111111"
     private static let releaseID = "22222222-2222-4222-8222-222222222222"
 

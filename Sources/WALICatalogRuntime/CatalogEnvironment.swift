@@ -1,7 +1,14 @@
 import Foundation
 import WALICatalog
 
+public enum CatalogAuthenticationMethod: String, Sendable, Hashable {
+    case disabled
+    case nativeApple = "native_apple"
+    case emailOTP = "email_otp"
+}
+
 public struct CatalogEnvironment: Sendable, Hashable {
+    public let authenticationMethod: CatalogAuthenticationMethod
     public let supabaseURL: URL
     public let publishableKey: String
     public let approvedCDNHosts: Set<String>
@@ -17,9 +24,11 @@ public struct CatalogEnvironment: Sendable, Hashable {
         signingKeyID: String,
         signingPublicKey: Data,
         recoverySigningKeyID: String? = nil,
-        recoverySigningPublicKey: Data? = nil
+        recoverySigningPublicKey: Data? = nil,
+        authenticationMethod: CatalogAuthenticationMethod = .nativeApple
     ) throws {
-        guard supabaseURL.scheme?.lowercased() == "https",
+        guard authenticationMethod != .disabled,
+              supabaseURL.scheme?.lowercased() == "https",
               supabaseURL.host != nil,
               supabaseURL.user == nil,
               supabaseURL.password == nil,
@@ -42,6 +51,7 @@ public struct CatalogEnvironment: Sendable, Hashable {
         else {
             throw CatalogRequestError.invalidConfiguration
         }
+        self.authenticationMethod = authenticationMethod
         self.supabaseURL = supabaseURL
         self.publishableKey = publishableKey
         self.approvedCDNHosts = approvedCDNHosts
@@ -52,17 +62,25 @@ public struct CatalogEnvironment: Sendable, Hashable {
     }
 
     public static func from(bundle: Bundle = .main) throws -> CatalogEnvironment {
-        guard isMarketplaceEnabled(infoDictionary: bundle.infoDictionary ?? [:]) else {
+        try from(infoDictionary: bundle.infoDictionary ?? [:], bundleIdentifier: bundle.bundleIdentifier)
+    }
+
+    static func from(infoDictionary info: [String: Any], bundleIdentifier: String?) throws -> CatalogEnvironment {
+        guard isMarketplaceEnabled(infoDictionary: info) else {
             throw CatalogRequestError.invalidConfiguration
         }
-        guard let urlString = bundle.object(forInfoDictionaryKey: "WALIMarketplaceURL") as? String,
+        guard let methodValue = info["WALIAuthenticationMethod"] as? String,
+              let method = CatalogAuthenticationMethod(rawValue: methodValue), method != .disabled
+        else { throw CatalogRequestError.invalidConfiguration }
+        if method == .emailOTP || bundleIdentifier == "io.github.codewithinferno.wali.WALI" {
+            try CatalogProductionConfiguration.validate(info: info, bundleIdentifier: bundleIdentifier)
+        }
+        guard let urlString = info["WALIMarketplaceURL"] as? String,
               let url = URL(string: urlString),
-              let key = bundle.object(forInfoDictionaryKey: "WALIMarketplacePublishableKey") as? String,
-              let hostString = bundle.object(forInfoDictionaryKey: "WALIApprovedCDNHosts") as? String,
-              let signingKeyID = bundle.object(forInfoDictionaryKey: "WALICatalogSigningKeyID") as? String,
-              let publicKeyValue = bundle.object(
-                  forInfoDictionaryKey: "WALICatalogSigningPublicKeyBase64"
-              ) as? String,
+              let key = info["WALIMarketplacePublishableKey"] as? String,
+              let hostString = info["WALIApprovedCDNHosts"] as? String,
+              let signingKeyID = info["WALICatalogSigningKeyID"] as? String,
+              let publicKeyValue = info["WALICatalogSigningPublicKeyBase64"] as? String,
               let signingPublicKey = Data.catalogBase64Decoded(publicKeyValue)
         else {
             throw CatalogRequestError.invalidConfiguration
@@ -72,12 +90,8 @@ public struct CatalogEnvironment: Sendable, Hashable {
                 $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             }
         )
-        let recoveryKeyID = bundle.object(
-            forInfoDictionaryKey: "WALICatalogRecoverySigningKeyID"
-        ) as? String
-        let recoveryPublicKey = (bundle.object(
-            forInfoDictionaryKey: "WALICatalogRecoverySigningPublicKeyBase64"
-        ) as? String).flatMap(Data.catalogBase64Decoded)
+        let recoveryKeyID = info["WALICatalogRecoverySigningKeyID"] as? String
+        let recoveryPublicKey = (info["WALICatalogRecoverySigningPublicKeyBase64"] as? String).flatMap(Data.catalogBase64Decoded)
         return try CatalogEnvironment(
             supabaseURL: url,
             publishableKey: key,
@@ -85,7 +99,8 @@ public struct CatalogEnvironment: Sendable, Hashable {
             signingKeyID: signingKeyID,
             signingPublicKey: signingPublicKey,
             recoverySigningKeyID: recoveryKeyID,
-            recoverySigningPublicKey: recoveryPublicKey
+            recoverySigningPublicKey: recoveryPublicKey,
+            authenticationMethod: method
         )
     }
 

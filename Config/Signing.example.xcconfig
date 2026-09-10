@@ -5,7 +5,7 @@ WALI_CODE_SIGN_IDENTITY = Developer ID Application
 WALI_DEVELOPMENT_TEAM = REPLACE_WITH_TEAM_ID
 // Developer ID provisioning profile names installed on this Mac.
 // All three profiles must authorize the direct app group. Developer ID does
-// not support native Sign in with Apple; direct Release stays local-only.
+// not support native Sign in with Apple; production uses ADR0022 email codes.
 WALI_APP_PROVISIONING_PROFILE =
 WALI_AGENT_PROVISIONING_PROFILE =
 WALI_HELPER_PROVISIONING_PROFILE =

@@ -1,4 +1,6 @@
-// Public client configuration only. Copy to Config/Marketplace.local.xcconfig.
+// Debug/Development public client configuration. Copy to Config/Marketplace.local.xcconfig.
+// Direct production is generated from the reviewed Marketplace.production.json.
+WALI_AUTHENTICATION_METHOD = native_apple
 // Never add service-role keys, database passwords, signing private keys, or VM credentials.
 WALI_MARKETPLACE_ENABLED = YES
 WALI_SUPABASE_URL = https:/$()/PROJECT_REF.supabase.co

@@ -9,6 +9,7 @@ require "rexml/document"
 require "rexml/xpath"
 require "set"
 require_relative "check-store-graph"
+require_relative "production-config"
 
 class ArchitectureChecker
   REQUIRED_MODULE_IDS = %w[
@@ -1239,18 +1240,33 @@ class ArchitectureChecker
       end
     end
 
-    marketplace_flag = @project.dig(
-      "targets", "WALI", "info", "properties", "WALIMarketplaceEnabled"
-    )
-    unless marketplace_flag == "$(WALI_MARKETPLACE_ENABLED)"
-      error("WALI WALIMarketplaceEnabled must reference $(WALI_MARKETPLACE_ENABLED)")
+    WALIProductionConfig::INFO_KEYS.each do |key, field|
+      unless @project.dig("targets", "WALI", "info", "properties", field) == "$(#{key})"
+        error("WALI #{field} must reference $(#{key})")
+      end
     end
-    release_value = resolved_target_build_setting(
-      "WALI", "Release", "WALI_MARKETPLACE_ENABLED"
-    )
-    release_settings = target_build_settings("WALI", "Release")
-    if release_value != "NO" || conditional_build_setting?("WALI_MARKETPLACE_ENABLED", release_settings)
-      error("Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO without conditional overrides")
+    WALIProductionConfig::AGENT_KEYS.each do |key|
+      field = WALIProductionConfig::INFO_KEYS.fetch(key)
+      unless @project.dig("targets", "WALIAgent", "info", "properties", field) == "$(#{key})"
+        error("WALIAgent #{field} must reference $(#{key})")
+      end
+    end
+    begin
+      raw = target_build_settings("WALI", "Release")
+      values = WALIProductionConfig::INFO_KEYS.keys.to_h do |key|
+        raise "conditional override for #{key}" if conditional_build_setting?(key, raw)
+        [key, resolved_target_build_setting("WALI", "Release", key)]
+      end
+      receipt = WALIProductionConfig.verify_settings!(values, root: @root)
+      WALIProductionConfig::AGENT_KEYS.each do |key|
+        next if receipt["release_mode"] == "local_preview" && !%w[WALI_RELEASE_MODE WALI_PRODUCTION_CONFIGURATION_SHA256].include?(key)
+        agent = target_build_settings("WALIAgent", "Release")
+        if conditional_build_setting?(key, agent) || resolved_target_build_setting("WALIAgent", "Release", key) != values[key]
+          raise "app/agent #{key} mismatch or conditional override"
+        end
+      end
+    rescue StandardError => exception
+      error("Release production configuration is invalid: #{exception.message}")
     end
   end
 
@@ -1357,7 +1373,7 @@ class ArchitectureChecker
   end
 
   def expand_build_setting(value, settings, label, stack)
-    value.to_s.gsub(/\$\(([^)]+)\)|\$\{([^}]+)\}/) do |reference|
+    value.to_s.gsub("$()", "").gsub("${}", "").gsub(/\$\(([^)]+)\)|\$\{([^}]+)\}/) do |reference|
       variable = Regexp.last_match(1) || Regexp.last_match(2)
       if variable == "inherited"
         ""
@@ -2805,7 +2821,7 @@ class ArchitectureChecker
     expected_direct = {
       "project_spec" => "project.yml", "generated_project" => "WALI.xcodeproj",
       "identity_policy_adr" => "docs/adr/0020-direct-release-identifier-namespace.md",
-      "release_policy_adr" => "docs/adr/0021-developer-id-local-only-entitlements.md",
+      "release_policy_adr" => "docs/adr/0022-direct-production-email-otp-authentication.md",
       "configurations" => CONFIGURATIONS
     }
     error("direct distribution registry differs from approved graph") unless direct == expected_direct

@@ -62,13 +62,16 @@ access to those identifiers. Release uses `io.github.codewithinferno.wali.*` und
 `group.com.wali.shared` and requires configured distribution signing. The credential-free test path compiles the UI-test
 target but does not launch its runner.
 
-Accepted [ADR 0021](docs/adr/0021-developer-id-local-only-entitlements.md) keeps
-direct Release local-only. Its foreground uses `Config/WALI-Release.entitlements`
-with the App Group and no native Sign in with Apple capability, which Developer
-ID does not support. Resolved build settings and the actual app must have
-marketplace `NO`; enabled or missing values fail. Development and Store retain
-their native sign-in entitlements. The hosted production workflow still requires
-marketplace `YES` and cannot publish this local-only candidate.
+[ADR 0021](docs/adr/0021-developer-id-local-only-entitlements.md) retains the
+supported Developer ID entitlement policy: the direct foreground uses
+`Config/WALI-Release.entitlements`, with the App Group and no native Sign in with
+Apple. Accepted [ADR 0022](docs/adr/0022-direct-production-email-otp-authentication.md)
+supersedes only its local-only activation condition. Direct Release has two
+explicit modes: local preview (`NO`, `disabled`) or verified production (`YES`,
+`email_otp`). Production settings and the actual app/agent must match the reviewed
+`Config/Marketplace.production.json` and its canonical digest. Missing, mixed,
+unresolved or conditional inputs fail. Local previews cannot be published by the
+production release lane. Development and Store retain native Apple authentication.
 
 ## Store distribution work
 

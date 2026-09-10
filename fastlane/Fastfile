@@ -297,6 +297,7 @@ platform :mac do
     end
     build_arguments = ["ENABLE_CODE_COVERAGE=NO", "CLANG_COVERAGE_MAPPING=NO"] +
       arguments.map { |key, value| "#{key}=#{value}" }
+    resolved_configuration = nil
     app = Bundler.with_unbundled_env do
       settings_json, _diagnostics, settings_status = Open3.capture3(
         "/usr/bin/xcrun", "xcodebuild",
@@ -309,7 +310,18 @@ platform :mac do
         "-showBuildSettings", "-json", *build_arguments
       )
       UI.user_error!("Cannot resolve direct Release build settings") unless settings_status.success?
-      WALIReleaseSupport.verify_direct_release_build_settings!(JSON.parse(settings_json))
+      # A scheme settings query includes only its explicit WALI build entry.
+      # Resolve the embedded agent separately with the same Release overrides.
+      agent_json, _agent_diagnostics, agent_status = Open3.capture3(
+        "/usr/bin/xcrun", "xcodebuild",
+        "-project", File.join(WALI_ROOT, "WALI.xcodeproj"),
+        "-target", "WALIAgent", "-configuration", "Release",
+        "-clonedSourcePackagesDirPath", File.join(WALI_ROOT, ".build", "xcode", "DerivedData", "SourcePackages"),
+        "-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile",
+        "-showBuildSettings", "-json", *build_arguments
+      )
+      UI.user_error!("Cannot resolve direct Release agent settings") unless agent_status.success?
+      resolved_configuration = WALIReleaseSupport.verify_direct_release_build_settings!(JSON.parse(settings_json) + JSON.parse(agent_json), root: WALI_ROOT)
       build_mac_app(
       project: File.join(WALI_ROOT, "WALI.xcodeproj"),
       scheme: "WALI",
@@ -330,11 +342,13 @@ platform :mac do
     end
     wali_verify(app, "Release")
     UI.user_error!("Source changed during archive") unless source_commit == WALIReleaseSupport.source_commit(WALI_ROOT)
-    File.write(File.join(WALI_RELEASE, "archive.json"), JSON.pretty_generate({
+    actual_configuration = WALIProductionConfig.verify_app!(app, root: WALI_ROOT)
+    UI.user_error!("Configuration changed during archive") unless actual_configuration == resolved_configuration
+    File.write(File.join(WALI_RELEASE, "archive.json"), JSON.pretty_generate(actual_configuration.merge({
       "source_commit" => source_commit,
       "team_id" => team,
       "app_sha256" => WALIReleaseSupport.bundle_digest(app)
-    }) + "\n")
+    })) + "\n")
     UI.success("Signed candidate: #{app}")
     UI.message("Native journeys and the final release review must pass before publication.")
   end
@@ -403,6 +417,8 @@ platform :mac do
     dmg = final_dmg
     wali_write_checksum(dmg)
     File.write(File.join(WALI_RELEASE, "release.json"), JSON.pretty_generate({
+      "release_mode" => archive_receipt.fetch("release_mode"),
+      "production_configuration_sha256" => archive_receipt.fetch("production_configuration_sha256"),
       "source_commit" => archive_receipt.fetch("source_commit"),
       "team_id" => archive_receipt.fetch("team_id"),
       "version" => version, "build" => build,
@@ -431,6 +447,7 @@ platform :mac do
     assets = WALIReleaseSupport.verify_assets!(receipt, directory: WALI_RELEASE)
     app = File.join(WALI_RELEASE, "candidate", "WALI.app")
     UI.user_error!("The notarized app changed") unless receipt.fetch("app_sha256") == WALIReleaseSupport.bundle_digest(app)
+    WALIReleaseSupport.verify_configuration_receipt!(receipt, app: app, root: WALI_ROOT, require_production: true)
     wali_verify(app, "Release")
     sh("/usr/bin/xcrun", "stapler", "validate", app)
     sh("/usr/sbin/spctl", "--assess", "--type", "execute", "--verbose=2", app)
@@ -441,7 +458,7 @@ platform :mac do
     notes = File.expand_path(options.fetch(:notes))
     UI.user_error!("Provide reviewed release notes") unless File.file?(notes) && !File.read(notes).strip.empty?
     tag = options.fetch(:tag)
-    UI.user_error!("Tag must match the packaged version") unless tag.match?(/\Av#{Regexp.escape(receipt.fetch("version"))}(?:-[A-Za-z0-9.-]+)?\z/)
+    WALIReleaseSupport.verify_prerelease_tag!(tag, version: receipt.fetch("version"))
     # Reject verbose HTTP diagnostics above; custom handlers also avoid the
     # default failure path that includes authentication headers.
     fail_api = {"*" => proc { |result| UI.user_error!("GitHub request failed with HTTP #{result[:status]}") }}

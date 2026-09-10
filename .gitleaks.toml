@@ -2,3 +2,13 @@ title = "WALI source secret scan"
 
 [extend]
 useDefault = true
+
+# Public SHA-256 of the synthetic sb_publishable_ + 32 x characters fixture.
+# Match this exact checksum, field, path, and rule; other fixture content stays scanned.
+[[allowlists]]
+description = "Known public checksum in the production configuration test vector"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^Fixtures/Release/production-config-v1\.json$''']
+regexTarget = "line"
+regexes = ['''^\s*"WALI_SUPABASE_PUBLISHABLE_KEY_SHA256": "7502b9282656dc13e73c37a7be79201b9b4c5d65cce3498391566ab84cf926e0",?\s*$''']

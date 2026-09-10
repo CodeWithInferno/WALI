@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Foreground composition surface that retains one live adapter per window.
+/// Each window owns its intentions and presentation; all share one auth service.
 public struct WALIConnectedAppRootView: View {
+    private static let foregroundServices = MarketplaceForegroundServices(bundle: .main)
     @State private var coordinator: WALIAppCoordinator
     @State private var marketplace: MarketplaceCoordinator
     @State private var visibilityID = UUID()
@@ -14,6 +15,7 @@ public struct WALIConnectedAppRootView: View {
         #endif
         _coordinator = State(initialValue: coordinator)
         _marketplace = State(initialValue: MarketplaceCoordinator.configured(
+            services: Self.foregroundServices,
             installHandler: { prepared in
                 try await coordinator.installCatalogRelease(prepared)
             },

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise the real pinned scanner in disposable Git repositories."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -50,6 +51,46 @@ class SecretScanTests(unittest.TestCase):
         result = self.scan()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads((self.repo / '.build/security/gitleaks-history.json').read_text()), [])
+
+    def add_production_checksum(self, relative_path='Fixtures/Release/production-config-v1.json', checksum=None):
+        fixture = json.loads((ROOT / 'Fixtures/Release/production-config-v1.json').read_text())
+        settings = fixture['settings']
+        synthetic_key = 'sb_publishable_' + 'x' * 32
+        self.assertEqual(settings['WALI_SUPABASE_PUBLISHABLE_KEY'], synthetic_key)
+        known_checksum = hashlib.sha256(synthetic_key.encode()).hexdigest()
+        self.assertEqual(settings['WALI_SUPABASE_PUBLISHABLE_KEY_SHA256'], known_checksum)
+        path = self.repo / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'WALI_SUPABASE_PUBLISHABLE_KEY_SHA256': checksum or known_checksum}, indent=4) + '\n')
+        self.command('git', 'add', relative_path)
+        self.command('git', 'commit', '-qm', 'add public checksum scanner fixture')
+
+    def test_known_synthetic_checksum_passes_only_in_release_fixture(self):
+        self.add_production_checksum()
+        result = self.scan()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_known_checksum_in_another_file_is_still_scanned(self):
+        self.add_production_checksum(relative_path='Config/unreviewed.json')
+        self.assertEqual(self.scan().returncode, 1)
+
+    def test_changed_checksum_in_release_fixture_is_still_scanned(self):
+        self.add_production_checksum(checksum=hashlib.sha256(b'an unreviewed scanner fixture').hexdigest())
+        self.assertEqual(self.scan().returncode, 1)
+
+    def test_token_in_release_fixture_is_still_scanned_and_redacted(self):
+        self.add_production_checksum()
+        token = 'ghp_' + ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(36))
+        path = self.repo / 'Fixtures/Release/production-config-v1.json'
+        with path.open('a') as output:
+            output.write('github_token = "' + token + '"\n')
+        self.command('git', 'add', str(path.relative_to(self.repo)))
+        self.command('git', 'commit', '-qm', 'add generated release scanner fixture token')
+        result = self.scan()
+        self.assertEqual(result.returncode, 1)
+        report = (self.repo / '.build/security/gitleaks-history.json').read_text()
+        self.assertTrue(any(finding['RuleID'] == 'github-pat' for finding in json.loads(report)))
+        self.assertNotIn(token, report + result.stdout + result.stderr)
 
     def test_deleted_synthetic_token_fails_and_report_is_redacted(self):
         token, path = self.add_synthetic_token()

@@ -39,8 +39,35 @@ class CIReleaseTests < Minitest::Test
     {"total_count" => 1, "branch_policies" => [{"name" => "main", "type" => "branch"}]}
   end
 
+  def setup
+    @configuration_root = Dir.mktmpdir("wali-ci-production-")
+    FileUtils.mkdir_p(File.join(@configuration_root, "Config"))
+    key = "sb_publishable_" + SecureRandom.hex(20)
+    @client = {
+      "WALI_MARKETPLACE_ENABLED" => "YES", "WALI_RELEASE_MODE" => "production", "WALI_AUTHENTICATION_METHOD" => "email_otp",
+      "WALI_SUPABASE_PROJECT_REF" => WALIProductionConfig::PROJECT_REF,
+      "WALI_SUPABASE_URL" => WALIProductionConfig::ORIGIN, "WALI_SUPABASE_PUBLISHABLE_KEY" => key,
+      "WALI_SUPABASE_PUBLISHABLE_KEY_SHA256" => Digest::SHA256.hexdigest(key),
+      "WALI_CATALOG_CDN_HOST" => "#{WALIProductionConfig::PROJECT_REF}.supabase.co",
+      "WALI_CATALOG_SIGNING_KEY_ID" => "primary-1", "WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64" => Base64.strict_encode64("a" * 32),
+      "WALI_CATALOG_RECOVERY_SIGNING_KEY_ID" => "recovery-1", "WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64" => Base64.strict_encode64("b" * 32),
+      "WALI_LEGAL_BASE_URL" => WALIProductionConfig::LEGAL_URL
+    }
+    write_reviewed_manifest(@client)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@configuration_root)
+  end
+
+  def write_reviewed_manifest(value)
+    manifest = {"schema_version" => 1, "settings" => value.reject { |key, _| key == WALIProductionConfig::DIGEST_KEY }}
+    File.write(File.join(@configuration_root, "Config/Marketplace.production.json"), JSON.generate(manifest))
+    value[WALIProductionConfig::DIGEST_KEY] = WALIProductionConfig.manifest_digest(manifest)
+  end
+
   def client
-    {"WALI_MARKETPLACE_ENABLED" => "YES", "WALI_SUPABASE_URL" => "https://catalog.example.com", "WALI_SUPABASE_PUBLISHABLE_KEY" => "sb_publishable_#{SecureRandom.hex(20)}", "WALI_CATALOG_CDN_HOST" => "cdn.example.com", "WALI_CATALOG_SIGNING_KEY_ID" => "primary-1", "WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64" => Base64.strict_encode64("a" * 32), "WALI_CATALOG_RECOVERY_SIGNING_KEY_ID" => "recovery-1", "WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64" => Base64.strict_encode64("b" * 32), "WALI_LEGAL_BASE_URL" => "https://example.com/legal"}
+    @client.dup
   end
 
   def profile(identifier = RELEASE_IDS.fetch("APP"))
@@ -83,14 +110,14 @@ class CIReleaseTests < Minitest::Test
   end
 
   def test_production_config_is_explicit_and_escapes_xcconfig_comment_delimiters
-    text = S.client_config(JSON.generate(client))
-    assert_includes text, "WALI_SUPABASE_URL = https:/$()/$()catalog.example.com\n"
-    assert_equal 9, text.lines.length
+    text = S.client_config(JSON.generate(client), root: @configuration_root)
+    assert_includes text, "WALI_SUPABASE_URL = https:/$()/$()afgxvhhubqzgpijcstsv.supabase.co\n"
+    assert_equal S::CLIENT_KEYS.length, text.lines.length
     assert_equal S::CLIENT_KEYS.length, S::CLIENT_INFO_KEYS.length
     value = client
     value["WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64"] = Base64.strict_encode64("\xff" * 32)
-    value["WALI_LEGAL_BASE_URL"] = "https://example.com/legal///version"
-    encoded = S.client_config(JSON.generate(value))
+    write_reviewed_manifest(value)
+    encoded = S.client_config(JSON.generate(value), root: @configuration_root)
     refute_includes encoded, "//"
     key_line = encoded.lines.find { |line| line.start_with?("WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64 = ") }
     assert_equal value.fetch("WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64"), key_line.split(" = ", 2).last.strip.gsub("$()", "")
@@ -113,7 +140,7 @@ class CIReleaseTests < Minitest::Test
     mutations.each do |mutation|
       value = client
       mutation.call(value)
-      assert_raises(RuntimeError, ArgumentError, URI::InvalidURIError) { S.client_config(JSON.generate(value)) }
+      assert_raises(RuntimeError, ArgumentError, URI::InvalidURIError) { S.client_config(JSON.generate(value), root: @configuration_root) }
     end
   end
 
@@ -174,8 +201,8 @@ class CIReleaseTests < Minitest::Test
       FileUtils.mkdir_p(File.join(root, "Config"))
       FileUtils.mkdir_p(File.join(root, "docs/release/notes"))
       File.write(File.join(root, "Config/Base.xcconfig"), "MARKETING_VERSION = 0.1.0\nCURRENT_PROJECT_VERSION = 1\n")
-      File.write(File.join(root, "docs/release/notes/v0.1.0.md"), "Reviewed release notes\n")
-      env = {"GITHUB_ACTIONS" => "true", "RUNNER_ENVIRONMENT" => "github-hosted", "GITHUB_REPOSITORY" => S::REPOSITORY, "GITHUB_EVENT_NAME" => "workflow_dispatch", "GITHUB_REF" => "refs/heads/main", "GITHUB_RUN_ATTEMPT" => "1", "GITHUB_RUN_ID" => "123", "GITHUB_SHA" => COMMIT, "GITHUB_WORKSPACE" => root, "WALI_RELEASE_TAG" => "v0.1.0"}
+      File.write(File.join(root, "docs/release/notes/v0.1.0-beta.1.md"), "Reviewed release notes\n")
+      env = {"GITHUB_ACTIONS" => "true", "RUNNER_ENVIRONMENT" => "github-hosted", "GITHUB_REPOSITORY" => S::REPOSITORY, "GITHUB_EVENT_NAME" => "workflow_dispatch", "GITHUB_REF" => "refs/heads/main", "GITHUB_RUN_ATTEMPT" => "1", "GITHUB_RUN_ID" => "123", "GITHUB_SHA" => COMMIT, "GITHUB_WORKSPACE" => root, "WALI_RELEASE_TAG" => "v0.1.0-beta.1"}
       WALIReleaseSupport.stub(:source_commit, COMMIT) do
         S.stub(:committed_notes?, true) do
         assert_equal "0.1.0", S.context(env, root: root).fetch("version")
@@ -183,7 +210,8 @@ class CIReleaseTests < Minitest::Test
           assert_raises(RuntimeError) { S.context(env.merge(key => value), root: root) }
         end
         end
-        File.unlink(File.join(root, "docs/release/notes/v0.1.0.md"))
+        assert_raises(RuntimeError) { S.context(env.merge("WALI_RELEASE_TAG" => "v0.1.0"), root: root) }
+        File.unlink(File.join(root, "docs/release/notes/v0.1.0-beta.1.md"))
         assert_raises(RuntimeError) { S.context(env, root: root) }
       end
     end

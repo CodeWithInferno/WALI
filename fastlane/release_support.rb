@@ -4,17 +4,39 @@ require "digest"
 require "find"
 require "json"
 require "open3"
+require_relative "../scripts/production-config"
 
 module WALIReleaseSupport
   module_function
 
-  def verify_direct_release_build_settings!(entries)
+  def verify_direct_release_build_settings!(entries, root: File.expand_path("..", __dir__))
     raise "Cannot identify resolved direct Release build settings" unless entries.is_a?(Array) && entries.all? { |entry| entry.is_a?(Hash) }
     foreground = entries.select { |entry| entry["target"] == "WALI" }
     raise "Require exactly one resolved WALI target" unless foreground.length == 1
     settings = foreground.first["buildSettings"]
-    unless settings.is_a?(Hash) && settings["CONFIGURATION"] == "Release" && settings["WALI_MARKETPLACE_ENABLED"] == "NO"
-      raise "Developer ID Release requires resolved WALI_MARKETPLACE_ENABLED=NO (ADR 0021)"
+    raise "Require resolved direct Release settings" unless settings.is_a?(Hash) && settings["CONFIGURATION"] == "Release"
+    receipt = WALIProductionConfig.verify_settings!(settings, root: root)
+    if receipt["release_mode"] == "production"
+      agents = entries.select { |entry| entry["target"] == "WALIAgent" }
+      raise "Require exactly one resolved agent" unless agents.length == 1 && agents.first["buildSettings"].is_a?(Hash)
+      agent = agents.first.fetch("buildSettings")
+      raise "Require resolved Release agent settings" unless agent["CONFIGURATION"] == "Release"
+      WALIProductionConfig::AGENT_KEYS.each do |key|
+        raise "Resolved app and agent production configuration differ" unless agent[key] == settings[key] && !agent.keys.any? { |candidate| candidate.start_with?("#{key}[") }
+      end
+    end
+    receipt
+  end
+
+  def verify_configuration_receipt!(receipt, app:, root:, require_production: false)
+    actual = WALIProductionConfig.verify_app!(app, root: root, require_production: require_production)
+    actual.each { |key, value| raise "Release configuration receipt differs from signed app" unless receipt.key?(key) && receipt[key] == value }
+    actual
+  end
+
+  def verify_prerelease_tag!(tag, version:)
+    unless tag.is_a?(String) && tag.bytesize <= 100 && tag.match?(/\Av#{Regexp.escape(version)}-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*\z/)
+      raise "The initial production release requires a prerelease tag (ADR 0022)"
     end
   end
 
@@ -57,6 +79,7 @@ module WALIReleaseSupport
   def verify_archive!(receipt, app:, root:)
     raise "Archive belongs to another source commit" unless receipt.fetch("source_commit") == source_commit(root)
     raise "App changed since the verified archive" unless receipt.fetch("app_sha256") == bundle_digest(app)
+    verify_configuration_receipt!(receipt, app: app, root: root)
   end
 
   def verify_assets!(receipt, directory:)

@@ -61,6 +61,16 @@ public struct WALIAppRootView: View {
                     actions.send(.updatePreferences(preferences))
                 }
             }
+            .sheet(isPresented: emailSignInPresented) {
+                EmailCodeSignInSheet(
+                    model: marketplace.emailSignIn,
+                    onRequest: marketplace.requestEmailCode,
+                    onVerify: marketplace.verifyEmailCode,
+                    onResend: marketplace.resendEmailCode,
+                    onChangeEmail: marketplace.changeSignInEmail,
+                    onCancel: marketplace.cancelEmailSignIn
+                )
+            }
             .sheet(isPresented: $showsPreview) {
                 if let selectedWallpaper {
                     WallpaperPreviewView(
@@ -190,6 +200,13 @@ public struct WALIAppRootView: View {
         .environment(
             \.waliOverlayLeadingBleed,
             WALIChromeLayout.overlayLeadingBleed(columnVisibility: columnVisibility)
+        )
+    }
+
+    private var emailSignInPresented: Binding<Bool> {
+        Binding(
+            get: { marketplace.emailSignIn.isPresented },
+            set: { if !$0 { marketplace.cancelEmailSignIn() } }
         )
     }
 
@@ -334,6 +351,7 @@ public struct WALIAppRootView: View {
         case .account:
             AccountView(
                 isMarketplaceAvailable: marketplace.isMarketplaceAvailable,
+                authenticationMethod: marketplace.authenticationMethod,
                 account: marketplace.model.accountState,
                 authenticationState: marketplace.model.authenticationState,
                 profile: marketplace.model.accountProfile,

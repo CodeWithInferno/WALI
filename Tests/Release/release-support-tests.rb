@@ -26,7 +26,7 @@ end
 
 # The same resolved settings are queried before the Developer ID archive.
 # An enabled, unexpanded, or ambiguous candidate must fail before compilation.
-settings = [{"target" => "WALI", "buildSettings" => {"CONFIGURATION" => "Release", "WALI_MARKETPLACE_ENABLED" => "NO"}}]
+settings = [{"target" => "WALI", "buildSettings" => {"CONFIGURATION" => "Release", "WALI_MARKETPLACE_ENABLED" => "NO", "WALI_RELEASE_MODE" => "local_preview", "WALI_AUTHENTICATION_METHOD" => "disabled", "WALI_PRODUCTION_CONFIGURATION_SHA256" => ""}}]
 WALIReleaseSupport.verify_direct_release_build_settings!(settings)
 [nil, true, false, "", "YES", "no", "NO ", " NO", "$(WALI_MARKETPLACE_ENABLED)", "0", 0].each do |value|
   changed = Marshal.load(Marshal.dump(settings))
@@ -43,6 +43,11 @@ end
   changed = Marshal.load(Marshal.dump(settings))
   changed.first.fetch("buildSettings")["CONFIGURATION"] = configuration
   rejects("another resolved configuration") { WALIReleaseSupport.verify_direct_release_build_settings!(changed) }
+end
+
+WALIReleaseSupport.verify_prerelease_tag!("v0.1.0-beta.1", version: "0.1.0")
+[nil, "v0.1.0", "v0.2.0-beta.1", "v0.1.0-", "v0.1.0-beta/1"].each do |tag|
+  rejects("stable or malformed initial release tag") { WALIReleaseSupport.verify_prerelease_tag!(tag, version: "0.1.0") }
 end
 
 Dir.mktmpdir("wali-release-fixtures-") do |directory|
@@ -74,8 +79,14 @@ Dir.mktmpdir("wali-release-fixtures-") do |directory|
   File.chmod(0o755, executable)
   link = File.join(app, "Contents", "current")
   File.symlink("MacOS/WALI", link)
-  receipt = {"source_commit" => commit, "app_sha256" => WALIReleaseSupport.bundle_digest(app)}
+  File.write(File.join(app, "Contents/Info.plist"), JSON.generate({"WALIMarketplaceEnabled" => "NO", "WALIReleaseMode" => "local_preview", "WALIAuthenticationMethod" => "disabled", "WALIProductionConfigurationSHA256" => ""}))
+  agent_contents = File.join(app, "Contents/Library/LoginItems/WALIAgent.app/Contents")
+  FileUtils.mkdir_p(agent_contents)
+  File.write(File.join(agent_contents, "Info.plist"), JSON.generate({"WALIReleaseMode" => "local_preview", "WALIProductionConfigurationSHA256" => ""}))
+  receipt = {"source_commit" => commit, "app_sha256" => WALIReleaseSupport.bundle_digest(app), "release_mode" => "local_preview", "production_configuration_sha256" => nil}
   WALIReleaseSupport.verify_archive!(receipt, app: app, root: root)
+  rejects("preview falsely labelled production") { WALIReleaseSupport.verify_archive!(receipt.merge("release_mode" => "production"), app: app, root: root) }
+  rejects("missing config receipt") { WALIReleaseSupport.verify_archive!(receipt.reject { |key, _| key == "production_configuration_sha256" }, app: app, root: root) }
   rejects("another source commit") { WALIReleaseSupport.verify_archive!(receipt.merge("source_commit" => "0" * 40), app: app, root: root) }
   File.write(executable, "different executable\n")
   rejects("changed bundle bytes") { WALIReleaseSupport.verify_archive!(receipt, app: app, root: root) }

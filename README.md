@@ -65,9 +65,11 @@ The branding and verified Finder installer layout are merged in
 product retains its optional, version-gated Lock Screen helper. Signed and
 notarized release packages are still gated on actual distribution credentials
 and the remaining release evidence; a local Debug DMG is not a distribution
-release. Direct Release currently supports local wallpapers only, with
-marketplace access disabled under
-[ADR 0021](docs/adr/0021-developer-id-local-only-entitlements.md).
+release. Direct Release defaults to local wallpapers only.
+[ADR 0022](docs/adr/0022-direct-production-email-otp-authentication.md) permits a
+production-bound prerelease with email-code sign-in once the reviewed public
+configuration and operational gates are complete. That activation has not yet
+occurred; see [production configuration](docs/release/production-configuration.md).
 
 The separate sandboxed Mac App Store implementation merged in
 [PR 27](https://github.com/CodeWithInferno/WALI/pull/27) under
@@ -76,13 +78,14 @@ native desktop and marketplace product, omits private Lock Screen integration,
 and uses its own library/settings identity. All six applicable PR checks passed,
 including 145 Store hostless tests and both Store structural builds. Signed
 sandbox journeys, production readiness, and App Store submission remain open.
-See the [release ledger](docs/release/2026-09-09-release-status.md) and
+See the [latest release ledger](docs/release/2026-09-10-production-auth-status.md) and
 [Fastlane workflow](docs/release/fastlane.md) for the current evidence and commands.
 The manual [GitHub Actions release workflow](docs/release/github-actions.md)
 archives a signed candidate, waits for native review of its exact digest, then
 notarizes and publishes those same bytes. That hosted workflow requires
-marketplace access and remains incompatible with the current local-only direct
-Release. Use the local Fastlane prerelease lanes and their native review gates.
+marketplace access and rejects local-preview candidates. Local Fastlane lanes
+can prepare a preview, but production publication requires the same production
+configuration and native review gates.
 Hosted signing setup and the first real run remain pending.
 
 ## Architecture

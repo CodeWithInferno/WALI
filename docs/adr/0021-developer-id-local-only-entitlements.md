@@ -1,12 +1,18 @@
 # 0021: Local-only Developer ID entitlements
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-09-10
 - owner_role: architecture_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner explicit session approval 2026-09-10: "Approve ADR 0021"
+- superseded_by: 0022
+- superseded_scope: 0022=direct_release_local_only_activation_condition
 - supersedes: 0020
 - supersedes_scope: 0020=direct_release_sign_in_with_apple_requirement
+
+ADR 0022 supersedes only the direct Release local-only activation condition.
+The supported entitlement, identity, signing, and native acceptance decisions
+below remain in force; this record preserves the original decision.
 
 ## Context
 

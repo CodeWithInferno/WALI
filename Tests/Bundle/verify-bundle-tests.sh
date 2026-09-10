@@ -22,6 +22,9 @@ write_bundle_plists() {
 <dict>
   <key>CFBundleExecutable</key><string>WALI</string>
   <key>WALIMarketplaceEnabled</key><string>NO</string>
+  <key>WALIAuthenticationMethod</key><string>disabled</string>
+  <key>WALIReleaseMode</key><string>local_preview</string>
+  <key>WALIProductionConfigurationSHA256</key><string></string>
   <key>WALIControlServiceName</key><string>${agent_identifier}.control</string>
   <key>WALIAgentLaunchAgentPlistName</key><string>${agent_identifier}.plist</string>
   <key>WALILockScreenHelperLaunchAgentPlistName</key><string>${helper_identifier}.plist</string>
@@ -54,6 +57,8 @@ EOF
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>WALIAgent</string>
+  <key>WALIReleaseMode</key><string>local_preview</string>
+  <key>WALIProductionConfigurationSHA256</key><string></string>
   <key>WALIControlServiceName</key><string>${agent_identifier}.control</string>
   <key>WALITranscoderServiceName</key><string>${transcoder_identifier}</string>
   <key>WALILockScreenHelperServiceName</key><string>${helper_identifier}.control</string>
@@ -255,7 +260,7 @@ for mutation in enabled missing unresolved lowercase padded multiline boolean in
     ' "${app}/Contents/Info.plist" "${mutation}"
     expect_verifier_failure \
         "release-marketplace-${mutation}" Release "${app}" \
-        "Release WALIMarketplaceEnabled must be the exact string NO"
+        "Release production configuration is invalid"
 done
 
 development_app="$(new_fixture \

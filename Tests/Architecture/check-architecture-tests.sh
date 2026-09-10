@@ -114,6 +114,9 @@ EOF
 MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
 WALI_MARKETPLACE_ENABLED = NO
+WALI_AUTHENTICATION_METHOD = native_apple
+WALI_RELEASE_MODE = development
+WALI_PRODUCTION_CONFIGURATION_SHA256 =
 EOF
 
     cat > "${root}/Config/Debug.xcconfig" <<'EOF'
@@ -147,6 +150,8 @@ EOF
 
     cat > "${root}/Config/Release.xcconfig" <<'EOF'
 #include "Base.xcconfig"
+WALI_RELEASE_MODE = local_preview
+WALI_AUTHENTICATION_METHOD = disabled
 WALI_APP_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALI
 WALI_AGENT_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALIAgent
 WALI_TRANSCODER_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALITranscoder
@@ -963,6 +968,7 @@ RUBY
         "${REPOSITORY_ROOT}/docs/adr/0018-sandboxed-mac-app-store-distribution.md" \
         "${REPOSITORY_ROOT}/docs/adr/0020-direct-release-identifier-namespace.md" \
         "${REPOSITORY_ROOT}/docs/adr/0021-developer-id-local-only-entitlements.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0022-direct-production-email-otp-authentication.md" \
         "${root}/docs/adr/"
 
     printf '%s\n' "${root}"
@@ -1048,6 +1054,7 @@ new_marketplace_fixture() {
         "${REPOSITORY_ROOT}/docs/adr/0018-sandboxed-mac-app-store-distribution.md" \
         "${REPOSITORY_ROOT}/docs/adr/0020-direct-release-identifier-namespace.md" \
         "${REPOSITORY_ROOT}/docs/adr/0021-developer-id-local-only-entitlements.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0022-direct-production-email-otp-authentication.md" \
         "${root}/docs/adr/"
     cp "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.json" \
         "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.signature" \
@@ -1154,28 +1161,28 @@ run_direct_release_policy_tests() {
         fixture="$(new_fixture "release-marketplace-${pass_count}-${failure_count}")"
         printf '\nWALI_MARKETPLACE_ENABLED = %s\n' "${value}" >> "${fixture}/Config/Release.xcconfig"
         expect_failure "Release rejects marketplace value ${value:-empty}" "${fixture}" \
-            'Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO'
+            'Release production configuration is invalid'
     done
 
     fixture="$(new_fixture release-marketplace-missing)"
     replace_text "${fixture}/Config/Base.xcconfig" 'WALI_MARKETPLACE_ENABLED = NO' ''
     expect_failure "Release rejects missing marketplace setting" "${fixture}" \
-        'Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO'
+        'Release production configuration is invalid'
 
     fixture="$(new_fixture release-marketplace-override)"
     printf '\nWALI_MARKETPLACE_ENABLED = YES\n' >> "${fixture}/Config/Release.xcconfig"
     WALI_ALLOW_RELEASE_MARKETPLACE=YES expect_failure "Release rejects legacy enablement bypass" "${fixture}" \
-        'Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO'
+        'Release production configuration is invalid'
 
     fixture="$(new_fixture release-marketplace-conditional)"
     printf '\nWALI_MARKETPLACE_ENABLED[sdk=macosx*] = YES\n' >> "${fixture}/Config/Release.xcconfig"
     expect_failure "Release rejects conditional marketplace override" "${fixture}" \
-        'Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO without conditional overrides'
+        'Release production configuration is invalid'
 
     fixture="$(new_fixture release-marketplace-conditional-reference)"
     printf '\nWALI_LOCAL_ONLY_FLAG = NO\nWALI_LOCAL_ONLY_FLAG[sdk=macosx*] = YES\nWALI_MARKETPLACE_ENABLED = $(WALI_LOCAL_ONLY_FLAG)\n' >> "${fixture}/Config/Release.xcconfig"
     expect_failure "Release rejects referenced conditional marketplace override" "${fixture}" \
-        'Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO without conditional overrides'
+        'Release production configuration is invalid'
 
     fixture="$(new_fixture release-marketplace-resolved-no)"
     printf '\nWALI_LOCAL_ONLY_FLAG = NO\nWALI_MARKETPLACE_ENABLED = $(WALI_LOCAL_ONLY_FLAG)\n' >> "${fixture}/Config/Release.xcconfig"
@@ -1198,6 +1205,20 @@ run_direct_release_policy_tests() {
         'data["targets"]["WALI"]["info"]["properties"]["WALIMarketplaceEnabled"] = "NO"'
     expect_failure "Release rejects hidden literal marketplace Info mapping" "${fixture}" \
         'WALI WALIMarketplaceEnabled must reference $(WALI_MARKETPLACE_ENABLED)'
+
+    fixture="$(new_fixture production-reviewed-manifest)"
+    cp "${REPOSITORY_ROOT}/Fixtures/Release/production-config-v1.json" "${fixture}/Config/Marketplace.production.json"
+    "${RUBY_BIN}" "${REPOSITORY_ROOT}/scripts/production-config.rb" render "${fixture}" >> "${fixture}/Config/Release.xcconfig"
+    expect_success "Production render resolves HTTPS and slash-bearing key bytes" "${fixture}"
+    mutate_yaml "${fixture}/project.yml" \
+        'data["targets"]["WALIAgent"]["settings"]["configs"]["Release"]["WALI_CATALOG_SIGNING_KEY_ID"] = "substituted"'
+    expect_failure "Production refuses mixed app agent trust" "${fixture}" 'Release production configuration is invalid'
+
+    fixture="$(new_fixture production-conditional-key)"
+    cp "${REPOSITORY_ROOT}/Fixtures/Release/production-config-v1.json" "${fixture}/Config/Marketplace.production.json"
+    "${RUBY_BIN}" "${REPOSITORY_ROOT}/scripts/production-config.rb" render "${fixture}" >> "${fixture}/Config/Release.xcconfig"
+    printf '\nWALI_AUTHENTICATION_METHOD[sdk=macosx*] = native_apple\n' >> "${fixture}/Config/Release.xcconfig"
+    expect_failure "Production rejects conditional auth override" "${fixture}" 'Release production configuration is invalid'
 
     fixture="$(new_fixture nonrelease-marketplace-enabled)"
     for configuration in Debug Development; do
