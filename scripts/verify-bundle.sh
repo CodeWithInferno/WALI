@@ -224,6 +224,17 @@ fi
 [[ "$(plist_value "${HELPER_PATH}/Contents/Info.plist" CFBundleIdentifier)" == "${expected_helper_identifier}" ]] ||
     fail "incorrect ${CONFIGURATION} lock screen helper bundle identifier"
 
+# Developer ID cannot support native Apple authentication (ADR0021).
+# Parse the plist value without coercion or shell newline trimming.
+if [[ "${CONFIGURATION}" == "Release" ]]; then
+    app_info_json="$(/usr/bin/plutil -convert json -o - "${APP_PATH}/Contents/Info.plist")" ||
+        fail "could not read Release foreground Info.plist"
+    printf '%s' "${app_info_json}" | /usr/bin/ruby -rjson -e '
+        info = JSON.parse(STDIN.read)
+        exit(info.is_a?(Hash) && info["WALIMarketplaceEnabled"] == "NO" ? 0 : 1)
+    ' || fail "Release WALIMarketplaceEnabled must be the exact string NO"
+fi
+
 # Generated lookup metadata must name the same peers as the signed wrappers.
 for spec in \
     "${APP_PATH}|WALIControlServiceName|${expected_control_service}" \

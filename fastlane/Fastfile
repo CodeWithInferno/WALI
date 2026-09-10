@@ -295,7 +295,21 @@ platform :mac do
     %w[MARKETING_VERSION CURRENT_PROJECT_VERSION].each do |key|
       arguments[key] = ENV[key] unless ENV[key].to_s.empty?
     end
+    build_arguments = ["ENABLE_CODE_COVERAGE=NO", "CLANG_COVERAGE_MAPPING=NO"] +
+      arguments.map { |key, value| "#{key}=#{value}" }
     app = Bundler.with_unbundled_env do
+      settings_json, _diagnostics, settings_status = Open3.capture3(
+        "/usr/bin/xcrun", "xcodebuild",
+        "-project", File.join(WALI_ROOT, "WALI.xcodeproj"),
+        "-scheme", "WALI", "-configuration", "Release",
+        "-destination", "generic/platform=macOS",
+        "-derivedDataPath", File.join(WALI_RELEASE, "DerivedData"),
+        "-clonedSourcePackagesDirPath", File.join(WALI_ROOT, ".build", "xcode", "DerivedData", "SourcePackages"),
+        "-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile",
+        "-showBuildSettings", "-json", *build_arguments
+      )
+      UI.user_error!("Cannot resolve direct Release build settings") unless settings_status.success?
+      WALIReleaseSupport.verify_direct_release_build_settings!(JSON.parse(settings_json))
       build_mac_app(
       project: File.join(WALI_ROOT, "WALI.xcodeproj"),
       scheme: "WALI",
@@ -311,7 +325,7 @@ platform :mac do
       disable_package_automatic_updates: true,
       skip_package_dependencies_resolution: true,
       xcodebuild_formatter: "",
-      xcargs: "ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO -onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution " + arguments.map { |key, value| "#{key}=#{Shellwords.escape(value)}" }.join(" ")
+      xcargs: "-onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution " + build_arguments.map { |argument| Shellwords.escape(argument) }.join(" ")
       )
     end
     wali_verify(app, "Release")

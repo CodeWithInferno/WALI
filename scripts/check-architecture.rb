@@ -1242,16 +1242,15 @@ class ArchitectureChecker
     marketplace_flag = @project.dig(
       "targets", "WALI", "info", "properties", "WALIMarketplaceEnabled"
     )
-    return if marketplace_flag.nil?
-
     unless marketplace_flag == "$(WALI_MARKETPLACE_ENABLED)"
       error("WALI WALIMarketplaceEnabled must reference $(WALI_MARKETPLACE_ENABLED)")
     end
     release_value = resolved_target_build_setting(
       "WALI", "Release", "WALI_MARKETPLACE_ENABLED"
     )
-    if release_value != "NO" && ENV["WALI_ALLOW_RELEASE_MARKETPLACE"] != "YES"
-      error("Release marketplace must default to NO")
+    release_settings = target_build_settings("WALI", "Release")
+    if release_value != "NO" || conditional_build_setting?("WALI_MARKETPLACE_ENABLED", release_settings)
+      error("Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO without conditional overrides")
     end
   end
 
@@ -1293,7 +1292,7 @@ class ArchitectureChecker
       assignment = line.sub(/\s+\/\/.*\z/, "").strip
       next if assignment.empty? || assignment.start_with?("#")
 
-      match = assignment.match(/\A([A-Za-z_][A-Za-z0-9_]*)\s*(\?=|\+=|=)\s*(.*?)\s*\z/)
+      match = assignment.match(/\A([A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]+\])*)\s*(\?=|\+=|=)\s*(.*?)\s*\z/)
       next unless match
 
       key = match[1]
@@ -1346,6 +1345,15 @@ class ArchitectureChecker
     raw = settings[key]
     @resolved_build_settings[cache_key] =
       raw.nil? ? nil : expand_build_setting(raw, settings, "#{target_name} #{configuration} #{key}", [key])
+  end
+
+  def conditional_build_setting?(key, settings, visited = Set.new)
+    return false unless visited.add?(key)
+    return true if settings.keys.any? { |candidate| candidate.start_with?("#{key}[") }
+
+    settings[key].to_s.scan(/\$\(([^)]+)\)|\$\{([^}]+)\}/).any? do |parenthesized, braced|
+      conditional_build_setting?(parenthesized || braced, settings, visited)
+    end
   end
 
   def expand_build_setting(value, settings, label, stack)
@@ -1532,15 +1540,22 @@ class ArchitectureChecker
       settings = target_build_settings(target_name, configuration)
       entitlements = settings["CODE_SIGN_ENTITLEMENTS"]
       if configuration == "Debug"
-        error("#{target_name} Debug must not use entitlements") if nonempty_string?(entitlements)
+        if nonempty_string?(entitlements) || conditional_build_setting?("CODE_SIGN_ENTITLEMENTS", settings)
+          error("#{target_name} Debug must not use entitlements")
+        end
         next
       end
 
-      expected_path = "Config/#{target_name}.entitlements"
-      unless entitlements == expected_path
+      expected_path = if target_name == "WALI" && configuration == "Release"
+        "Config/WALI-Release.entitlements"
+      else
+        "Config/#{target_name}.entitlements"
+      end
+      if entitlements != expected_path || conditional_build_setting?("CODE_SIGN_ENTITLEMENTS", settings)
         error("#{target_name} #{configuration} must use #{expected_path}")
         next
       end
+      validate_foreground_entitlement_contents(entitlements, configuration) if target_name == "WALI"
       raw_groups = entitlement_application_groups(entitlements, target_name, configuration, resolve: false)
       unless raw_groups == ["$(WALI_APP_GROUP_IDENTIFIER)"]
         error("#{target_name} entitlements must reference $(WALI_APP_GROUP_IDENTIFIER)")
@@ -1548,11 +1563,45 @@ class ArchitectureChecker
     end
 
     CONFIGURATIONS.each do |candidate|
-      entitlements = target_build_settings("WALITranscoder", candidate)["CODE_SIGN_ENTITLEMENTS"]
-      if nonempty_string?(entitlements)
+      settings = target_build_settings("WALITranscoder", candidate)
+      entitlements = settings["CODE_SIGN_ENTITLEMENTS"]
+      if nonempty_string?(entitlements) || conditional_build_setting?("CODE_SIGN_ENTITLEMENTS", settings)
         error("WALITranscoder #{candidate} must not use application-group entitlements")
       end
     end
+  end
+
+  def validate_foreground_entitlement_contents(relative, configuration)
+    expected = {"com.apple.security.application-groups" => ["$(WALI_APP_GROUP_IDENTIFIER)"]}
+    if configuration == "Development"
+      expected["com.apple.developer.applesignin"] = ["Default"]
+    end
+    label = "WALI #{configuration} entitlements must contain exactly the approved application group"
+    label += " and native Sign in with Apple" if configuration == "Development"
+    path = safe_relative_path(relative, "WALI #{configuration} entitlements")
+    unless path && File.file?(path)
+      error(label)
+      return
+    end
+
+    document = REXML::Document.new(File.read(path))
+    dictionary = REXML::XPath.first(document, "/plist/dict")
+    entries = dictionary && dictionary.elements.to_a
+    actual = {}
+    valid = entries && entries.length.even? && document.root.elements.to_a == [dictionary]
+    if valid
+      entries.each_slice(2) do |key, value|
+        unless key.name == "key" && key.elements.to_a.empty? && !actual.key?(key.text) &&
+            value.name == "array" && value.elements.to_a.all? { |item| item.name == "string" && item.elements.to_a.empty? }
+          valid = false
+          break
+        end
+        actual[key.text] = value.elements.to_a.map { |item| item.text.to_s }
+      end
+    end
+    error(label) unless valid && actual == expected
+  rescue REXML::ParseException
+    error(label)
   end
 
   def validate_project_package_references
@@ -2753,7 +2802,12 @@ class ArchitectureChecker
       return
     end
     direct = distributions["direct"]
-    expected_direct = {"project_spec" => "project.yml", "generated_project" => "WALI.xcodeproj", "identity_policy_adr" => "docs/adr/0020-direct-release-identifier-namespace.md", "configurations" => CONFIGURATIONS}
+    expected_direct = {
+      "project_spec" => "project.yml", "generated_project" => "WALI.xcodeproj",
+      "identity_policy_adr" => "docs/adr/0020-direct-release-identifier-namespace.md",
+      "release_policy_adr" => "docs/adr/0021-developer-id-local-only-entitlements.md",
+      "configurations" => CONFIGURATIONS
+    }
     error("direct distribution registry differs from approved graph") unless direct == expected_direct
     store = distributions["store"]
     expected_store = {

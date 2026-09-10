@@ -27,10 +27,20 @@ Do not publish screenshots containing authentication secrets or account exports.
 
 For distribution, copy `Config/Signing.example.xcconfig` to the ignored
 `Config/Signing.local.xcconfig`. Select the Developer ID certificate, team, and
-installed provisioning profiles for the app and both helpers. The app profile
-must support Sign in with Apple and `group.com.wali.shared`. Keep credentials
-and profiles outside source control. Production marketplace client settings
-belong in ignored `Config/Marketplace.production.local.xcconfig`.
+installed provisioning profiles for the app and both helpers. All three profiles
+must authorize their exact identities, the certificate, and `group.com.wali.shared`.
+Developer ID does not support native Sign in with Apple; direct Release uses
+`Config/WALI-Release.entitlements` without that capability under
+[ADR 0021](../adr/0021-developer-id-local-only-entitlements.md). Development and
+Store retain it. Keep credentials and profiles outside source control.
+
+Direct Release is local-only. Resolved build settings and the signed app must
+contain marketplace `NO`; missing, enabled, unresolved, or malformed flags fail.
+The ignored `Config/Marketplace.production.local.xcconfig` may explicitly set
+`WALI_MARKETPLACE_ENABLED = NO`. Marketplace activation requires a separately
+approved supported authentication design; native Apple client configuration
+alone cannot enable it. The hosted production workflow keeps its `YES` contract
+and cannot publish this local-only candidate. Use these local Fastlane lanes.
 
 ```sh
 DEVELOPMENT_TEAM=YOUR_TEAM_ID bundle exec fastlane mac archive
@@ -88,7 +98,8 @@ through that old app, then fully quit its app and agent. Do not launch old and
 new playback concurrently or patch Apple's wallpaper store to migrate state.
 The native acceptance below must cover the actual signed candidate; a fresh
 install does not prove an upgrade. Production marketplace activation separately
-requires the new native Apple client/audience to pass its authentication gates.
+requires a separately approved Developer ID authentication design under
+ADR 0021 and successful end-to-end authentication gates.
 
 ## Publish the verified GitHub release
 

@@ -24,6 +24,27 @@ def git(root, *arguments)
   output.strip
 end
 
+# The same resolved settings are queried before the Developer ID archive.
+# An enabled, unexpanded, or ambiguous candidate must fail before compilation.
+settings = [{"target" => "WALI", "buildSettings" => {"CONFIGURATION" => "Release", "WALI_MARKETPLACE_ENABLED" => "NO"}}]
+WALIReleaseSupport.verify_direct_release_build_settings!(settings)
+[nil, true, false, "", "YES", "no", "NO ", " NO", "$(WALI_MARKETPLACE_ENABLED)", "0", 0].each do |value|
+  changed = Marshal.load(Marshal.dump(settings))
+  changed.first.fetch("buildSettings")["WALI_MARKETPLACE_ENABLED"] = value
+  rejects("non-local-only resolved Release flag #{value.inspect}") { WALIReleaseSupport.verify_direct_release_build_settings!(changed) }
+end
+changed = Marshal.load(Marshal.dump(settings))
+changed.first.fetch("buildSettings").delete("WALI_MARKETPLACE_ENABLED")
+rejects("missing resolved marketplace flag") { WALIReleaseSupport.verify_direct_release_build_settings!(changed) }
+[nil, {}, [], [nil], settings * 2, [{"target" => "WALIAgent", "buildSettings" => settings.first.fetch("buildSettings")}], [{"target" => "WALI"}], [{"target" => "WALI", "buildSettings" => []}]].each do |value|
+  rejects("missing or ambiguous foreground build settings") { WALIReleaseSupport.verify_direct_release_build_settings!(value) }
+end
+[nil, "Debug", "Development", "StoreDevelopment", "AppStore"].each do |configuration|
+  changed = Marshal.load(Marshal.dump(settings))
+  changed.first.fetch("buildSettings")["CONFIGURATION"] = configuration
+  rejects("another resolved configuration") { WALIReleaseSupport.verify_direct_release_build_settings!(changed) }
+end
+
 Dir.mktmpdir("wali-release-fixtures-") do |directory|
   root = File.join(directory, "repo")
   FileUtils.mkdir_p(root)

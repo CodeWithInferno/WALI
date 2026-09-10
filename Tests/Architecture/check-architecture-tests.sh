@@ -171,6 +171,8 @@ EOF
 EOF
     cp "${root}/Config/WALI.entitlements" "${root}/Config/WALIAgent.entitlements"
     cp "${root}/Config/WALI.entitlements" "${root}/Config/WALILockScreenHelper.entitlements"
+    cp "${root}/Config/WALI.entitlements" "${root}/Config/WALI-Release.entitlements"
+    cp "${REPOSITORY_ROOT}/Config/WALI.entitlements" "${root}/Config/WALI.entitlements"
 
     cat > "${root}/Packages/WALICore/Package.swift" <<'EOF'
 // swift-tools-version: 6.2
@@ -960,6 +962,7 @@ RUBY
         "${REPOSITORY_ROOT}/docs/adr/0017-marketplace-hevc-main10.md" \
         "${REPOSITORY_ROOT}/docs/adr/0018-sandboxed-mac-app-store-distribution.md" \
         "${REPOSITORY_ROOT}/docs/adr/0020-direct-release-identifier-namespace.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0021-developer-id-local-only-entitlements.md" \
         "${root}/docs/adr/"
 
     printf '%s\n' "${root}"
@@ -1044,6 +1047,7 @@ new_marketplace_fixture() {
         "${REPOSITORY_ROOT}/docs/adr/0017-marketplace-hevc-main10.md" \
         "${REPOSITORY_ROOT}/docs/adr/0018-sandboxed-mac-app-store-distribution.md" \
         "${REPOSITORY_ROOT}/docs/adr/0020-direct-release-identifier-namespace.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0021-developer-id-local-only-entitlements.md" \
         "${root}/docs/adr/"
     cp "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.json" \
         "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.signature" \
@@ -1089,6 +1093,128 @@ expect_marketplace_failure() {
     fi
     pass_count=$((pass_count + 1))
 }
+
+run_direct_release_policy_tests() {
+    local fixture value configuration replacement
+
+    fixture="$(new_fixture release-group-only)"
+    mutate_yaml "${fixture}/project.yml" \
+        'data["targets"]["WALI"]["settings"]["configs"]["Release"]["CODE_SIGN_ENTITLEMENTS"] = "Config/WALI-Release.entitlements"'
+    expect_success "Release uses approved group-only entitlement file" "${fixture}"
+
+    fixture="$(new_fixture release-legacy-entitlements)"
+    mutate_yaml "${fixture}/project.yml" \
+        'data["targets"]["WALI"]["settings"]["configs"]["Release"]["CODE_SIGN_ENTITLEMENTS"] = "Config/WALI.entitlements"'
+    expect_failure "Release rejects shared native SIWA file" "${fixture}" \
+        'WALI Release must use Config/WALI-Release.entitlements'
+
+    fixture="$(new_fixture release-conditional-entitlements)"
+    mutate_yaml "${fixture}/project.yml" \
+        'data["targets"]["WALI"]["settings"]["configs"]["Release"]["CODE_SIGN_ENTITLEMENTS[sdk=macosx*]"] = "Config/WALI.entitlements"'
+    expect_failure "Release rejects conditional native SIWA path" "${fixture}" \
+        'WALI Release must use Config/WALI-Release.entitlements'
+
+    fixture="$(new_fixture debug-conditional-entitlements)"
+    mutate_yaml "${fixture}/project.yml" \
+        'settings = data["targets"]["WALI"]["settings"]; settings["configs"] ||= {}; settings["configs"]["Debug"] ||= {}; settings["configs"]["Debug"]["CODE_SIGN_ENTITLEMENTS[sdk=macosx*]"] = "Config/WALI.entitlements"'
+    expect_failure "Debug cannot gain conditional entitlements" "${fixture}" \
+        'WALI Debug must not use entitlements'
+
+    fixture="$(new_fixture worker-conditional-entitlements)"
+    mutate_yaml "${fixture}/project.yml" \
+        'settings = data["targets"]["WALITranscoder"]["settings"]; settings["configs"] ||= {}; settings["configs"]["Release"] ||= {}; settings["configs"]["Release"]["CODE_SIGN_ENTITLEMENTS[sdk=macosx*]"] = "Config/WALI-Release.entitlements"'
+    expect_failure "Worker cannot gain conditional application-group entitlements" "${fixture}" \
+        'WALITranscoder Release must not use application-group entitlements'
+
+    for value in signin extra duplicate malformed; do
+        fixture="$(new_fixture "release-entitlements-${value}")"
+        case "${value}" in
+            signin) replacement='<key>com.apple.developer.applesignin</key><array><string>Default</string></array></dict>' ;;
+            extra) replacement='<key>com.apple.security.network.client</key><true/></dict>' ;;
+            duplicate) replacement='<key>com.apple.security.application-groups</key><array><string>$(WALI_APP_GROUP_IDENTIFIER)</string></array></dict>' ;;
+            malformed) replacement='<key>orphan</key></dict>' ;;
+        esac
+        replace_text "${fixture}/Config/WALI-Release.entitlements" '</dict>' "${replacement}"
+        expect_failure "Release rejects ${value} entitlements" "${fixture}" \
+            'WALI Release entitlements must contain exactly the approved application group'
+    done
+
+    fixture="$(new_fixture development-release-entitlements)"
+    mutate_yaml "${fixture}/project.yml" \
+        'data["targets"]["WALI"]["settings"]["configs"]["Development"]["CODE_SIGN_ENTITLEMENTS"] = "Config/WALI-Release.entitlements"'
+    expect_failure "Development retains native SIWA entitlement selection" "${fixture}" \
+        'WALI Development must use Config/WALI.entitlements'
+
+    fixture="$(new_fixture development-missing-signin)"
+    cp "${fixture}/Config/WALI-Release.entitlements" "${fixture}/Config/WALI.entitlements"
+    expect_failure "Development retains native SIWA capability" "${fixture}" \
+        'WALI Development entitlements must contain exactly the approved application group and native Sign in with Apple'
+
+    for value in YES '' '$(MISSING_MARKETPLACE_FLAG)' 'false' 'NO YES'; do
+        fixture="$(new_fixture "release-marketplace-${pass_count}-${failure_count}")"
+        printf '\nWALI_MARKETPLACE_ENABLED = %s\n' "${value}" >> "${fixture}/Config/Release.xcconfig"
+        expect_failure "Release rejects marketplace value ${value:-empty}" "${fixture}" \
+            'Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO'
+    done
+
+    fixture="$(new_fixture release-marketplace-missing)"
+    replace_text "${fixture}/Config/Base.xcconfig" 'WALI_MARKETPLACE_ENABLED = NO' ''
+    expect_failure "Release rejects missing marketplace setting" "${fixture}" \
+        'Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO'
+
+    fixture="$(new_fixture release-marketplace-override)"
+    printf '\nWALI_MARKETPLACE_ENABLED = YES\n' >> "${fixture}/Config/Release.xcconfig"
+    WALI_ALLOW_RELEASE_MARKETPLACE=YES expect_failure "Release rejects legacy enablement bypass" "${fixture}" \
+        'Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO'
+
+    fixture="$(new_fixture release-marketplace-conditional)"
+    printf '\nWALI_MARKETPLACE_ENABLED[sdk=macosx*] = YES\n' >> "${fixture}/Config/Release.xcconfig"
+    expect_failure "Release rejects conditional marketplace override" "${fixture}" \
+        'Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO without conditional overrides'
+
+    fixture="$(new_fixture release-marketplace-conditional-reference)"
+    printf '\nWALI_LOCAL_ONLY_FLAG = NO\nWALI_LOCAL_ONLY_FLAG[sdk=macosx*] = YES\nWALI_MARKETPLACE_ENABLED = $(WALI_LOCAL_ONLY_FLAG)\n' >> "${fixture}/Config/Release.xcconfig"
+    expect_failure "Release rejects referenced conditional marketplace override" "${fixture}" \
+        'Release WALI_MARKETPLACE_ENABLED must resolve to exactly NO without conditional overrides'
+
+    fixture="$(new_fixture release-marketplace-resolved-no)"
+    printf '\nWALI_LOCAL_ONLY_FLAG = NO\nWALI_MARKETPLACE_ENABLED = $(WALI_LOCAL_ONLY_FLAG)\n' >> "${fixture}/Config/Release.xcconfig"
+    expect_success "Release accepts resolved exact NO" "${fixture}"
+
+    fixture="$(new_fixture release-missing-policy-registry)"
+    mutate_yaml "${fixture}/docs/architecture/modules.yml" \
+        'data["distributions"]["direct"].delete("release_policy_adr")'
+    expect_failure "Release policy remains governed in registry" "${fixture}" \
+        'direct distribution registry differs from approved graph'
+
+    fixture="$(new_fixture release-marketplace-missing-info)"
+    mutate_yaml "${fixture}/project.yml" \
+        'data["targets"]["WALI"]["info"]["properties"].delete("WALIMarketplaceEnabled")'
+    expect_failure "Release rejects missing marketplace Info mapping" "${fixture}" \
+        'WALI WALIMarketplaceEnabled must reference $(WALI_MARKETPLACE_ENABLED)'
+
+    fixture="$(new_fixture release-marketplace-literal-info)"
+    mutate_yaml "${fixture}/project.yml" \
+        'data["targets"]["WALI"]["info"]["properties"]["WALIMarketplaceEnabled"] = "NO"'
+    expect_failure "Release rejects hidden literal marketplace Info mapping" "${fixture}" \
+        'WALI WALIMarketplaceEnabled must reference $(WALI_MARKETPLACE_ENABLED)'
+
+    fixture="$(new_fixture nonrelease-marketplace-enabled)"
+    for configuration in Debug Development; do
+        printf '\nWALI_MARKETPLACE_ENABLED = YES\n' >> "${fixture}/Config/${configuration}.xcconfig"
+    done
+    expect_success "Non-Release marketplace configuration remains independent" "${fixture}"
+}
+
+if [[ "${1:-}" == "--release-policy" ]]; then
+    run_direct_release_policy_tests
+    if (( failure_count > 0 )); then
+        printf 'Architecture release policy fixture failures: %s; passes: %s\n' "${failure_count}" "${pass_count}" >&2
+        exit 1
+    fi
+    printf 'Architecture release policy tests passed: %s\n' "${pass_count}"
+    exit 0
+fi
 
 clean_fixture="$(new_fixture clean)"
 expect_success "clean architecture" "${clean_fixture}"
@@ -1902,15 +2028,7 @@ expect_failure \
     "${release_hardened_runtime_fixture}" \
     "WALI Release ENABLE_HARDENED_RUNTIME must be YES"
 
-release_marketplace_fixture="$(new_fixture enabled-release-marketplace)"
-replace_text \
-    "${release_marketplace_fixture}/Config/Release.xcconfig" \
-    '#include "Base.xcconfig"' \
-    $'#include "Base.xcconfig"\nWALI_MARKETPLACE_ENABLED = YES'
-expect_failure \
-    "Release marketplace default off" \
-    "${release_marketplace_fixture}" \
-    "Release marketplace must default to NO"
+run_direct_release_policy_tests
 
 duplicate_surface_id_fixture="$(new_fixture duplicate-surface-id)"
 mutate_yaml "${duplicate_surface_id_fixture}/docs/compatibility/surfaces.yml" \

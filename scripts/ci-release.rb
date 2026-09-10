@@ -172,7 +172,6 @@ module WALICIRelease
     entitlements = data.fetch("Entitlements")
     demand(entitlements["com.apple.application-identifier"] == "#{team}.#{identifier}" && entitlements["com.apple.developer.team-identifier"] == team && entitlements["get-task-allow"] != true && entitlements["com.apple.security.get-task-allow"] != true, "Profile app identity or distribution entitlement differs")
     demand(entitlements.fetch("com.apple.security.application-groups", []).include?("group.com.wali.shared"), "Profile must authorize the direct shared app group")
-    demand(entitlements["com.apple.developer.applesignin"] == ["Default"], "Main app profile must authorize Sign in with Apple") if identifier == PROFILE_IDS.fetch("APP")
     demand(data.fetch("DeveloperCertificates", []).any? { |der| Digest::SHA256.hexdigest(der) == certificate_sha256 }, "Profile does not authorize the imported signing certificate")
     data.fetch("UUID")
   end

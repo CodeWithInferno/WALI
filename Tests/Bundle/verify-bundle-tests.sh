@@ -21,6 +21,7 @@ write_bundle_plists() {
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>WALI</string>
+  <key>WALIMarketplaceEnabled</key><string>NO</string>
   <key>WALIControlServiceName</key><string>${agent_identifier}.control</string>
   <key>WALIAgentLaunchAgentPlistName</key><string>${agent_identifier}.plist</string>
   <key>WALILockScreenHelperLaunchAgentPlistName</key><string>${helper_identifier}.plist</string>
@@ -229,6 +230,33 @@ expect_verifier_failure \
     Release \
     "${release_app}" \
     "Release verification requires sealed signatures on all runtime bundles"
+
+# Actual Release metadata must be exactly the local-only string, before signing.
+for mutation in enabled missing unresolved lowercase padded multiline boolean integer array dictionary; do
+    app="${TEMP_ROOT}/release-marketplace-${mutation}.app"
+    cp -R "${release_app}" "${app}"
+    /usr/bin/ruby -rjson -ropen3 -e '
+        path, mutation = ARGV
+        output, status = Open3.capture2("/usr/bin/plutil", "-convert", "json", "-o", "-", path)
+        abort "could not read fixture Info.plist" unless status.success?
+        info = JSON.parse(output)
+        values = {
+          "enabled" => "YES", "unresolved" => "$(WALI_MARKETPLACE_ENABLED)",
+          "lowercase" => "no", "padded" => "NO ", "multiline" => "NO\n",
+          "boolean" => false, "integer" => 0, "array" => ["NO"], "dictionary" => {"value" => "NO"}
+        }
+        if mutation == "missing"
+          info.delete("WALIMarketplaceEnabled")
+        else
+          info["WALIMarketplaceEnabled"] = values.fetch(mutation)
+        end
+        File.write(path, JSON.generate(info))
+        abort "could not write fixture Info.plist" unless system("/usr/bin/plutil", "-convert", "xml1", path)
+    ' "${app}/Contents/Info.plist" "${mutation}"
+    expect_verifier_failure \
+        "release-marketplace-${mutation}" Release "${app}" \
+        "Release WALIMarketplaceEnabled must be the exact string NO"
+done
 
 development_app="$(new_fixture \
     development-adhoc \

@@ -57,9 +57,10 @@ validator_arguments() {
     local label="$1"
     local identifier="$2"
     local expected_group="$3"
+    local configuration="${4:-Development}"
 
     printf '%s\0' \
-        --configuration Development \
+        --configuration "${configuration}" \
         --label "${label}" \
         --bundle-identifier "${identifier}" \
         --team TESTTEAM01 \
@@ -71,11 +72,12 @@ run_validator() {
     local label="$2"
     local identifier="$3"
     local expected_group="$4"
+    local configuration="${5:-Development}"
     local -a arguments=()
 
     while IFS= read -r -d '' argument; do
         arguments+=("${argument}")
-    done < <(validator_arguments "${label}" "${identifier}" "${expected_group}")
+    done < <(validator_arguments "${label}" "${identifier}" "${expected_group}" "${configuration}")
 
     "${VALIDATOR}" "${arguments[@]}" < "${metadata}"
 }
@@ -86,10 +88,11 @@ expect_success() {
     local label="$3"
     local identifier="$4"
     local expected_group="$5"
+    local configuration="${6:-Development}"
     local output="${TEMP_ROOT}/${name}.out"
 
     if run_validator \
-        "${metadata}" "${label}" "${identifier}" "${expected_group}" \
+        "${metadata}" "${label}" "${identifier}" "${expected_group}" "${configuration}" \
         >"${output}" 2>&1; then
         pass_count=$((pass_count + 1))
     else
@@ -106,10 +109,11 @@ expect_failure() {
     local identifier="$4"
     local expected_group="$5"
     local expected="$6"
+    local configuration="${7:-Development}"
     local output="${TEMP_ROOT}/${name}.out"
 
     if run_validator \
-        "${metadata}" "${label}" "${identifier}" "${expected_group}" \
+        "${metadata}" "${label}" "${identifier}" "${expected_group}" "${configuration}" \
         >"${output}" 2>&1; then
         printf 'RED GAP: %s expected metadata failure\n' "${name}" >&2
         failure_count=$((failure_count + 1))
@@ -222,6 +226,48 @@ expect_failure \
     "${worker_identifier}" \
     "" \
     "team entitlement"
+
+# Development retains its existing native authentication capability.
+development_siwa="${TEMP_ROOT}/development-siwa.json"
+cp "${valid_app}" "${development_siwa}"
+mutate_metadata "${development_siwa}" 'data["entitlements"]["com.apple.developer.applesignin"] = ["Default"]'
+expect_success "Development native Apple authentication" "${development_siwa}" \
+    "WALI.app" "${app_identifier}" "group.com.wali.development.shared"
+
+release_identifier="io.github.codewithinferno.wali.WALI"
+valid_release="$(new_metadata valid-release "${release_identifier}" yes)"
+mutate_metadata "${valid_release}" '
+    data["authorities"] = ["Developer ID Application: Fixture"]
+    data["timestamp"] = "2026-09-10T00:00:00Z"
+    data["entitlements"]["com.apple.security.application-groups"] = ["group.com.wali.shared"]
+'
+expect_success "valid local-only Release signature" "${valid_release}" \
+    "WALI.app" "${release_identifier}" "group.com.wali.shared" Release
+
+for value in '["Default"]' '[]' 'false' 'nil'; do
+    metadata="${TEMP_ROOT}/release-siwa.json"
+    cp "${valid_release}" "${metadata}"
+    mutate_metadata "${metadata}" "data[\"entitlements\"][\"com.apple.developer.applesignin\"] = ${value}"
+    expect_failure "Release native Apple authentication ${value}" "${metadata}" \
+        "WALI.app" "${release_identifier}" "group.com.wali.shared" \
+        "Release foreground must not claim native Sign in with Apple" Release
+done
+
+declare -a release_failures=(
+    'release-timestamp|data.delete("timestamp")|secure timestamp'
+    'release-debugger|data["entitlements"]["com.apple.security.get-task-allow"] = true|debugger attachment'
+    'release-authority|data["authorities"] = ["Apple Development: Fixture"]|Developer ID Application: authority'
+    'release-identity|data["entitlements"]["com.apple.application-identifier"] = "TESTTEAM01.com.wali.WALI"|application identifier'
+    'release-group|data["entitlements"]["com.apple.security.application-groups"] = ["group.example.shared"]|application group'
+)
+for entry in "${release_failures[@]}"; do
+    IFS='|' read -r name mutation expected <<< "${entry}"
+    metadata="${TEMP_ROOT}/${name}.json"
+    cp "${valid_release}" "${metadata}"
+    mutate_metadata "${metadata}" "${mutation}"
+    expect_failure "${name}" "${metadata}" "WALI.app" "${release_identifier}" \
+        "group.com.wali.shared" "${expected}" Release
+done
 
 if (( failure_count > 0 )); then
     printf 'Signature metadata fixture failures: %s; passes: %s\n' \

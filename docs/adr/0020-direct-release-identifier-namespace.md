@@ -1,12 +1,19 @@
 # 0020: Register an available namespace for direct distribution
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-09-10
 - owner_role: architecture_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner explicit session approval 2026-09-10: "yes" to ADR 0020 and the io.github.codewithinferno.wali identity proposal
 - supersedes: 0018
 - supersedes_scope: 0018=direct_release_identifier_namespace
+- superseded_by: 0021
+- superseded_scope: 0021=direct_release_sign_in_with_apple_requirement
+
+[ADR 0021](0021-developer-id-local-only-entitlements.md) supersedes only the
+direct Release native Sign in with Apple requirement and its assumption about
+future native marketplace authentication. The original decision below is
+retained as history; the identity namespace and other requirements still apply.
 
 ## Context
 

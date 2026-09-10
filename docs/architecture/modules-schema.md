@@ -233,7 +233,9 @@ existing Debug/Development/Release configurations. The top-level current/target
 module and edge registry continues to describe this direct distribution.
 Its `identity_policy_adr` references
 `docs/adr/0020-direct-release-identifier-namespace.md`, the accepted direct
-Release namespace policy.
+Release namespace policy. Its `release_policy_adr` references
+`docs/adr/0021-developer-id-local-only-entitlements.md`, the accepted local-only
+Developer ID entitlement and marketplace policy.
 
 `distributions.store` records `project-store.yml`, `WALIStore.xcodeproj`, exact
 StoreDevelopment/AppStore configurations, the eight shared production targets,

@@ -44,8 +44,9 @@ class CIReleaseTests < Minitest::Test
   end
 
   def profile(identifier = RELEASE_IDS.fetch("APP"))
-    entitlements = {"com.apple.application-identifier" => "#{TEAM}.#{identifier}", "com.apple.developer.team-identifier" => TEAM, "get-task-allow" => false, "com.apple.security.application-groups" => ["group.com.wali.shared"]}
-    entitlements["com.apple.developer.applesignin"] = ["Default"] if [RELEASE_IDS.fetch("APP"), LEGACY_IDS.fetch("APP")].include?(identifier)
+    # Shape of the downloaded Developer ID profiles; values and certificate bytes
+    # are synthetic. Native Sign in with Apple is unavailable for this purpose.
+    entitlements = {"com.apple.application-identifier" => "#{TEAM}.#{identifier}", "com.apple.developer.team-identifier" => TEAM, "keychain-access-groups" => ["#{TEAM}.*"], "com.apple.security.application-groups" => ["group.com.wali.shared"]}
     {"UUID" => "12345678-1234-1234-1234-123456789ABC", "TeamIdentifier" => [TEAM], "Platform" => ["OSX"], "ProvisionsAllDevices" => true, "ExpirationDate" => "2030-01-01T00:00:00Z", "DeveloperCertificates" => ["fixture certificate bytes"], "Entitlements" => entitlements}
   end
 
@@ -134,15 +135,10 @@ class CIReleaseTests < Minitest::Test
     end
   end
 
-  def test_new_foreground_profile_requires_exact_sign_in_with_apple_capability
-    [nil, [], "Default", ["PrimaryApp"], ["Default", "unexpected"]].each do |capability|
-      value = profile
-      value.fetch("Entitlements")["com.apple.developer.applesignin"] = capability
-      assert_raises(RuntimeError) { verify_profile(value) }
-    end
-    %w[AGENT HELPER].each do |kind|
-      identifier = RELEASE_IDS.fetch(kind)
+  def test_downloaded_developer_id_profile_shape_passes_without_native_sign_in_with_apple
+    RELEASE_IDS.each_value do |identifier|
       value = profile(identifier)
+      assert_equal %w[com.apple.application-identifier com.apple.developer.team-identifier com.apple.security.application-groups keychain-access-groups], value.fetch("Entitlements").keys.sort
       refute value.fetch("Entitlements").key?("com.apple.developer.applesignin")
       assert_equal value.fetch("UUID"), verify_profile(value, identifier)
     end
@@ -159,6 +155,8 @@ class CIReleaseTests < Minitest::Test
       ->(v) { v["ExpirationDate"] = "2020-01-01T00:00:00Z" },
       ->(v) { v["DeveloperCertificates"] = ["unrelated certificate"] },
       ->(v) { v["Entitlements"]["com.apple.application-identifier"] = "#{TEAM}.*" },
+      ->(v) { v["Entitlements"]["com.apple.developer.team-identifier"] = "OTHER12345" },
+      ->(v) { v["Entitlements"]["get-task-allow"] = true },
       ->(v) { v["Entitlements"]["com.apple.security.get-task-allow"] = true },
       ->(v) { v["Entitlements"]["com.apple.security.application-groups"] = [] }
     ]
