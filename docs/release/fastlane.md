@@ -42,6 +42,13 @@ approved supported authentication design; native Apple client configuration
 alone cannot enable it. The hosted production workflow keeps its `YES` contract
 and cannot publish this local-only candidate. Use these local Fastlane lanes.
 
+Discover, Browse, and Account remain visible in the local-only build with an
+explicit unavailable explanation. Account keeps its Legal & Support links;
+Apple sign-in, creator tools, and moderation controls are not offered. The
+coordinator also rejects authentication and catalog actions when unavailable,
+including actions reached through stale in-memory account or detail state.
+A configured marketplace with an empty catalog keeps its separate empty state.
+
 ```sh
 DEVELOPMENT_TEAM=YOUR_TEAM_ID bundle exec fastlane mac archive
 ```

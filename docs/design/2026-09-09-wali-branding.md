@@ -10,6 +10,16 @@ on a light surface, and white lockup on a blue surface. These source files are
 unaltered. The earlier work under `output/branding/wali-fold/` is separate and
 is not used by the application or installer.
 
+## Artwork license — 2026-09-10
+
+The repository owner approved explicit Apache License 2.0 coverage for the
+original supplied artwork and its generated application and installer
+resources. [The branding license](../../Resources/Branding/LICENSE.md) names
+the three source PNGs, the exports under `Resources/Branding/`, and the AppIcon,
+WALIMark, and WALIMenuBar asset sets. Copyright remains with the respective
+contributors; Apache License 2.0 section 6 governs trademark permissions.
+Separately supplied media and third-party artwork retain their own terms.
+
 ## Master artwork
 
 `scripts/generate-brand-assets.py` extracts the transparent mark's alpha

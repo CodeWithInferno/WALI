@@ -19,10 +19,13 @@ The repository owner authorizes publication under [governance](../../GOVERNANCE.
 
 ## Before making source public
 
-- Confirm explicit redistribution terms for branding and derived image assets.
-  [NOTICE](../../NOTICE) and [ADR 0007](../adr/0007-apache-2-licensing.md) do not
-  automatically license wallpaper, video, image, or audio content. Do not infer
-  rights from an owner-supplied file or a successful media scan.
+- Preserve [the explicit Apache 2.0 branding license](../../Resources/Branding/LICENSE.md)
+  for the original supplied PNGs, generated branding, and AppIcon, WALIMark,
+  and WALIMenuBar asset sets. [NOTICE](../../NOTICE) and
+  [ADR 0007](../adr/0007-apache-2-licensing.md) continue to require separate,
+  explicit licenses for other wallpaper, video, image, audio, and catalog
+  content. Verify terms for newly added artwork; do not infer rights from an
+  owner-supplied file or a successful media scan.
 - Review tracked files, reachable history, commit identity metadata, hosted PR
   refs, Actions logs/artifacts, and release attachments intended for exposure.
   Follow the [secret-scanning runbook](../security/secret-scanning.md). Routine

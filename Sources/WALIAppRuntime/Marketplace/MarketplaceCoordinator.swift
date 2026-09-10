@@ -184,6 +184,17 @@ public final class MarketplaceCoordinator {
     )
 
     public let model: WALIMarketplaceModel
+    public let isMarketplaceAvailable: Bool
+    static let unavailableAccountMessage = "Marketplace accounts are unavailable in this build. Your local wallpapers remain available in Library."
+
+    public var canShowCreatorTools: Bool {
+        guard isMarketplaceAvailable, case .signedIn = model.accountState else { return false }
+        return true
+    }
+
+    public var canShowModeratorTools: Bool {
+        isMarketplaceAvailable && creatorContext.canShowModeratorTools
+    }
     public let creatorContext: MarketplaceCreatorContext
     public let creatorGateway: (any CreatorStudioGateway)?
     public let moderatorAccess: ModeratorAccessModel?
@@ -258,6 +269,7 @@ public final class MarketplaceCoordinator {
 
     public init(
         model: WALIMarketplaceModel = WALIMarketplaceModel(),
+        isMarketplaceAvailable: Bool = true,
         gateway: (any CatalogGateway)? = nil,
         reportGateway: (any CatalogReportGateway)? = nil,
         accountGateway: (any AccountPrivacyGateway)? = nil,
@@ -276,27 +288,28 @@ public final class MarketplaceCoordinator {
         creatorRequestTimeout: Duration = .seconds(15)
     ) {
         self.model = model
-        self.gateway = gateway
-        self.reportGateway = reportGateway
-        self.accountGateway = accountGateway
-        self.creatorGateway = creatorGateway
-        self.creatorAuthorizationGateway = creatorAuthorizationGateway
-        self.moderationGateway = moderationGateway
+        self.isMarketplaceAvailable = isMarketplaceAvailable
+        self.gateway = isMarketplaceAvailable ? gateway : nil
+        self.reportGateway = isMarketplaceAvailable ? reportGateway : nil
+        self.accountGateway = isMarketplaceAvailable ? accountGateway : nil
+        self.creatorGateway = isMarketplaceAvailable ? creatorGateway : nil
+        self.creatorAuthorizationGateway = isMarketplaceAvailable ? creatorAuthorizationGateway : nil
+        self.moderationGateway = isMarketplaceAvailable ? moderationGateway : nil
         creatorContext = MarketplaceCreatorContext(
-            creatorGateway: creatorGateway,
-            uploadTransport: creatorUploadTransport,
-            moderationGateway: moderationGateway,
-            presentationMediaCache: presentationMediaCache
+            creatorGateway: isMarketplaceAvailable ? creatorGateway : nil,
+            uploadTransport: isMarketplaceAvailable ? creatorUploadTransport : nil,
+            moderationGateway: isMarketplaceAvailable ? moderationGateway : nil,
+            presentationMediaCache: isMarketplaceAvailable ? presentationMediaCache : nil
         )
-        self.authStore = authStore
-        self.mfaStore = mfaStore
-        moderatorAccess = mfaStore.map { ModeratorAccessModel(store: $0) }
-        self.appleSignIn = appleSignIn
-        self.installPreparer = installPreparer
-        self.presentationMediaCache = presentationMediaCache
-        self.securityStore = securityStore
-        self.installHandler = installHandler
-        self.securityHandler = securityHandler
+        self.authStore = isMarketplaceAvailable ? authStore : nil
+        self.mfaStore = isMarketplaceAvailable ? mfaStore : nil
+        moderatorAccess = self.mfaStore.map { ModeratorAccessModel(store: $0) }
+        self.appleSignIn = isMarketplaceAvailable ? appleSignIn : nil
+        self.installPreparer = isMarketplaceAvailable ? installPreparer : nil
+        self.presentationMediaCache = isMarketplaceAvailable ? presentationMediaCache : nil
+        self.securityStore = isMarketplaceAvailable ? securityStore : nil
+        self.installHandler = isMarketplaceAvailable ? installHandler : nil
+        self.securityHandler = isMarketplaceAvailable ? securityHandler : nil
         self.creatorRequestTimeout = creatorRequestTimeout
         moderatorAccess?.onVerified = { [weak self] in
             guard let self, case let .signedIn(subjectID) = model.accountState else { return }
@@ -310,10 +323,10 @@ public final class MarketplaceCoordinator {
         securityHandler: (@MainActor (CatalogSecuritySnapshot) async throws -> Void)? = nil
     ) -> MarketplaceCoordinator {
         guard let environment = try? CatalogEnvironment.from(bundle: bundle) else {
-            return MarketplaceCoordinator()
+            return MarketplaceCoordinator(isMarketplaceAvailable: false)
         }
         guard let gateway = try? SupabaseCatalogGateway(environment: environment) else {
-            return MarketplaceCoordinator()
+            return MarketplaceCoordinator(isMarketplaceAvailable: false)
         }
         var uploadHosts = environment.approvedCDNHosts
         if let supabaseHost = environment.supabaseURL.host { uploadHosts.insert(supabaseHost) }
@@ -352,6 +365,10 @@ public final class MarketplaceCoordinator {
     }
 
     public func start() {
+        guard isMarketplaceAvailable else {
+            model.homeState = .empty
+            return
+        }
         Self.logger.info("Marketplace lifecycle started")
         if model.homeState == .idle { loadHome() }
         observeAccount()
@@ -591,6 +608,17 @@ public final class MarketplaceCoordinator {
     }
 
     private func signIn(resuming action: DeferredAction?) {
+        guard isMarketplaceAvailable else {
+            deferredAction = nil
+            pendingReport = nil
+            model.authenticationState = .failed(message: Self.unavailableAccountMessage)
+            if case .report = action {
+                model.reportState = .failed(message: Self.unavailableAccountMessage)
+            } else if action != nil {
+                model.actionState = .failed(message: Self.unavailableAccountMessage)
+            }
+            return
+        }
         guard model.authenticationState != .working else { return }
         guard let appleSignIn,
               let window = NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first
@@ -647,6 +675,10 @@ public final class MarketplaceCoordinator {
     }
 
     public func signOut() {
+        guard isMarketplaceAvailable else {
+            model.authenticationState = .failed(message: Self.unavailableAccountMessage)
+            return
+        }
         guard model.authenticationState != .working else { return }
         guard let authStore else {
             model.authenticationState = .failed(message: "Sign out is unavailable. Reopen WALI and try again.")
@@ -1159,6 +1191,10 @@ public final class MarketplaceCoordinator {
     }
 
     public func reportSelectedWallpaper(kind: CatalogReportKind, detail: String) {
+        guard isMarketplaceAvailable else {
+            signIn(resuming: .report)
+            return
+        }
         guard reportGateway != nil,
               let selected = model.selectedDetail
         else {
@@ -1598,6 +1634,10 @@ public final class MarketplaceCoordinator {
     }
 
     private func requireAuthentication(for action: DeferredAction) -> Bool {
+        guard isMarketplaceAvailable else {
+            signIn(resuming: action)
+            return false
+        }
         guard case .signedIn = model.accountState else {
             signIn(resuming: action)
             return false

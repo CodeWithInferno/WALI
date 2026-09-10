@@ -4,6 +4,7 @@ import SwiftUI
 import WALIUI
 
 struct AccountView: View {
+    let isMarketplaceAvailable: Bool
     let account: WALIAccountPresentation
     let authenticationState: WALIMarketplaceActionState
     let profile: WALIAccountProfilePresentation?
@@ -43,6 +44,7 @@ struct AccountView: View {
 
     private var accountForm: some View {
         Form {
+            if isMarketplaceAvailable {
                 Section {
                     HStack(spacing: 16) {
                         WALIAccountAvatarView(displayName: profile?.displayName, size: 72)
@@ -151,6 +153,18 @@ struct AccountView: View {
                         }
                     }
                 }
+
+            } else {
+                Section {
+                    Label(MarketplaceUnavailableView.title, systemImage: "person.crop.circle")
+                        .font(.headline)
+                    Text(MarketplaceCoordinator.unavailableAccountMessage)
+                        .foregroundStyle(.secondary)
+                    Text("Your local-library filenames, display layout, and wallpaper assignments stay on this Mac.")
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityIdentifier("WALI.Account.Unavailable")
+            }
 
                 Section("Legal & Support") {
                     ForEach(MarketplaceLegalLinks.Document.allCases) { document in
