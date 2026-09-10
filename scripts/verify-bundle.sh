@@ -198,6 +198,7 @@ expected_transcoder_identifier="$(xcconfig_value WALI_TRANSCODER_BUNDLE_IDENTIFI
 expected_helper_identifier="$(xcconfig_value WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER)"
 expected_app_group="$(xcconfig_value WALI_APP_GROUP_IDENTIFIER)"
 expected_control_service="$(xcconfig_value WALI_AGENT_CONTROL_SERVICE_NAME)"
+expected_helper_service="$(xcconfig_value WALI_LOCK_SCREEN_HELPER_SERVICE_NAME)"
 expected_development_team="${DEVELOPMENT_TEAM:-}"
 
 [[ -n "${expected_control_service}" ]] ||
@@ -222,6 +223,62 @@ fi
     fail "incorrect ${CONFIGURATION} transcoder bundle identifier"
 [[ "$(plist_value "${HELPER_PATH}/Contents/Info.plist" CFBundleIdentifier)" == "${expected_helper_identifier}" ]] ||
     fail "incorrect ${CONFIGURATION} lock screen helper bundle identifier"
+
+# Developer ID cannot support native Apple authentication (ADR0021).
+# Parse the plist value without coercion or shell newline trimming.
+if [[ "${CONFIGURATION}" == "Release" ]]; then
+    app_info_json="$(/usr/bin/plutil -convert json -o - "${APP_PATH}/Contents/Info.plist")" ||
+        fail "could not read Release foreground Info.plist"
+    printf '%s' "${app_info_json}" | /usr/bin/ruby -rjson -e '
+        info = JSON.parse(STDIN.read)
+        exit(info.is_a?(Hash) && info["WALIMarketplaceEnabled"] == "NO" ? 0 : 1)
+    ' || fail "Release WALIMarketplaceEnabled must be the exact string NO"
+fi
+
+# Generated lookup metadata must name the same peers as the signed wrappers.
+for spec in \
+    "${APP_PATH}|WALIControlServiceName|${expected_control_service}" \
+    "${APP_PATH}|WALIAgentLaunchAgentPlistName|${expected_agent_identifier}.plist" \
+    "${APP_PATH}|WALILockScreenHelperLaunchAgentPlistName|${expected_helper_identifier}.plist" \
+    "${AGENT_PATH}|WALIControlServiceName|${expected_control_service}" \
+    "${AGENT_PATH}|WALITranscoderServiceName|${expected_transcoder_identifier}" \
+    "${AGENT_PATH}|WALILockScreenHelperServiceName|${expected_helper_service}" \
+    "${AGENT_PATH}|WALILockScreenHelperBundleIdentifier|${expected_helper_identifier}" \
+    "${HELPER_PATH}|WALILockScreenHelperServiceName|${expected_helper_service}" \
+    "${HELPER_PATH}|WALIExpectedAgentBundleIdentifier|${expected_agent_identifier}" \
+    "${XPC_PATH}|WALIExpectedClientBundleIdentifier|${expected_agent_identifier}"; do
+    IFS='|' read -r metadata_bundle metadata_key metadata_expected <<< "${spec}"
+    metadata_actual="$(plist_value "${metadata_bundle}/Contents/Info.plist" "${metadata_key}" 2>/dev/null)" ||
+        fail "missing ${metadata_key} runtime identity metadata"
+    [[ "${metadata_actual}" == "${metadata_expected}" ]] ||
+        fail "incorrect ${metadata_key} runtime identity metadata"
+done
+
+launch_agents_dir="${APP_PATH}/Contents/Library/LaunchAgents"
+assert_not_symlink "${launch_agents_dir}" "Contents/Library/LaunchAgents"
+for role in WALIAgent WALILockScreenHelper; do
+    if [[ "${role}" == "WALIAgent" ]]; then
+        identifier="${expected_agent_identifier}"
+        service="${expected_control_service}"
+    else
+        identifier="${expected_helper_identifier}"
+        service="${expected_helper_service}"
+    fi
+    launch_plist="${launch_agents_dir}/${identifier}.plist"
+    assert_not_symlink "${launch_plist}" "${role} launch plist"
+    [[ -f "${launch_plist}" ]] || fail "missing ${role} selected launch plist"
+    launch_json="$(/usr/bin/plutil -convert json -o - "${launch_plist}")" || fail "invalid ${role} launch plist"
+    printf '%s' "${launch_json}" | /usr/bin/ruby -rjson -e '
+        role, identifier, service = ARGV
+        expected = {
+          "Label" => identifier,
+          "BundleProgram" => "Contents/Library/LoginItems/#{role}.app/Contents/MacOS/#{role}",
+          "MachServices" => {service => true}, "ProcessType" => "Interactive",
+          "RunAtLoad" => true, "KeepAlive" => {"Crashed" => true}
+        }
+        exit(JSON.parse(STDIN.read) == expected ? 0 : 1)
+    ' "${role}" "${identifier}" "${service}" || fail "incorrect ${role} launch identity or lifecycle metadata"
+done
 
 agent_ui_element="$(plist_value "${AGENT_PATH}/Contents/Info.plist" LSUIElement)"
 [[ "${agent_ui_element}" == "true" || "${agent_ui_element}" == "1" ]] ||

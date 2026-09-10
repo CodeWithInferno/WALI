@@ -23,7 +23,7 @@ public actor EngineSnapshotStore {
 
     public init(
         fileManager: FileManager = .default,
-        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.wali.WALIAgent"
+        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "io.github.codewithinferno.wali.WALIAgent"
     ) throws {
         let applicationSupport = try fileManager.url(
             for: .applicationSupportDirectory,

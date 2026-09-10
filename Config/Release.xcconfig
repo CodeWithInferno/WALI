@@ -1,13 +1,13 @@
 #include "Base.xcconfig"
 #include? "Marketplace.production.local.xcconfig"
 
-WALI_APP_BUNDLE_IDENTIFIER = com.wali.WALI
-WALI_AGENT_BUNDLE_IDENTIFIER = com.wali.WALIAgent
-WALI_TRANSCODER_BUNDLE_IDENTIFIER = com.wali.WALITranscoder
+WALI_APP_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALI
+WALI_AGENT_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALIAgent
+WALI_TRANSCODER_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALITranscoder
 WALI_APP_GROUP_IDENTIFIER = group.com.wali.shared
-WALI_AGENT_CONTROL_SERVICE_NAME = com.wali.WALIAgent.control
-WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER = com.wali.WALILockScreenHelper
-WALI_LOCK_SCREEN_HELPER_SERVICE_NAME = com.wali.WALILockScreenHelper.control
+WALI_AGENT_CONTROL_SERVICE_NAME = io.github.codewithinferno.wali.WALIAgent.control
+WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALILockScreenHelper
+WALI_LOCK_SCREEN_HELPER_SERVICE_NAME = io.github.codewithinferno.wali.WALILockScreenHelper.control
 
 // Release IPC authentication requires a real common Team ID. Copy
 // Signing.example.xcconfig to the ignored Signing.local.xcconfig; an

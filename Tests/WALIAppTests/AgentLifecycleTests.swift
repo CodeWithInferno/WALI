@@ -27,19 +27,31 @@ final class AgentLifecycleTests: XCTestCase {
     }
 
     func testOtherDistributionBlocksRegistration() throws {
-        let suite = "WALI.LifecycleTests.\(UUID())"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let service = RecordingRegistration()
-        let lifecycle = AgentLifecycleController(
-            registrations: [service], defaults: defaults, requiresExplicitConsent: true,
-            expectedAgentIdentifier: "com.wali.store.WALIAgent",
-            runningAgentIdentifiers: { ["com.wali.WALIAgent"] }
-        )
-        lifecycle.allowBackgroundPlayback()
-        XCTAssertThrowsError(try lifecycle.ensureRunning())
-        XCTAssertEqual(service.registrations, 0)
+        for identifier in [
+            "io.github.codewithinferno.wali.WALIAgent", "com.wali.WALIAgent",
+            "com.wali.development.WALIAgent", "com.wali.debug.WALIAgent",
+            "com.wali.store.development.WALIAgent",
+        ] {
+            let suite = "WALI.LifecycleTests.\(UUID())"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let service = RecordingRegistration()
+            let lifecycle = AgentLifecycleController(
+                registrations: [service], defaults: defaults, requiresExplicitConsent: true,
+                expectedAgentIdentifier: "com.wali.store.WALIAgent",
+                runningAgentIdentifiers: { [identifier] }
+            )
+            lifecycle.allowBackgroundPlayback()
+            XCTAssertThrowsError(try lifecycle.ensureRunning(), identifier)
+            XCTAssertEqual(service.registrations, 0, identifier)
+        }
     }
+
+    #if !WALI_APP_STORE
+    func testDirectServiceFallbackUsesRegisteredReleaseNamespace() {
+        XCTAssertEqual(AgentServiceName.current, "io.github.codewithinferno.wali.WALIAgent.control")
+    }
+    #endif
 
     func testSystemApprovalDoesNotBecomeConsentOrRepeatedRegistration() throws {
         let suite = "WALI.LifecycleTests.\(UUID())"
@@ -73,7 +85,7 @@ final class StoreAgentPeerRequirementTests: XCTestCase {
             appIdentifier: "com.wali.store.WALI", agentIdentifier: "com.wali.store.WALIAgent", team: "ABCDEFGHIJ"
         )
         XCTAssertTrue(expression.contains("com.wali.store.WALIAgent"))
-        for peer in ["com.wali.WALIAgent", "com.wali.store.development.WALIAgent", "com.wali.debug.WALIAgent"] {
+        for peer in ["io.github.codewithinferno.wali.WALIAgent", "com.wali.WALIAgent", "com.wali.store.development.WALIAgent", "com.wali.debug.WALIAgent"] {
             XCTAssertThrowsError(try StoreAgentPeerRequirement.expression(
                 appIdentifier: "com.wali.store.WALI", agentIdentifier: peer, team: "ABCDEFGHIJ"
             ))

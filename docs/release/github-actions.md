@@ -11,6 +11,16 @@ This is source preparation for hosted CD. No environment, hosted secret,
 certificate, profile, release, or Apple submission was created while adding it.
 A successful fixture test is not a successful signed release.
 
+## Current distribution restriction
+
+Accepted [ADR 0021](../adr/0021-developer-id-local-only-entitlements.md) keeps
+direct Release local-only and removes its unsupported native Sign in with Apple
+entitlement. The hosted input contract below still requires marketplace `YES`,
+so this workflow cannot currently publish a direct Release. Do not bypass its
+input, native review, or artifact checks. The local Fastlane prerelease lanes
+support the current offline candidate; enabling direct marketplace distribution
+requires a separately approved authentication design.
+
 ## Configure the existing release identities
 
 A repository administrator must configure two environments before dispatch.
@@ -48,9 +58,9 @@ paste them into workflow inputs, source, terminal logs, or release notes:
 | --- | --- | --- |
 | `WALI_SIGNING_P12_BASE64` | Both | Single-line base64 of a PKCS#12 export containing exactly one valid Developer ID Application identity and its private key. |
 | `WALI_SIGNING_P12_PASSWORD` | Both | The password for that PKCS#12 export. |
-| `WALI_APP_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `com.wali.WALI`, authorizing Sign in with Apple and `group.com.wali.shared`. |
-| `WALI_AGENT_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `com.wali.WALIAgent`, authorizing `group.com.wali.shared`. |
-| `WALI_HELPER_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `com.wali.WALILockScreenHelper`, authorizing `group.com.wali.shared`. |
+| `WALI_APP_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `io.github.codewithinferno.wali.WALI`, authorizing `group.com.wali.shared`; native Sign in with Apple is unsupported for Developer ID. The hosted marketplace contract remains blocked under ADR 0021. |
+| `WALI_AGENT_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `io.github.codewithinferno.wali.WALIAgent`, authorizing `group.com.wali.shared`. |
+| `WALI_HELPER_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `io.github.codewithinferno.wali.WALILockScreenHelper`, authorizing `group.com.wali.shared`. |
 | `WALI_NOTARY_KEY_BASE64` | `production` | Single-line base64 of that existing Team App Store Connect API key's `.p8` file. |
 
 Profiles must authorize the imported certificate, match the exact team and

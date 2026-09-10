@@ -348,7 +348,11 @@ public enum TranscoderServiceName {
         ) as? String, !configured.isEmpty {
             return configured
         }
-        let identifier = Bundle.main.bundleIdentifier ?? "com.wali.WALIAgent"
+        return identifier(for: Bundle.main.bundleIdentifier)
+    }
+
+    static func identifier(for agentBundleIdentifier: String?) -> String {
+        let identifier = agentBundleIdentifier ?? "io.github.codewithinferno.wali.WALIAgent"
         return identifier.replacingOccurrences(of: "WALIAgent", with: "WALITranscoder")
     }
 }

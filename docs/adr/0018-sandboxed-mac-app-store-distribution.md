@@ -1,13 +1,20 @@
 # 0018: Add a sandboxed Mac App Store distribution
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-09-09
 - owner_role: architecture_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner explicit session approval 2026-09-09: "Approve the Store variant"
+- superseded_by: 0020
+- superseded_scope: 0020=direct_release_identifier_namespace
 - supersedes: 0013
 - supersedes_scope: 0013=store_helper_presence,store_agent_sandbox_requirement
 - related: [0001](0001-process-topology.md), [0003](0003-agent-owned-runtime-state.md), [0004](0004-engine-owned-use-cases.md), [0005](0005-content-addressed-artifacts.md), [0006](0006-named-authenticated-xpc.md), [0011](0011-supabase-marketplace-control-plane.md), [0012](0012-signed-remote-catalog-releases.md), [0015](0015-hostile-media-canonicalization.md), [0017](0017-marketplace-hevc-main10.md)
+
+ADR [0020](0020-direct-release-identifier-namespace.md) supersedes only the
+requirement below to preserve direct Release identifiers and the data namespaces
+derived from them. Its approved first-release identity transition leaves this
+record's Store identities, architecture, and other direct invariants in force.
 
 ## Context
 

@@ -37,7 +37,7 @@ targets:
         Development:
           CODE_SIGN_ENTITLEMENTS: Config/WALI.entitlements
         Release:
-          CODE_SIGN_ENTITLEMENTS: Config/WALI.entitlements
+          CODE_SIGN_ENTITLEMENTS: Config/WALI-Release.entitlements
           PROVISIONING_PROFILE_SPECIFIER: "$(WALI_APP_PROVISIONING_PROFILE)"
     sources:
     - path: Config/LaunchAgents

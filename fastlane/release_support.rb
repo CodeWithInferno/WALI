@@ -8,6 +8,16 @@ require "open3"
 module WALIReleaseSupport
   module_function
 
+  def verify_direct_release_build_settings!(entries)
+    raise "Cannot identify resolved direct Release build settings" unless entries.is_a?(Array) && entries.all? { |entry| entry.is_a?(Hash) }
+    foreground = entries.select { |entry| entry["target"] == "WALI" }
+    raise "Require exactly one resolved WALI target" unless foreground.length == 1
+    settings = foreground.first["buildSettings"]
+    unless settings.is_a?(Hash) && settings["CONFIGURATION"] == "Release" && settings["WALI_MARKETPLACE_ENABLED"] == "NO"
+      raise "Developer ID Release requires resolved WALI_MARKETPLACE_ENABLED=NO (ADR 0021)"
+    end
+  end
+
   def source_commit(root)
     output, status = Open3.capture2("git", "-C", root, "rev-parse", "HEAD")
     raise "Cannot identify the release commit" unless status.success? && output.strip.match?(/\A[0-9a-f]{40}\z/)

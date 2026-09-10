@@ -21,6 +21,10 @@ write_bundle_plists() {
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>WALI</string>
+  <key>WALIMarketplaceEnabled</key><string>NO</string>
+  <key>WALIControlServiceName</key><string>${agent_identifier}.control</string>
+  <key>WALIAgentLaunchAgentPlistName</key><string>${agent_identifier}.plist</string>
+  <key>WALILockScreenHelperLaunchAgentPlistName</key><string>${helper_identifier}.plist</string>
   <key>CFBundleIdentifier</key><string>${app_identifier}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
@@ -34,6 +38,8 @@ EOF
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>WALILockScreenHelper</string>
+  <key>WALILockScreenHelperServiceName</key><string>${helper_identifier}.control</string>
+  <key>WALIExpectedAgentBundleIdentifier</key><string>${agent_identifier}</string>
   <key>CFBundleIdentifier</key><string>${helper_identifier}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
@@ -48,6 +54,10 @@ EOF
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>WALIAgent</string>
+  <key>WALIControlServiceName</key><string>${agent_identifier}.control</string>
+  <key>WALITranscoderServiceName</key><string>${transcoder_identifier}</string>
+  <key>WALILockScreenHelperServiceName</key><string>${helper_identifier}.control</string>
+  <key>WALILockScreenHelperBundleIdentifier</key><string>${helper_identifier}</string>
   <key>CFBundleIdentifier</key><string>${agent_identifier}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
@@ -62,6 +72,7 @@ EOF
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>WALITranscoder</string>
+  <key>WALIExpectedClientBundleIdentifier</key><string>${agent_identifier}</string>
   <key>CFBundleIdentifier</key><string>${transcoder_identifier}</string>
   <key>CFBundlePackageType</key><string>XPC!</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
@@ -84,10 +95,12 @@ new_fixture() {
     mkdir -p \
         "${app_path}/Contents/MacOS" \
         "${app_path}/Contents/Resources" \
+        "${app_path}/Contents/Library/LaunchAgents" \
         "${app_path}/Contents/Library/LoginItems/WALIAgent.app/Contents/MacOS" \
         "${app_path}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/WALITranscoder.xpc/Contents/MacOS" \
         "${app_path}/Contents/Library/LoginItems/WALILockScreenHelper.app/Contents/MacOS"
 
+    cp "${ROOT_DIR}/Config/LaunchAgents/"*.plist "${app_path}/Contents/Library/LaunchAgents/"
     cp -R "${ROOT_DIR}/Resources/ThirdPartyLicenses" "${app_path}/Contents/Resources/ThirdPartyLicenses"
 
     write_bundle_plists \
@@ -209,14 +222,41 @@ pass_count=$((pass_count + 1))
 
 release_app="$(new_fixture \
     release \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 expect_verifier_failure \
     "release-unsigned" \
     Release \
     "${release_app}" \
     "Release verification requires sealed signatures on all runtime bundles"
+
+# Actual Release metadata must be exactly the local-only string, before signing.
+for mutation in enabled missing unresolved lowercase padded multiline boolean integer array dictionary; do
+    app="${TEMP_ROOT}/release-marketplace-${mutation}.app"
+    cp -R "${release_app}" "${app}"
+    /usr/bin/ruby -rjson -ropen3 -e '
+        path, mutation = ARGV
+        output, status = Open3.capture2("/usr/bin/plutil", "-convert", "json", "-o", "-", path)
+        abort "could not read fixture Info.plist" unless status.success?
+        info = JSON.parse(output)
+        values = {
+          "enabled" => "YES", "unresolved" => "$(WALI_MARKETPLACE_ENABLED)",
+          "lowercase" => "no", "padded" => "NO ", "multiline" => "NO\n",
+          "boolean" => false, "integer" => 0, "array" => ["NO"], "dictionary" => {"value" => "NO"}
+        }
+        if mutation == "missing"
+          info.delete("WALIMarketplaceEnabled")
+        else
+          info["WALIMarketplaceEnabled"] = values.fetch(mutation)
+        end
+        File.write(path, JSON.generate(info))
+        abort "could not write fixture Info.plist" unless system("/usr/bin/plutil", "-convert", "xml1", path)
+    ' "${app}/Contents/Info.plist" "${mutation}"
+    expect_verifier_failure \
+        "release-marketplace-${mutation}" Release "${app}" \
+        "Release WALIMarketplaceEnabled must be the exact string NO"
+done
 
 development_app="$(new_fixture \
     development-adhoc \
@@ -309,28 +349,28 @@ pass_count=$((pass_count + 1))
 
 release_adhoc="$(new_fixture \
     release-adhoc \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 release_adhoc_root="${TEMP_ROOT}/release-adhoc"
 release_adhoc_agent="${release_adhoc}/Contents/Library/LoginItems/WALIAgent.app"
 release_adhoc_worker="${release_adhoc_agent}/Contents/XPCServices/WALITranscoder.xpc"
 release_adhoc_helper="${release_adhoc}/Contents/Library/LoginItems/WALILockScreenHelper.app"
 write_release_entitlements \
     "${release_adhoc_root}/worker.entitlements" \
-    com.wali.WALITranscoder \
+    io.github.codewithinferno.wali.WALITranscoder \
     no
 write_release_entitlements \
     "${release_adhoc_root}/agent.entitlements" \
-    com.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALIAgent \
     yes
 write_release_entitlements \
     "${release_adhoc_root}/helper.entitlements" \
-    com.wali.WALILockScreenHelper \
+    io.github.codewithinferno.wali.WALILockScreenHelper \
     yes
 write_release_entitlements \
     "${release_adhoc_root}/app.entitlements" \
-    com.wali.WALI \
+    io.github.codewithinferno.wali.WALI \
     yes
 /usr/bin/codesign \
     --force --sign - --timestamp=none --options runtime \
@@ -356,9 +396,9 @@ expect_verifier_failure \
 
 release_fake_seal="$(new_fixture \
     release-fake-seal \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 for bundle_path in \
     "${release_fake_seal}" \
     "${release_fake_seal}/Contents/Library/LoginItems/WALIAgent.app" \
@@ -375,9 +415,9 @@ expect_verifier_failure \
 
 release_partial="$(new_fixture \
     release-partial-seal \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 mkdir -p \
     "${release_partial}/Contents/Library/LoginItems/WALIAgent.app/Contents/_CodeSignature"
 : > \
@@ -435,9 +475,9 @@ expect_verifier_failure \
 
 main_xpc="$(new_fixture \
     main-xpc \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 mkdir -p "${main_xpc}/Contents/XPCServices"
 : > "${main_xpc}/Contents/XPCServices/.unexpected"
 expect_verifier_failure \
@@ -448,9 +488,9 @@ expect_verifier_failure \
 
 duplicate_login="$(new_fixture \
     duplicate-login \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 mkdir -p "${duplicate_login}/Contents/Library/LoginItems/Other.app"
 expect_verifier_failure \
     "duplicate-login-item" \
@@ -460,9 +500,9 @@ expect_verifier_failure \
 
 hidden_login="$(new_fixture \
     hidden-login \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 : > "${hidden_login}/Contents/Library/LoginItems/.unexpected"
 expect_verifier_failure \
     "hidden-login-item" \
@@ -472,9 +512,9 @@ expect_verifier_failure \
 
 wrong_login="$(new_fixture \
     wrong-login \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 mv \
     "${wrong_login}/Contents/Library/LoginItems/WALIAgent.app" \
     "${wrong_login}/Contents/Library/LoginItems/Other.app"
@@ -486,9 +526,9 @@ expect_verifier_failure \
 
 duplicate_xpc="$(new_fixture \
     duplicate-xpc \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 mkdir -p \
     "${duplicate_xpc}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/Other.xpc"
 expect_verifier_failure \
@@ -499,9 +539,9 @@ expect_verifier_failure \
 
 hidden_xpc="$(new_fixture \
     hidden-xpc \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 : > \
     "${hidden_xpc}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/.unexpected"
 expect_verifier_failure \
@@ -512,9 +552,9 @@ expect_verifier_failure \
 
 wrong_xpc="$(new_fixture \
     wrong-xpc \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 mv \
     "${wrong_xpc}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/WALITranscoder.xpc" \
     "${wrong_xpc}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/Other.xpc"
@@ -526,9 +566,9 @@ expect_verifier_failure \
 
 partial_topology="$(new_fixture \
     partial-topology \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 rm -rf \
     "${partial_topology}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices"
 expect_verifier_failure \
@@ -539,9 +579,9 @@ expect_verifier_failure \
 
 root_target="$(new_fixture \
     root-symlink-target \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 mkdir -p "${TEMP_ROOT}/root-symlink"
 ln -s "${root_target}" "${TEMP_ROOT}/root-symlink/WALI.app"
 expect_verifier_failure \
@@ -552,9 +592,9 @@ expect_verifier_failure \
 
 login_symlink="$(new_fixture \
     login-directory-symlink \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 mv \
     "${login_symlink}/Contents/Library/LoginItems" \
     "${TEMP_ROOT}/escaped-login-items"
@@ -569,9 +609,9 @@ expect_verifier_failure \
 
 agent_symlink="$(new_fixture \
     agent-root-symlink \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 mv \
     "${agent_symlink}/Contents/Library/LoginItems/WALIAgent.app" \
     "${TEMP_ROOT}/escaped-agent.app"
@@ -586,9 +626,9 @@ expect_verifier_failure \
 
 xpc_directory_symlink="$(new_fixture \
     xpc-directory-symlink \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 xpc_directory_agent="${xpc_directory_symlink}/Contents/Library/LoginItems/WALIAgent.app"
 mv \
     "${xpc_directory_agent}/Contents/XPCServices" \
@@ -604,9 +644,9 @@ expect_verifier_failure \
 
 worker_symlink="$(new_fixture \
     worker-root-symlink \
-    com.wali.WALI \
-    com.wali.WALIAgent \
-    com.wali.WALITranscoder)"
+    io.github.codewithinferno.wali.WALI \
+    io.github.codewithinferno.wali.WALIAgent \
+    io.github.codewithinferno.wali.WALITranscoder)"
 worker_symlink_directory="${worker_symlink}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices"
 mv \
     "${worker_symlink_directory}/WALITranscoder.xpc" \
@@ -619,6 +659,46 @@ expect_verifier_failure \
     Release \
     "${worker_symlink}" \
     "WALITranscoder.xpc root must not be a symbolic link"
+
+# A renamed Release must reject each legacy peer independently before signing.
+for role in WALI WALIAgent WALITranscoder WALILockScreenHelper; do
+    app="$(new_fixture "legacy-${role}" io.github.codewithinferno.wali.WALI io.github.codewithinferno.wali.WALIAgent io.github.codewithinferno.wali.WALITranscoder)"
+    case "${role}" in
+        WALI) bundle="${app}"; label="main app" ;;
+        WALIAgent) bundle="${app}/Contents/Library/LoginItems/WALIAgent.app"; label="agent" ;;
+        WALITranscoder) bundle="${app}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/WALITranscoder.xpc"; label="transcoder" ;;
+        WALILockScreenHelper) bundle="${app}/Contents/Library/LoginItems/WALILockScreenHelper.app"; label="lock screen helper" ;;
+    esac
+    /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.wali.${role}" "${bundle}/Contents/Info.plist"
+    expect_verifier_failure "legacy ${role} identity" Release "${app}" "incorrect Release ${label} bundle identifier"
+done
+
+for field in WALIControlServiceName WALIAgentLaunchAgentPlistName WALILockScreenHelperLaunchAgentPlistName; do
+    app="$(new_fixture "stale-${field}" io.github.codewithinferno.wali.WALI io.github.codewithinferno.wali.WALIAgent io.github.codewithinferno.wali.WALITranscoder)"
+    /usr/libexec/PlistBuddy -c "Set :${field} com.wali.stale" "${app}/Contents/Info.plist"
+    expect_verifier_failure "stale ${field}" Release "${app}" "incorrect ${field} runtime identity metadata"
+done
+
+for field in WALITranscoderServiceName WALILockScreenHelperServiceName WALILockScreenHelperBundleIdentifier; do
+    app="$(new_fixture "stale-${field}" io.github.codewithinferno.wali.WALI io.github.codewithinferno.wali.WALIAgent io.github.codewithinferno.wali.WALITranscoder)"
+    /usr/libexec/PlistBuddy -c "Set :${field} com.wali.stale" "${app}/Contents/Library/LoginItems/WALIAgent.app/Contents/Info.plist"
+    expect_verifier_failure "stale ${field}" Release "${app}" "incorrect ${field} runtime identity metadata"
+done
+
+for role in WALIAgent WALILockScreenHelper; do
+    app="$(new_fixture "stale-launch-${role}" io.github.codewithinferno.wali.WALI io.github.codewithinferno.wali.WALIAgent io.github.codewithinferno.wali.WALITranscoder)"
+    plist="${app}/Contents/Library/LaunchAgents/io.github.codewithinferno.wali.${role}.plist"
+    /usr/libexec/PlistBuddy -c "Set :Label com.wali.${role}" "${plist}"
+    expect_verifier_failure "legacy ${role} launch label" Release "${app}" "incorrect ${role} launch identity or lifecycle metadata"
+    rm "${plist}"
+    expect_verifier_failure "missing ${role} selected launch plist" Release "${app}" "missing ${role} selected launch plist"
+done
+
+worker_client_app="$(new_fixture stale-worker-client io.github.codewithinferno.wali.WALI io.github.codewithinferno.wali.WALIAgent io.github.codewithinferno.wali.WALITranscoder)"
+/usr/libexec/PlistBuddy -c 'Set :WALIExpectedClientBundleIdentifier com.wali.WALIAgent' \
+    "${worker_client_app}/Contents/Library/LoginItems/WALIAgent.app/Contents/XPCServices/WALITranscoder.xpc/Contents/Info.plist"
+expect_verifier_failure "legacy worker expected client" Release "${worker_client_app}" \
+    "incorrect WALIExpectedClientBundleIdentifier runtime identity metadata"
 
 if (( failure_count > 0 )); then
     printf 'Bundle verifier fixture failures: %s; passes: %s\n' \

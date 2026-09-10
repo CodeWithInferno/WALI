@@ -51,6 +51,9 @@ failure =
     "#{label} Release signature requires a secure timestamp"
   elsif configuration == "Release" && entitlements["com.apple.security.get-task-allow"] == true
     "#{label} Release signature must not allow debugger attachment"
+  elsif configuration == "Release" && label == "WALI.app" &&
+        entitlements.key?("com.apple.developer.applesignin")
+    "Release foreground must not claim native Sign in with Apple"
   end
 
 team_entitlement = entitlements["com.apple.developer.team-identifier"]

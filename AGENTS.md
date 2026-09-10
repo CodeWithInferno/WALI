@@ -57,9 +57,18 @@ the app-group entitlements and uses `com.wali.debug.*` identities, so it cannot
 verify shared-container behavior. Development uses `com.wali.development.*`,
 automatic Apple Development signing, and
 `group.com.wali.development.shared`; the selected team must have provisioning
-access to those identifiers. Release retains `com.wali.*` and
+access to those identifiers. Release uses `io.github.codewithinferno.wali.*` under accepted
+[ADR 0020](docs/adr/0020-direct-release-identifier-namespace.md) and retains
 `group.com.wali.shared` and requires configured distribution signing. The credential-free test path compiles the UI-test
 target but does not launch its runner.
+
+Accepted [ADR 0021](docs/adr/0021-developer-id-local-only-entitlements.md) keeps
+direct Release local-only. Its foreground uses `Config/WALI-Release.entitlements`
+with the App Group and no native Sign in with Apple capability, which Developer
+ID does not support. Resolved build settings and the actual app must have
+marketplace `NO`; enabled or missing values fail. Development and Store retain
+their native sign-in entitlements. The hosted production workflow still requires
+marketplace `YES` and cannot publish this local-only candidate.
 
 ## Store distribution work
 

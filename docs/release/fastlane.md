@@ -27,10 +27,20 @@ Do not publish screenshots containing authentication secrets or account exports.
 
 For distribution, copy `Config/Signing.example.xcconfig` to the ignored
 `Config/Signing.local.xcconfig`. Select the Developer ID certificate, team, and
-installed provisioning profiles for the app and both helpers. The app profile
-must support Sign in with Apple and `group.com.wali.shared`. Keep credentials
-and profiles outside source control. Production marketplace client settings
-belong in ignored `Config/Marketplace.production.local.xcconfig`.
+installed provisioning profiles for the app and both helpers. All three profiles
+must authorize their exact identities, the certificate, and `group.com.wali.shared`.
+Developer ID does not support native Sign in with Apple; direct Release uses
+`Config/WALI-Release.entitlements` without that capability under
+[ADR 0021](../adr/0021-developer-id-local-only-entitlements.md). Development and
+Store retain it. Keep credentials and profiles outside source control.
+
+Direct Release is local-only. Resolved build settings and the signed app must
+contain marketplace `NO`; missing, enabled, unresolved, or malformed flags fail.
+The ignored `Config/Marketplace.production.local.xcconfig` may explicitly set
+`WALI_MARKETPLACE_ENABLED = NO`. Marketplace activation requires a separately
+approved supported authentication design; native Apple client configuration
+alone cannot enable it. The hosted production workflow keeps its `YES` contract
+and cannot publish this local-only candidate. Use these local Fastlane lanes.
 
 ```sh
 DEVELOPMENT_TEAM=YOUR_TEAM_ID bundle exec fastlane mac archive
@@ -70,6 +80,26 @@ automatically as part of that command or changes the production backend.
 `release.json` binds the final packages and stapled app to the source commit and
 records the Apple submission IDs. Packaging failures preserve the verified
 stapled-app digest so outer-DMG notarization can be retried.
+
+## Direct identity and local prerelease transition
+
+[ADR 0020](../adr/0020-direct-release-identifier-namespace.md) assigns direct
+Release to `io.github.codewithinferno.wali.WALI`, `.WALIAgent`, `.WALITranscoder`,
+and `.WALILockScreenHelper`. The foreground, agent, and helper profiles must
+match those exact identifiers and retain `group.com.wali.shared`; the worker
+does not have a separate profile. Debug, Development, and Store identities
+remain separate.
+
+This first direct release starts with a fresh library, defaults, and sign-in
+namespace. Existing local prerelease files are preserved; no automatic token,
+bookmark, library, or helper-journal migration is performed. Before replacing
+an older build with active Lock Screen continuity, disable and restore it
+through that old app, then fully quit its app and agent. Do not launch old and
+new playback concurrently or patch Apple's wallpaper store to migrate state.
+The native acceptance below must cover the actual signed candidate; a fresh
+install does not prove an upgrade. Production marketplace activation separately
+requires a separately approved Developer ID authentication design under
+ADR 0021 and successful end-to-end authentication gates.
 
 ## Publish the verified GitHub release
 

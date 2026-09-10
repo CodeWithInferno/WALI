@@ -214,7 +214,7 @@ public enum AgentServiceName {
         #if WALI_APP_STORE
         return ""
         #else
-        return "com.wali.WALIAgent.control"
+        return "io.github.codewithinferno.wali.WALIAgent.control"
         #endif
     }
 }

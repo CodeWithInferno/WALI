@@ -92,7 +92,8 @@ namespaces. Script-built Debug bundles receive ad-hoc seals for local agent
 registration; hostless test builds may remain unsealed. Debug has no app-group
 entitlement and cannot authenticate the privileged helper. Development uses the
 `com.wali.development.*` namespace, strict Apple Development signatures, and
-its own app group; Release retains the `com.wali.*` production identities and
+its own app group; Release uses the `io.github.codewithinferno.wali.*` production identities under
+[ADR 0020](docs/adr/0020-direct-release-identifier-namespace.md) and retains
 requires configured distribution signing.
 
 ### Approved Mac App Store distribution
@@ -197,7 +198,10 @@ anonymous endpoint is not an acceptable fallback.
   create-exclusive downloads, creator submissions, authenticated moderation,
   and account export/deletion. Their native routes are composed; the evidence
   ledger identifies which end-to-end flows still require verification.
-  Supabase types do not escape the runtime boundary.
+  Supabase types do not escape the runtime boundary. Direct Release keeps these
+  marketplace routes disabled under ADR 0021; Developer ID does not support
+  native Sign in with Apple. Development and Store retain their existing
+  authentication capability.
 - `WALILockScreenHelperRuntime` owns only authenticated, fixed-root, version-
   gated Lock Screen transactions and process refreshes. Its composition app is
   the only product eligible for Full Disk Access and imports no media, network,
