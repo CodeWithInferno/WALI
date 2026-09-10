@@ -12,7 +12,7 @@ import WALIWire
 @Observable
 public final class WALIAppCoordinator: WALIUIActionHandling {
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.wali.WALI",
+        subsystem: Bundle.main.bundleIdentifier ?? "io.github.codewithinferno.wali.WALI",
         category: "AgentSnapshot"
     )
 

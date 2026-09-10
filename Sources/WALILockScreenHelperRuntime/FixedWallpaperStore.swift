@@ -78,7 +78,7 @@ final class FixedWallpaperStore: LockScreenStoreOperating, @unchecked Sendable {
     static func live() throws -> FixedWallpaperStore {
         let identifier = Bundle.main.object(
             forInfoDictionaryKey: "WALIExpectedAgentBundleIdentifier"
-        ) as? String ?? "com.wali.WALIAgent"
+        ) as? String ?? "io.github.codewithinferno.wali.WALIAgent"
         return try .init(roots: .live(agentBundleIdentifier: identifier), systemBuild: systemBuild())
     }
 

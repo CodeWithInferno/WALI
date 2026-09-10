@@ -48,9 +48,9 @@ paste them into workflow inputs, source, terminal logs, or release notes:
 | --- | --- | --- |
 | `WALI_SIGNING_P12_BASE64` | Both | Single-line base64 of a PKCS#12 export containing exactly one valid Developer ID Application identity and its private key. |
 | `WALI_SIGNING_P12_PASSWORD` | Both | The password for that PKCS#12 export. |
-| `WALI_APP_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `com.wali.WALI`, authorizing Sign in with Apple and `group.com.wali.shared`. |
-| `WALI_AGENT_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `com.wali.WALIAgent`, authorizing `group.com.wali.shared`. |
-| `WALI_HELPER_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `com.wali.WALILockScreenHelper`, authorizing `group.com.wali.shared`. |
+| `WALI_APP_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `io.github.codewithinferno.wali.WALI`, authorizing Sign in with Apple and `group.com.wali.shared`. |
+| `WALI_AGENT_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `io.github.codewithinferno.wali.WALIAgent`, authorizing `group.com.wali.shared`. |
+| `WALI_HELPER_PROFILE_BASE64` | `release-signing` | Existing macOS Developer ID profile for `io.github.codewithinferno.wali.WALILockScreenHelper`, authorizing `group.com.wali.shared`. |
 | `WALI_NOTARY_KEY_BASE64` | `production` | Single-line base64 of that existing Team App Store Connect API key's `.p8` file. |
 
 Profiles must authorize the imported certificate, match the exact team and

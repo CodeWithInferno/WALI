@@ -509,7 +509,7 @@ private enum TranscoderClientValidator {
         ) as? String, !configured.isEmpty {
             return configured
         }
-        let identifier = Bundle.main.bundleIdentifier ?? "com.wali.WALITranscoder"
+        let identifier = Bundle.main.bundleIdentifier ?? "io.github.codewithinferno.wali.WALITranscoder"
         return identifier.replacingOccurrences(of: "WALITranscoder", with: "WALIAgent")
     }
 

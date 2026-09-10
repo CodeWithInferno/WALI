@@ -22,7 +22,11 @@ module WALICIRelease
   ROOT = File.expand_path("..", __dir__)
   TEAM_PATTERN = /\A[A-Z0-9]{10}\z/
   SHA_PATTERN = /\A[0-9a-f]{64}\z/
-  PROFILE_IDS = {"APP" => "com.wali.WALI", "AGENT" => "com.wali.WALIAgent", "HELPER" => "com.wali.WALILockScreenHelper"}.freeze
+  PROFILE_IDS = {
+    "APP" => "io.github.codewithinferno.wali.WALI",
+    "AGENT" => "io.github.codewithinferno.wali.WALIAgent",
+    "HELPER" => "io.github.codewithinferno.wali.WALILockScreenHelper"
+  }.freeze
   CLIENT_INFO_KEYS = %w[WALIMarketplaceEnabled WALIMarketplaceURL WALIMarketplacePublishableKey WALIApprovedCDNHosts WALICatalogSigningKeyID WALICatalogSigningPublicKeyBase64 WALICatalogRecoverySigningKeyID WALICatalogRecoverySigningPublicKeyBase64 WALILegalBaseURL].freeze
   CLIENT_KEYS = %w[WALI_MARKETPLACE_ENABLED WALI_SUPABASE_URL WALI_SUPABASE_PUBLISHABLE_KEY WALI_CATALOG_CDN_HOST WALI_CATALOG_SIGNING_KEY_ID WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64 WALI_CATALOG_RECOVERY_SIGNING_KEY_ID WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64 WALI_LEGAL_BASE_URL].freeze
   SECRET_KEYS = %w[WALI_SIGNING_P12_BASE64 WALI_SIGNING_P12_PASSWORD WALI_APP_PROFILE_BASE64 WALI_AGENT_PROFILE_BASE64 WALI_HELPER_PROFILE_BASE64 WALI_NOTARY_KEY_BASE64].freeze
@@ -161,13 +165,14 @@ module WALICIRelease
   end
 
   def verify_profile(data, identifier:, team:, certificate_sha256:, now: Time.now)
+    demand(PROFILE_IDS.value?(identifier), "Unsupported direct Release profile identity")
     demand(data["UUID"].to_s.match?(/\A[A-Fa-f0-9]{8}(?:-[A-Fa-f0-9]{4}){3}-[A-Fa-f0-9]{12}\z/), "Invalid profile UUID")
     demand(data["TeamIdentifier"] == [team] && data.fetch("Platform", []).include?("OSX") && data["ProvisionsAllDevices"] == true && !data.key?("ProvisionedDevices"), "Require a Developer ID macOS profile for the selected team")
     demand(Time.iso8601(data.fetch("ExpirationDate")) > now + 86_400, "Profile expires within one day")
     entitlements = data.fetch("Entitlements")
     demand(entitlements["com.apple.application-identifier"] == "#{team}.#{identifier}" && entitlements["com.apple.developer.team-identifier"] == team && entitlements["get-task-allow"] != true && entitlements["com.apple.security.get-task-allow"] != true, "Profile app identity or distribution entitlement differs")
     demand(entitlements.fetch("com.apple.security.application-groups", []).include?("group.com.wali.shared"), "Profile must authorize the direct shared app group")
-    demand(entitlements["com.apple.developer.applesignin"] == ["Default"], "Main app profile must authorize Sign in with Apple") if identifier == "com.wali.WALI"
+    demand(entitlements["com.apple.developer.applesignin"] == ["Default"], "Main app profile must authorize Sign in with Apple") if identifier == PROFILE_IDS.fetch("APP")
     demand(data.fetch("DeveloperCertificates", []).any? { |der| Digest::SHA256.hexdigest(der) == certificate_sha256 }, "Profile does not authorize the imported signing certificate")
     data.fetch("UUID")
   end

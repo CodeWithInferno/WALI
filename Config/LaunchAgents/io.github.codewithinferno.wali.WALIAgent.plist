@@ -3,12 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.wali.WALIAgent</string>
+    <string>io.github.codewithinferno.wali.WALIAgent</string>
     <key>BundleProgram</key>
     <string>Contents/Library/LoginItems/WALIAgent.app/Contents/MacOS/WALIAgent</string>
     <key>MachServices</key>
     <dict>
-        <key>com.wali.WALIAgent.control</key>
+        <key>io.github.codewithinferno.wali.WALIAgent.control</key>
         <true/>
     </dict>
     <key>ProcessType</key>

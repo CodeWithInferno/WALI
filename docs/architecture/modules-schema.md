@@ -231,6 +231,9 @@ dependency direction, or a security boundary.
 `distributions.direct` names `project.yml`, generated `WALI.xcodeproj`, and the
 existing Debug/Development/Release configurations. The top-level current/target
 module and edge registry continues to describe this direct distribution.
+Its `identity_policy_adr` references
+`docs/adr/0020-direct-release-identifier-namespace.md`, the accepted direct
+Release namespace policy.
 
 `distributions.store` records `project-store.yml`, `WALIStore.xcodeproj`, exact
 StoreDevelopment/AppStore configurations, the eight shared production targets,

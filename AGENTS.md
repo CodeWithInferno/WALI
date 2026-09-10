@@ -57,7 +57,8 @@ the app-group entitlements and uses `com.wali.debug.*` identities, so it cannot
 verify shared-container behavior. Development uses `com.wali.development.*`,
 automatic Apple Development signing, and
 `group.com.wali.development.shared`; the selected team must have provisioning
-access to those identifiers. Release retains `com.wali.*` and
+access to those identifiers. Release uses `io.github.codewithinferno.wali.*` under accepted
+[ADR 0020](docs/adr/0020-direct-release-identifier-namespace.md) and retains
 `group.com.wali.shared` and requires configured distribution signing. The credential-free test path compiles the UI-test
 target but does not launch its runner.
 

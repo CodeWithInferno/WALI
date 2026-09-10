@@ -185,7 +185,7 @@ public actor CatalogInstallCoordinator {
     }
 
     public static func defaultQuarantineRoot(
-        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.wali.WALIAgent",
+        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "io.github.codewithinferno.wali.WALIAgent",
         fileManager: FileManager = .default
     ) throws -> URL {
         #if WALI_APP_STORE

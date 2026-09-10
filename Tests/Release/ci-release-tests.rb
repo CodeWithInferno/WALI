@@ -12,6 +12,16 @@ class CIReleaseTests < Minitest::Test
   COMMIT = "a" * 40
   TEAM = "ABCDE12345"
   APP_SHA = "b" * 64
+  RELEASE_IDS = {
+    "APP" => "io.github.codewithinferno.wali.WALI",
+    "AGENT" => "io.github.codewithinferno.wali.WALIAgent",
+    "HELPER" => "io.github.codewithinferno.wali.WALILockScreenHelper"
+  }.freeze
+  LEGACY_IDS = {
+    "APP" => "com.wali.WALI",
+    "AGENT" => "com.wali.WALIAgent",
+    "HELPER" => "com.wali.WALILockScreenHelper"
+  }.freeze
 
   def with_environment(values)
     previous = ENV.to_h
@@ -33,12 +43,14 @@ class CIReleaseTests < Minitest::Test
     {"WALI_MARKETPLACE_ENABLED" => "YES", "WALI_SUPABASE_URL" => "https://catalog.example.com", "WALI_SUPABASE_PUBLISHABLE_KEY" => "sb_publishable_#{SecureRandom.hex(20)}", "WALI_CATALOG_CDN_HOST" => "cdn.example.com", "WALI_CATALOG_SIGNING_KEY_ID" => "primary-1", "WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64" => Base64.strict_encode64("a" * 32), "WALI_CATALOG_RECOVERY_SIGNING_KEY_ID" => "recovery-1", "WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64" => Base64.strict_encode64("b" * 32), "WALI_LEGAL_BASE_URL" => "https://example.com/legal"}
   end
 
-  def profile
-    {"UUID" => "12345678-1234-1234-1234-123456789ABC", "TeamIdentifier" => [TEAM], "Platform" => ["OSX"], "ProvisionsAllDevices" => true, "ExpirationDate" => "2030-01-01T00:00:00Z", "DeveloperCertificates" => ["fixture certificate bytes"], "Entitlements" => {"com.apple.application-identifier" => "#{TEAM}.com.wali.WALI", "com.apple.developer.team-identifier" => TEAM, "get-task-allow" => false, "com.apple.security.application-groups" => ["group.com.wali.shared"], "com.apple.developer.applesignin" => ["Default"]}}
+  def profile(identifier = RELEASE_IDS.fetch("APP"))
+    entitlements = {"com.apple.application-identifier" => "#{TEAM}.#{identifier}", "com.apple.developer.team-identifier" => TEAM, "get-task-allow" => false, "com.apple.security.application-groups" => ["group.com.wali.shared"]}
+    entitlements["com.apple.developer.applesignin"] = ["Default"] if [RELEASE_IDS.fetch("APP"), LEGACY_IDS.fetch("APP")].include?(identifier)
+    {"UUID" => "12345678-1234-1234-1234-123456789ABC", "TeamIdentifier" => [TEAM], "Platform" => ["OSX"], "ProvisionsAllDevices" => true, "ExpirationDate" => "2030-01-01T00:00:00Z", "DeveloperCertificates" => ["fixture certificate bytes"], "Entitlements" => entitlements}
   end
 
-  def verify_profile(value)
-    S.verify_profile(value, identifier: "com.wali.WALI", team: TEAM, certificate_sha256: Digest::SHA256.hexdigest("fixture certificate bytes"), now: Time.utc(2026))
+  def verify_profile(value, identifier = RELEASE_IDS.fetch("APP"))
+    S.verify_profile(value, identifier: identifier, team: TEAM, certificate_sha256: Digest::SHA256.hexdigest("fixture certificate bytes"), now: Time.utc(2026))
   end
 
   def test_main_only_environments_allow_the_owner_to_review
@@ -104,6 +116,38 @@ class CIReleaseTests < Minitest::Test
     end
   end
 
+  def test_profiles_accept_only_the_exact_approved_direct_release_identities
+    assert_equal RELEASE_IDS, S::PROFILE_IDS
+    RELEASE_IDS.each do |kind, identifier|
+      assert_equal profile(identifier).fetch("UUID"), verify_profile(profile(identifier), S::PROFILE_IDS.fetch(kind))
+      rejected_ids = LEGACY_IDS.values + (RELEASE_IDS.values - [identifier]) +
+        ["io.github.codewithinferno.wali.*", "io.github.codewithinferno.wali.WALITranscoder", "com.wali.development.WALI", "com.wali.store.WALI", "#{identifier}.other"]
+      rejected_ids.each do |other|
+        assert_raises(RuntimeError, "#{kind} must reject profile for #{other}") { verify_profile(profile(other), identifier) }
+      end
+    end
+  end
+
+  def test_profile_validator_refuses_legacy_or_unsupported_selected_identities
+    (LEGACY_IDS.values + ["io.github.codewithinferno.wali.WALITranscoder", "com.wali.store.WALI"]).each do |identifier|
+      assert_raises(RuntimeError, "Unsupported selected identity #{identifier}") { verify_profile(profile(identifier), identifier) }
+    end
+  end
+
+  def test_new_foreground_profile_requires_exact_sign_in_with_apple_capability
+    [nil, [], "Default", ["PrimaryApp"], ["Default", "unexpected"]].each do |capability|
+      value = profile
+      value.fetch("Entitlements")["com.apple.developer.applesignin"] = capability
+      assert_raises(RuntimeError) { verify_profile(value) }
+    end
+    %w[AGENT HELPER].each do |kind|
+      identifier = RELEASE_IDS.fetch(kind)
+      value = profile(identifier)
+      refute value.fetch("Entitlements").key?("com.apple.developer.applesignin")
+      assert_equal value.fetch("UUID"), verify_profile(value, identifier)
+    end
+  end
+
   def test_profile_checks_team_identity_distribution_expiry_capabilities_and_certificate
     assert_equal profile.fetch("UUID"), verify_profile(profile)
     mutations = [
@@ -116,13 +160,14 @@ class CIReleaseTests < Minitest::Test
       ->(v) { v["DeveloperCertificates"] = ["unrelated certificate"] },
       ->(v) { v["Entitlements"]["com.apple.application-identifier"] = "#{TEAM}.*" },
       ->(v) { v["Entitlements"]["com.apple.security.get-task-allow"] = true },
-      ->(v) { v["Entitlements"]["com.apple.security.application-groups"] = [] },
-      ->(v) { v["Entitlements"].delete("com.apple.developer.applesignin") }
+      ->(v) { v["Entitlements"]["com.apple.security.application-groups"] = [] }
     ]
-    mutations.each do |mutation|
-      value = profile
-      mutation.call(value)
-      assert_raises(RuntimeError) { verify_profile(value) }
+    RELEASE_IDS.each_value do |identifier|
+      mutations.each do |mutation|
+        value = profile(identifier)
+        mutation.call(value)
+        assert_raises(RuntimeError) { verify_profile(value, identifier) }
+      end
     end
   end
 

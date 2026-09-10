@@ -178,7 +178,8 @@ and runs every hostless unit suite. Debug uses `com.wali.debug.*`, omits
 app-group entitlements, and cannot validate shared-container behavior.
 Development uses `com.wali.development.*`, automatic Apple Development signing,
 and `group.com.wali.development.shared`; the supplied team must be authorized
-for those identifiers. Release retains `com.wali.*` and
+for those identifiers. Release uses `io.github.codewithinferno.wali.*` under accepted
+[ADR 0020](docs/adr/0020-direct-release-identifier-namespace.md) and retains
 `group.com.wali.shared`, requires a real common Team ID for authenticated IPC,
 and intentionally fails until `Config/Signing.local.xcconfig` is configured.
 

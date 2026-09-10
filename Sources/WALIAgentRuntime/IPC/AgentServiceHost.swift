@@ -210,8 +210,7 @@ private enum LocalClientValidator {
               Bundle.main.object(forInfoDictionaryKey: "WALIExpectedClientBundleIdentifier") as? String == expected else { return "" }
         return expected
         #else
-        let identifier = Bundle.main.bundleIdentifier ?? "com.wali.WALIAgent"
-        return identifier.replacingOccurrences(of: "WALIAgent", with: "WALI")
+        return DirectAgentIdentity.foregroundIdentifier(for: Bundle.main.bundleIdentifier) ?? ""
         #endif
     }
 
@@ -290,7 +289,7 @@ public enum AgentServiceName {
         #if WALI_APP_STORE
         return ""
         #else
-        return "com.wali.WALIAgent.control"
+        return "io.github.codewithinferno.wali.WALIAgent.control"
         #endif
     }
 }

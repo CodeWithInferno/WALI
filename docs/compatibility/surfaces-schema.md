@@ -33,7 +33,8 @@ Required IDs and kinds:
 - `app_agent_wire`, `agent_worker_wire` → `wire_channel`
 - `bundle_identifiers` → `bundle_identity`
 - `application_group_containers` → `container_identity`
-- app/agent and agent/worker service-name surfaces → `service_identity`
+- `app_agent_service_names`, `agent_worker_service_names`, and
+  `agent_lock_screen_helper_service_names` → `service_identity`
 - content store, preferences, URL schemes, catalog manifest, lock-screen
   manifest, and diagnostic export → their same-named singular kind;
 - `catalog_revocations` → `catalog_revocations`;
@@ -119,28 +120,27 @@ Identity/configuration maps contain exactly `Debug`, `Development`, and
 reference those variables rather than repeating identifier literals in
 `project.yml` or generated plists.
 
-- Bundle identity maps each configuration to WALI, WALIAgent, and
-  WALITranscoder identifiers and must match resolved build settings. Debug uses
+- Bundle identity maps each configuration to WALI, WALIAgent, WALITranscoder,
+  and WALILockScreenHelper and must match resolved build settings. Debug uses
   `com.wali.debug.*`, Development uses `com.wali.development.*`, and Release
-  retains `com.wali.*`.
-- Container identity maps WALI and WALIAgent to group IDs. The checker resolves
-  the xcconfig variable in each entitlement file; Debug intentionally has no
-  entitlement, Development uses `group.com.wali.development.shared`, and
-  Release uses `group.com.wali.shared`.
+  uses `io.github.codewithinferno.wali.*` under ADR 0020.
+- Container identity maps the app, agent, and helper to group IDs. The checker
+  resolves the xcconfig variable in each entitlement file; Debug intentionally
+  has no group, Development uses `group.com.wali.development.shared`, and
+  Release retains `group.com.wali.shared`. The worker has no group entitlement.
 - Service identity maps each configuration to `current` and `target` service
-  names. Configured worker service names must match the worker bundle ID.
-  App↔agent current names stay empty while target names reserve each
-  configuration's planned `WALIAgent.control` identity. ADR 0006 remains
-  proposed until its signed lifecycle spike passes.
+  names. The app/agent and agent/helper names match the configured control
+  services; the helper name ends in `WALILockScreenHelper.control`. The private
+  worker service name matches the worker bundle identifier.
 
-These maps prevent a Development-only identity from being presented as a Debug
-or Release guarantee.
+The checker requires exact selected launch plist filenames, labels,
+`BundleProgram`, `MachServices`, `RunAtLoad: true`, and `KeepAlive.Crashed: true`.
+Generated service lookup and expected-peer metadata must derive from the same
+configuration settings, including the worker's expected agent identity.
 
-ADR 0013 moves the `lock_screen_manifest` reader/writer to
-`WALILockScreenHelper`. The helper service identity, bundle identity, and app
-group become configured facts only when its generated target, xcconfig, and
-entitlements exist and match; a planned module or accepted ADR alone is not a
-claim that signing or registration is configured.
+These are configured facts, not signing or registration evidence. ADR 0006's
+signed service lifecycle and ADR 0013's signed helper acceptance remain separate
+gates. The maps must not present Development checks as Debug or Release proof.
 
 ## Fixture lifecycle
 

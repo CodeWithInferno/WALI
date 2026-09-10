@@ -26,7 +26,7 @@ public struct CatalogInstallPreparer: Sendable {
         environment: CatalogEnvironment,
         downloader: CatalogDownloader? = nil,
         quarantineDirectory: URL? = nil,
-        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.wali.WALI"
+        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "io.github.codewithinferno.wali.WALI"
     ) throws {
         if let downloader {
             self.downloader = downloader

@@ -89,6 +89,7 @@ public final class AgentLifecycleController {
         guard let registrations else { throw AgentLifecycleError.missingConfiguration }
         if requiresExplicitConsent, let expectedAgentIdentifier {
             let editions: Set<String> = [
+                "io.github.codewithinferno.wali.WALIAgent",
                 "com.wali.WALIAgent", "com.wali.development.WALIAgent", "com.wali.debug.WALIAgent",
                 "com.wali.store.WALIAgent", "com.wali.store.development.WALIAgent",
             ]

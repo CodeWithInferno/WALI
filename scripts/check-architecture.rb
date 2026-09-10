@@ -28,6 +28,7 @@ class ArchitectureChecker
     "bundle_identifiers" => "bundle_identity",
     "application_group_containers" => "container_identity",
     "app_agent_service_names" => "service_identity",
+    "agent_lock_screen_helper_service_names" => "service_identity",
     "agent_worker_service_names" => "service_identity",
     "content_store" => "content_store",
     "preferences" => "preferences",
@@ -79,23 +80,27 @@ class ArchitectureChecker
   IDENTITY_BUILD_SETTINGS = {
     "WALI" => "WALI_APP_BUNDLE_IDENTIFIER",
     "WALIAgent" => "WALI_AGENT_BUNDLE_IDENTIFIER",
-    "WALITranscoder" => "WALI_TRANSCODER_BUNDLE_IDENTIFIER"
+    "WALITranscoder" => "WALI_TRANSCODER_BUNDLE_IDENTIFIER",
+    "WALILockScreenHelper" => "WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER"
   }.freeze
   EXPECTED_BUNDLE_IDENTIFIERS = {
     "Debug" => {
       "WALI" => "com.wali.debug.WALI",
       "WALIAgent" => "com.wali.debug.WALIAgent",
-      "WALITranscoder" => "com.wali.debug.WALITranscoder"
+      "WALITranscoder" => "com.wali.debug.WALITranscoder",
+      "WALILockScreenHelper" => "com.wali.debug.WALILockScreenHelper"
     },
     "Development" => {
       "WALI" => "com.wali.development.WALI",
       "WALIAgent" => "com.wali.development.WALIAgent",
-      "WALITranscoder" => "com.wali.development.WALITranscoder"
+      "WALITranscoder" => "com.wali.development.WALITranscoder",
+      "WALILockScreenHelper" => "com.wali.development.WALILockScreenHelper"
     },
     "Release" => {
-      "WALI" => "com.wali.WALI",
-      "WALIAgent" => "com.wali.WALIAgent",
-      "WALITranscoder" => "com.wali.WALITranscoder"
+      "WALI" => "io.github.codewithinferno.wali.WALI",
+      "WALIAgent" => "io.github.codewithinferno.wali.WALIAgent",
+      "WALITranscoder" => "io.github.codewithinferno.wali.WALITranscoder",
+      "WALILockScreenHelper" => "io.github.codewithinferno.wali.WALILockScreenHelper"
     }
   }.freeze
   EXPECTED_APPLICATION_GROUPS = {
@@ -106,7 +111,7 @@ class ArchitectureChecker
   EXPECTED_CONTROL_SERVICES = {
     "Debug" => "com.wali.debug.WALIAgent.control",
     "Development" => "com.wali.development.WALIAgent.control",
-    "Release" => "com.wali.WALIAgent.control"
+    "Release" => "io.github.codewithinferno.wali.WALIAgent.control"
   }.freeze
   REQUIRED_EMBED_ONLY_EDGES = Set.new([
     ["WALI", "WALIAgent"],
@@ -1083,6 +1088,7 @@ class ArchitectureChecker
     end
     validate_required_embed_topology(targets, actual_edges)
     validate_identity_build_settings(targets)
+    validate_direct_service_metadata(targets)
   end
 
   def validate_project_target_registry(targets)
@@ -1420,7 +1426,7 @@ class ArchitectureChecker
     end
 
     identity_variables = IDENTITY_BUILD_SETTINGS.values +
-                         %w[WALI_APP_GROUP_IDENTIFIER WALI_AGENT_CONTROL_SERVICE_NAME]
+                         %w[WALI_APP_GROUP_IDENTIFIER WALI_AGENT_CONTROL_SERVICE_NAME WALI_LOCK_SCREEN_HELPER_SERVICE_NAME]
     CONFIGURATIONS.each do |configuration|
       config_settings = configuration_file_settings(configuration)
       identity_variables.each do |variable|
@@ -1434,6 +1440,65 @@ class ArchitectureChecker
       end
       validate_entitlement_build_policy(targets, configuration)
     end
+  end
+
+  # Every direct channel keeps its exact peer identities and selected launchd path.
+  # These are security-relevant runtime inputs, not just Xcode bundle labels.
+  def validate_direct_service_metadata(targets)
+    info = {
+      "WALI" => {
+        "WALIControlServiceName" => "$(WALI_AGENT_CONTROL_SERVICE_NAME)",
+        "WALIAgentLaunchAgentPlistName" => "$(WALI_AGENT_BUNDLE_IDENTIFIER).plist",
+        "WALILockScreenHelperLaunchAgentPlistName" => "$(WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER).plist"
+      },
+      "WALIAgent" => {
+        "WALIControlServiceName" => "$(WALI_AGENT_CONTROL_SERVICE_NAME)",
+        "WALITranscoderServiceName" => "$(WALI_TRANSCODER_BUNDLE_IDENTIFIER)",
+        "WALILockScreenHelperServiceName" => "$(WALI_LOCK_SCREEN_HELPER_SERVICE_NAME)",
+        "WALILockScreenHelperBundleIdentifier" => "$(WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER)"
+      },
+      "WALITranscoder" => {
+        "WALIExpectedClientBundleIdentifier" => "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
+      },
+      "WALILockScreenHelper" => {
+        "WALILockScreenHelperServiceName" => "$(WALI_LOCK_SCREEN_HELPER_SERVICE_NAME)",
+        "WALIExpectedAgentBundleIdentifier" => "$(WALI_AGENT_BUNDLE_IDENTIFIER)"
+      }
+    }
+    info.each do |target, properties|
+      properties.each do |key, expected|
+        error("#{target} #{key} must reference #{expected}") unless targets.dig(target, "info", "properties", key) == expected
+      end
+    end
+    directory = repository_path("Config/LaunchAgents")
+    expected_names = []
+    CONFIGURATIONS.each do |configuration|
+      %w[WALIAgent WALILockScreenHelper].each do |role|
+        identifier = EXPECTED_BUNDLE_IDENTIFIERS.fetch(configuration).fetch(role)
+        name = "#{identifier}.plist"
+        expected_names << name
+        path = File.join(directory, name)
+        if File.symlink?(path) || !File.file?(path)
+          error("#{configuration} #{role} launch plist must exist at Config/LaunchAgents/#{name}")
+          next
+        end
+        output, _errors, status = Open3.capture3("/usr/bin/plutil", "-convert", "json", "-o", "-", path)
+        begin
+          plist = status.success? ? JSON.parse(output) : nil
+        rescue JSON::ParserError
+          plist = nil
+        end
+        expected = {
+          "Label" => identifier,
+          "BundleProgram" => "Contents/Library/LoginItems/#{role}.app/Contents/MacOS/#{role}",
+          "MachServices" => {"#{identifier}.control" => true},
+          "ProcessType" => "Interactive", "RunAtLoad" => true, "KeepAlive" => {"Crashed" => true}
+        }
+        error("#{configuration} #{role} launch plist must match exact identity, executable, service, and lifecycle policy") unless plist == expected
+      end
+    end
+    actual_names = Dir.children(directory).sort if File.directory?(directory)
+    error("direct launch plist inventory must contain exactly the six configured agent/helper identities") unless actual_names == expected_names.sort
   end
 
   def validate_runtime_build_policy(target_name, configuration)
@@ -1463,7 +1528,7 @@ class ArchitectureChecker
   end
 
   def validate_entitlement_build_policy(targets, configuration)
-    %w[WALI WALIAgent].each do |target_name|
+    %w[WALI WALIAgent WALILockScreenHelper].each do |target_name|
       settings = target_build_settings(target_name, configuration)
       entitlements = settings["CODE_SIGN_ENTITLEMENTS"]
       if configuration == "Debug"
@@ -2126,7 +2191,7 @@ class ArchitectureChecker
       require_exact_fields(details, %w[entitlement_key configurations], "#{id} details")
       error("application group entitlement key is invalid") unless details["entitlement_key"] == "com.apple.security.application-groups"
       validate_container_configurations(id, details["configurations"])
-    when "app_agent_service_names", "agent_worker_service_names"
+    when "app_agent_service_names", "agent_worker_service_names", "agent_lock_screen_helper_service_names"
       require_exact_fields(details, %w[decision_gate configurations], "#{id} details")
       error("#{id} decision_gate must be a non-empty string") unless nonempty_string?(details["decision_gate"])
       validate_service_configurations(id, implementation, details["configurations"])
@@ -2375,7 +2440,7 @@ class ArchitectureChecker
         error("#{id} #{configuration} configuration must be a mapping")
         next
       end
-      require_exact_fields(values, %w[WALI WALIAgent WALITranscoder], "#{id} #{configuration}")
+      require_exact_fields(values, IDENTITY_BUILD_SETTINGS.keys, "#{id} #{configuration}")
       values.each do |target, identifier|
         error("#{id} #{configuration} #{target} must be a bundle identifier") unless bundle_identifier?(identifier)
         expected = project_bundle_identifier(target, configuration)
@@ -2400,7 +2465,7 @@ class ArchitectureChecker
         error("#{id} #{configuration} configuration must be a mapping")
         next
       end
-      require_exact_fields(values, %w[WALI WALIAgent], "#{id} #{configuration}")
+      require_exact_fields(values, %w[WALI WALIAgent WALILockScreenHelper], "#{id} #{configuration}")
       values.each do |target, identifiers|
         actual = string_array(identifiers, "#{id} #{configuration} #{target}")
         expected = project_application_groups(target, configuration)
@@ -2457,6 +2522,11 @@ class ArchitectureChecker
         unless target == [required]
           error("#{id} #{configuration} target must be #{required}")
         end
+      elsif id == "agent_lock_screen_helper_service_names"
+        required = "#{EXPECTED_BUNDLE_IDENTIFIERS.fetch(configuration).fetch("WALILockScreenHelper")}.control"
+        expected = resolved_target_build_setting("WALILockScreenHelper", configuration, "WALI_LOCK_SCREEN_HELPER_SERVICE_NAME")
+        error("#{id} #{configuration} service does not match resolved build settings") unless expected == required
+        error("#{id} #{configuration} current and target must be #{required}") unless current == [required] && target == [required]
       elsif id == "agent_worker_service_names"
         required = EXPECTED_BUNDLE_IDENTIFIERS.dig(configuration, "WALITranscoder")
         unless current == [required]
@@ -2683,7 +2753,7 @@ class ArchitectureChecker
       return
     end
     direct = distributions["direct"]
-    expected_direct = {"project_spec" => "project.yml", "generated_project" => "WALI.xcodeproj", "configurations" => CONFIGURATIONS}
+    expected_direct = {"project_spec" => "project.yml", "generated_project" => "WALI.xcodeproj", "identity_policy_adr" => "docs/adr/0020-direct-release-identifier-namespace.md", "configurations" => CONFIGURATIONS}
     error("direct distribution registry differs from approved graph") unless direct == expected_direct
     store = distributions["store"]
     expected_store = {

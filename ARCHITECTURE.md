@@ -92,7 +92,8 @@ namespaces. Script-built Debug bundles receive ad-hoc seals for local agent
 registration; hostless test builds may remain unsealed. Debug has no app-group
 entitlement and cannot authenticate the privileged helper. Development uses the
 `com.wali.development.*` namespace, strict Apple Development signatures, and
-its own app group; Release retains the `com.wali.*` production identities and
+its own app group; Release uses the `io.github.codewithinferno.wali.*` production identities under
+[ADR 0020](docs/adr/0020-direct-release-identifier-namespace.md) and retains
 requires configured distribution signing.
 
 ### Approved Mac App Store distribution

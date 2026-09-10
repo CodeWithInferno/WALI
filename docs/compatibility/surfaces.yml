@@ -207,14 +207,17 @@ surfaces:
           WALI: com.wali.debug.WALI
           WALIAgent: com.wali.debug.WALIAgent
           WALITranscoder: com.wali.debug.WALITranscoder
+          WALILockScreenHelper: com.wali.debug.WALILockScreenHelper
         Development:
           WALI: com.wali.development.WALI
           WALIAgent: com.wali.development.WALIAgent
           WALITranscoder: com.wali.development.WALITranscoder
+          WALILockScreenHelper: com.wali.development.WALILockScreenHelper
         Release:
-          WALI: com.wali.WALI
-          WALIAgent: com.wali.WALIAgent
-          WALITranscoder: com.wali.WALITranscoder
+          WALI: io.github.codewithinferno.wali.WALI
+          WALIAgent: io.github.codewithinferno.wali.WALIAgent
+          WALITranscoder: io.github.codewithinferno.wali.WALITranscoder
+          WALILockScreenHelper: io.github.codewithinferno.wali.WALILockScreenHelper
 
   - id: application_group_containers
     kind: container_identity
@@ -241,12 +244,15 @@ surfaces:
         Debug:
           WALI: []
           WALIAgent: []
+          WALILockScreenHelper: []
         Development:
           WALI: [group.com.wali.development.shared]
           WALIAgent: [group.com.wali.development.shared]
+          WALILockScreenHelper: [group.com.wali.development.shared]
         Release:
           WALI: [group.com.wali.shared]
           WALIAgent: [group.com.wali.shared]
+          WALILockScreenHelper: [group.com.wali.shared]
 
   - id: app_agent_service_names
     kind: service_identity
@@ -277,8 +283,40 @@ surfaces:
           current: [com.wali.development.WALIAgent.control]
           target: [com.wali.development.WALIAgent.control]
         Release:
-          current: [com.wali.WALIAgent.control]
-          target: [com.wali.WALIAgent.control]
+          current: [io.github.codewithinferno.wali.WALIAgent.control]
+          target: [io.github.codewithinferno.wali.WALIAgent.control]
+
+  - id: agent_lock_screen_helper_service_names
+    kind: service_identity
+    owner_role: security_responder
+    implementation: configured
+    version:
+      current: null
+      readable_epochs: []
+      additive_compatibility: null
+    product_compatibility:
+      minimum_reader: null
+      minimum_writer: null
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALIAgent, WALILockScreenHelper]
+      writers: []
+    fixture_gate:
+      status: not_applicable
+      paths: []
+    details:
+      decision_gate: adr_0013_signed_helper_acceptance
+      configurations:
+        Debug:
+          current: [com.wali.debug.WALILockScreenHelper.control]
+          target: [com.wali.debug.WALILockScreenHelper.control]
+        Development:
+          current: [com.wali.development.WALILockScreenHelper.control]
+          target: [com.wali.development.WALILockScreenHelper.control]
+        Release:
+          current: [io.github.codewithinferno.wali.WALILockScreenHelper.control]
+          target: [io.github.codewithinferno.wali.WALILockScreenHelper.control]
 
   - id: agent_worker_service_names
     kind: service_identity
@@ -309,8 +347,8 @@ surfaces:
           current: [com.wali.development.WALITranscoder]
           target: [com.wali.development.WALITranscoder]
         Release:
-          current: [com.wali.WALITranscoder]
-          target: [com.wali.WALITranscoder]
+          current: [io.github.codewithinferno.wali.WALITranscoder]
+          target: [io.github.codewithinferno.wali.WALITranscoder]
 
   # The content-addressed store and crash recovery are implemented locally.
   # This versioned surface remains unimplemented until its fixture gate exists.

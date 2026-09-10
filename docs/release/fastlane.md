@@ -71,6 +71,25 @@ automatically as part of that command or changes the production backend.
 records the Apple submission IDs. Packaging failures preserve the verified
 stapled-app digest so outer-DMG notarization can be retried.
 
+## Direct identity and local prerelease transition
+
+[ADR 0020](../adr/0020-direct-release-identifier-namespace.md) assigns direct
+Release to `io.github.codewithinferno.wali.WALI`, `.WALIAgent`, `.WALITranscoder`,
+and `.WALILockScreenHelper`. The foreground, agent, and helper profiles must
+match those exact identifiers and retain `group.com.wali.shared`; the worker
+does not have a separate profile. Debug, Development, and Store identities
+remain separate.
+
+This first direct release starts with a fresh library, defaults, and sign-in
+namespace. Existing local prerelease files are preserved; no automatic token,
+bookmark, library, or helper-journal migration is performed. Before replacing
+an older build with active Lock Screen continuity, disable and restore it
+through that old app, then fully quit its app and agent. Do not launch old and
+new playback concurrently or patch Apple's wallpaper store to migrate state.
+The native acceptance below must cover the actual signed candidate; a fresh
+install does not prove an upgrade. Production marketplace activation separately
+requires the new native Apple client/audience to pass its authentication gates.
+
 ## Publish the verified GitHub release
 
 After native journeys and the release review pass, merge the reviewed source

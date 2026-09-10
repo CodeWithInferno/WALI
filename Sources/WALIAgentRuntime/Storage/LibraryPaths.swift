@@ -23,7 +23,7 @@ public struct LibraryPaths: Sendable, Hashable {
     /// Configuration-specific application-support storage for the agent.
     public static func applicationSupport(
         fileManager: FileManager = .default,
-        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.wali.WALIAgent"
+        bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "io.github.codewithinferno.wali.WALIAgent"
     ) throws -> LibraryPaths {
         let base = try fileManager.url(
             for: .applicationSupportDirectory,

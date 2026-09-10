@@ -7,9 +7,9 @@
 	<key>KeepAlive</key>
 	<dict><key>Crashed</key><true/></dict>
 	<key>Label</key>
-	<string>com.wali.WALILockScreenHelper</string>
+	<string>io.github.codewithinferno.wali.WALILockScreenHelper</string>
 	<key>MachServices</key>
-	<dict><key>com.wali.WALILockScreenHelper.control</key><true/></dict>
+	<dict><key>io.github.codewithinferno.wali.WALILockScreenHelper.control</key><true/></dict>
 	<key>ProcessType</key>
 	<string>Interactive</string>
 	<key>RunAtLoad</key>

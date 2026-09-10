@@ -907,6 +907,7 @@ distributions:
   direct:
     project_spec: project.yml
     generated_project: WALI.xcodeproj
+    identity_policy_adr: docs/adr/0020-direct-release-identifier-namespace.md
     configurations:
     - Debug
     - Development

@@ -89,6 +89,24 @@ final class LockScreenHelperTests: XCTestCase {
         ))
     }
 
+    func testReleaseHelperRejectsOldAndOtherEditionPeers() throws {
+        let expected = "io.github.codewithinferno.wali.WALIAgent"
+        XCTAssertTrue(AuthenticatedPeer.matchesDesignatedIdentity(
+            clientIdentifier: expected, expectedIdentifier: expected, clientTeam: "OWNER00001", ownTeam: "OWNER00001"
+        ))
+        for identifier in [
+            "com.wali.WALIAgent", "com.wali.development.WALIAgent", "com.wali.debug.WALIAgent",
+            "com.wali.store.WALIAgent", expected + ".spoof",
+        ] {
+            XCTAssertFalse(AuthenticatedPeer.matchesDesignatedIdentity(
+                clientIdentifier: identifier, expectedIdentifier: expected, clientTeam: "OWNER00001", ownTeam: "OWNER00001"
+            ), identifier)
+        }
+        let roots = try FixedWallpaperStore.Roots.live(agentBundleIdentifier: expected)
+        XCTAssertTrue(roots.journalURL.path.hasSuffix("/" + expected + "/Library/Metadata/lock-screen-choice-journal.json"))
+        XCTAssertTrue(roots.objectRoot.path.hasSuffix("/" + expected + "/Library/Objects/sha256"))
+    }
+
     func testAdHocAndSpoofedPeerIdentitiesAreRejected() {
         XCTAssertFalse(AuthenticatedPeer.matchesDesignatedIdentity(
             clientIdentifier: "com.wali.debug.WALIAgent",

@@ -510,10 +510,7 @@ public actor AgentCommandRouter {
         #if WALI_APP_STORE
         return Bundle.main.object(forInfoDictionaryKey: "WALIExpectedClientBundleIdentifier") as? String
         #else
-        let agentIdentifier = Bundle.main.bundleIdentifier ?? ""
-        if agentIdentifier.contains(".debug.") { return "com.wali.debug.WALI" }
-        if agentIdentifier.contains(".development.") { return "com.wali.development.WALI" }
-        return "com.wali.WALI"
+        return DirectAgentIdentity.foregroundIdentifier(for: Bundle.main.bundleIdentifier)
         #endif
     }
 

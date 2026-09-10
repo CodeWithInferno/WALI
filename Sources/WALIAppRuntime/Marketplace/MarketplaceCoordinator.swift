@@ -179,7 +179,7 @@ public final class MarketplaceCreatorContext {
 @MainActor
 public final class MarketplaceCoordinator {
     private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.wali.WALI",
+        subsystem: Bundle.main.bundleIdentifier ?? "io.github.codewithinferno.wali.WALI",
         category: "Marketplace"
     )
 
@@ -319,7 +319,7 @@ public final class MarketplaceCoordinator {
         if let supabaseHost = environment.supabaseURL.host { uploadHosts.insert(supabaseHost) }
         let uploadTransport = try? URLSessionCreatorUploadTransport(approvedHosts: uploadHosts)
         let authStore = gateway.makeAuthSessionStore()
-        let bundleIdentifier = bundle.bundleIdentifier ?? "com.wali.WALI"
+        let bundleIdentifier = bundle.bundleIdentifier ?? "io.github.codewithinferno.wali.WALI"
         let securityStore = try? CatalogSecurityStateStore(
             environment: environment,
             cacheURL: try CatalogSecurityStateStore.defaultCacheURL(

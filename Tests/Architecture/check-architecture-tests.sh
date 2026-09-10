@@ -123,6 +123,8 @@ WALI_AGENT_BUNDLE_IDENTIFIER = com.wali.debug.WALIAgent
 WALI_TRANSCODER_BUNDLE_IDENTIFIER = com.wali.debug.WALITranscoder
 WALI_APP_GROUP_IDENTIFIER =
 WALI_AGENT_CONTROL_SERVICE_NAME = com.wali.debug.WALIAgent.control
+WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER = com.wali.debug.WALILockScreenHelper
+WALI_LOCK_SCREEN_HELPER_SERVICE_NAME = com.wali.debug.WALILockScreenHelper.control
 CODE_SIGN_STYLE = Manual
 CODE_SIGN_IDENTITY = -
 DEVELOPMENT_TEAM =
@@ -136,6 +138,8 @@ WALI_AGENT_BUNDLE_IDENTIFIER = com.wali.development.WALIAgent
 WALI_TRANSCODER_BUNDLE_IDENTIFIER = com.wali.development.WALITranscoder
 WALI_APP_GROUP_IDENTIFIER = group.com.wali.development.shared
 WALI_AGENT_CONTROL_SERVICE_NAME = com.wali.development.WALIAgent.control
+WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER = com.wali.development.WALILockScreenHelper
+WALI_LOCK_SCREEN_HELPER_SERVICE_NAME = com.wali.development.WALILockScreenHelper.control
 CODE_SIGN_STYLE = Automatic
 CODE_SIGN_IDENTITY = Apple Development
 ENABLE_HARDENED_RUNTIME = YES
@@ -143,11 +147,13 @@ EOF
 
     cat > "${root}/Config/Release.xcconfig" <<'EOF'
 #include "Base.xcconfig"
-WALI_APP_BUNDLE_IDENTIFIER = com.wali.WALI
-WALI_AGENT_BUNDLE_IDENTIFIER = com.wali.WALIAgent
-WALI_TRANSCODER_BUNDLE_IDENTIFIER = com.wali.WALITranscoder
+WALI_APP_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALI
+WALI_AGENT_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALIAgent
+WALI_TRANSCODER_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALITranscoder
 WALI_APP_GROUP_IDENTIFIER = group.com.wali.shared
-WALI_AGENT_CONTROL_SERVICE_NAME = com.wali.WALIAgent.control
+WALI_AGENT_CONTROL_SERVICE_NAME = io.github.codewithinferno.wali.WALIAgent.control
+WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALILockScreenHelper
+WALI_LOCK_SCREEN_HELPER_SERVICE_NAME = io.github.codewithinferno.wali.WALILockScreenHelper.control
 CODE_SIGN_STYLE = Manual
 CODE_SIGN_IDENTITY = -
 DEVELOPMENT_TEAM =
@@ -164,6 +170,7 @@ EOF
 </plist>
 EOF
     cp "${root}/Config/WALI.entitlements" "${root}/Config/WALIAgent.entitlements"
+    cp "${root}/Config/WALI.entitlements" "${root}/Config/WALILockScreenHelper.entitlements"
 
     cat > "${root}/Packages/WALICore/Package.swift" <<'EOF'
 // swift-tools-version: 6.2
@@ -758,9 +765,9 @@ by_id["bundle_identifiers"]["details"] = {
       "WALITranscoder" => "com.wali.development.WALITranscoder"
     },
     "Release" => {
-      "WALI" => "com.wali.WALI",
-      "WALIAgent" => "com.wali.WALIAgent",
-      "WALITranscoder" => "com.wali.WALITranscoder"
+      "WALI" => "io.github.codewithinferno.wali.WALI",
+      "WALIAgent" => "io.github.codewithinferno.wali.WALIAgent",
+      "WALITranscoder" => "io.github.codewithinferno.wali.WALITranscoder"
     }
   }
 }
@@ -791,7 +798,7 @@ by_id["app_agent_service_names"]["details"] = {
     },
     "Release" => {
       "current" => [],
-      "target" => ["com.wali.WALIAgent.control"]
+      "target" => ["io.github.codewithinferno.wali.WALIAgent.control"]
     }
   }
 }
@@ -807,8 +814,8 @@ by_id["agent_worker_service_names"]["details"] = {
       "target" => ["com.wali.development.WALITranscoder"]
     },
     "Release" => {
-      "current" => ["com.wali.WALITranscoder"],
-      "target" => ["com.wali.WALITranscoder"]
+      "current" => ["io.github.codewithinferno.wali.WALITranscoder"],
+      "target" => ["io.github.codewithinferno.wali.WALITranscoder"]
     }
   }
 }
@@ -920,6 +927,7 @@ RUBY
     cp "${REPOSITORY_ROOT}/Config/StoreDevelopment.xcconfig" "${REPOSITORY_ROOT}/Config/AppStore.xcconfig" \
         "${REPOSITORY_ROOT}/Config/Store-"*.entitlements "${root}/Config/"
     cp -R "${REPOSITORY_ROOT}/Config/StoreLaunchAgents" "${root}/Config/StoreLaunchAgents"
+    cp -R "${REPOSITORY_ROOT}/Config/LaunchAgents" "${root}/Config/LaunchAgents"
     cp "${REPOSITORY_ROOT}/Packages/WALICore/Package.swift" \
         "${root}/Packages/WALICore/Package.swift"
     cp "${REPOSITORY_ROOT}/docs/architecture/modules.yml" \
@@ -951,6 +959,7 @@ RUBY
         "${REPOSITORY_ROOT}/docs/adr/0016-minimal-engagement-and-ranking-data.md" \
         "${REPOSITORY_ROOT}/docs/adr/0017-marketplace-hevc-main10.md" \
         "${REPOSITORY_ROOT}/docs/adr/0018-sandboxed-mac-app-store-distribution.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0020-direct-release-identifier-namespace.md" \
         "${root}/docs/adr/"
 
     printf '%s\n' "${root}"
@@ -1010,6 +1019,7 @@ new_marketplace_fixture() {
     cp "${REPOSITORY_ROOT}/Config/StoreDevelopment.xcconfig" "${REPOSITORY_ROOT}/Config/AppStore.xcconfig" \
         "${REPOSITORY_ROOT}/Config/Store-"*.entitlements "${root}/Config/"
     cp -R "${REPOSITORY_ROOT}/Config/StoreLaunchAgents" "${root}/Config/StoreLaunchAgents"
+    cp -R "${REPOSITORY_ROOT}/Config/LaunchAgents" "${root}/Config/LaunchAgents"
     cp "${REPOSITORY_ROOT}/Packages/WALICore/Package.swift" \
         "${root}/Packages/WALICore/Package.swift"
     cp "${REPOSITORY_ROOT}/docs/architecture/modules.yml" \
@@ -1033,6 +1043,7 @@ new_marketplace_fixture() {
         "${REPOSITORY_ROOT}/docs/adr/0016-minimal-engagement-and-ranking-data.md" \
         "${REPOSITORY_ROOT}/docs/adr/0017-marketplace-hevc-main10.md" \
         "${REPOSITORY_ROOT}/docs/adr/0018-sandboxed-mac-app-store-distribution.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0020-direct-release-identifier-namespace.md" \
         "${root}/docs/adr/"
     cp "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.json" \
         "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.signature" \
@@ -1835,6 +1846,51 @@ expect_failure \
     "Development signing identity" \
     "${development_signing_fixture}" \
     "WALI Development CODE_SIGN_IDENTITY must be Apple Development"
+
+# Reject a coordinated registry/config rollback of any individual Release peer.
+for pair in WALI:WALI_APP_BUNDLE_IDENTIFIER WALIAgent:WALI_AGENT_BUNDLE_IDENTIFIER WALITranscoder:WALI_TRANSCODER_BUNDLE_IDENTIFIER WALILockScreenHelper:WALI_LOCK_SCREEN_HELPER_BUNDLE_IDENTIFIER; do
+    role="${pair%%:*}"
+    setting="${pair#*:}"
+    fixture="$(new_fixture "legacy-release-${role}")"
+    replace_text "${fixture}/Config/Release.xcconfig" \
+        "${setting} = io.github.codewithinferno.wali.${role}" "${setting} = com.wali.${role}"
+    mutate_yaml "${fixture}/docs/compatibility/surfaces.yml" \
+        "data[\"surfaces\"].find { |surface| surface[\"id\"] == \"bundle_identifiers\" }[\"details\"][\"configurations\"][\"Release\"][\"${role}\"] = \"com.wali.${role}\""
+    expect_failure "legacy Release ${role} namespace" "${fixture}" \
+        "bundle_identifiers Release ${role} must be io.github.codewithinferno.wali.${role}"
+done
+
+for role in WALIAgent WALILockScreenHelper; do
+    fixture="$(new_fixture "stale-launch-${role}")"
+    plist="${fixture}/Config/LaunchAgents/io.github.codewithinferno.wali.${role}.plist"
+    replace_text "${plist}" "<string>io.github.codewithinferno.wali.${role}</string>" "<string>com.wali.${role}</string>"
+    expect_failure "legacy Release ${role} launch metadata" "${fixture}" \
+        "Release ${role} launch plist must match exact identity"
+    mv "${plist}" "${fixture}/Config/LaunchAgents/com.wali.${role}.plist"
+    expect_failure "legacy Release ${role} launch filename" "${fixture}" \
+        "Release ${role} launch plist must exist"
+done
+
+helper_lookup_fixture="$(new_fixture helper-lookup-metadata)"
+mutate_yaml "${helper_lookup_fixture}/project.yml" \
+    'data["targets"]["WALIAgent"]["info"]["properties"]["WALILockScreenHelperServiceName"] = "com.wali.WALILockScreenHelper.control"'
+expect_failure "helper lookup cannot retain legacy namespace" "${helper_lookup_fixture}" \
+    'WALIAgent WALILockScreenHelperServiceName must reference $(WALI_LOCK_SCREEN_HELPER_SERVICE_NAME)'
+
+worker_client_fixture="$(new_fixture legacy-worker-expected-client)"
+mutate_yaml "${worker_client_fixture}/project.yml" \
+    'data["targets"]["WALITranscoder"]["info"]["properties"]["WALIExpectedClientBundleIdentifier"] = "com.wali.WALIAgent"'
+expect_failure "legacy worker expected client metadata" "${worker_client_fixture}" \
+    'WALITranscoder WALIExpectedClientBundleIdentifier must reference $(WALI_AGENT_BUNDLE_IDENTIFIER)'
+
+helper_identity_fixture="$(new_fixture coordinated-helper-service-drift)"
+replace_text "${helper_identity_fixture}/Config/Release.xcconfig" \
+    "WALI_LOCK_SCREEN_HELPER_SERVICE_NAME = io.github.codewithinferno.wali.WALILockScreenHelper.control" \
+    "WALI_LOCK_SCREEN_HELPER_SERVICE_NAME = com.wali.WALILockScreenHelper.control"
+mutate_yaml "${helper_identity_fixture}/docs/compatibility/surfaces.yml" \
+    'data["surfaces"].find { |surface| surface["id"] == "agent_lock_screen_helper_service_names" }["details"]["configurations"]["Release"] = {"current" => ["com.wali.WALILockScreenHelper.control"], "target" => ["com.wali.WALILockScreenHelper.control"]}'
+expect_failure "coordinated helper service drift" "${helper_identity_fixture}" \
+    'agent_lock_screen_helper_service_names Release current and target must be io.github.codewithinferno.wali.WALILockScreenHelper.control'
 
 release_hardened_runtime_fixture="$(new_fixture disabled-release-hardened-runtime)"
 replace_text \

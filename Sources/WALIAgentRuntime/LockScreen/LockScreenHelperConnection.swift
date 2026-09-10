@@ -181,7 +181,7 @@ public actor LockScreenHelperConnection {
     public static func live(libraryPaths: LibraryPaths) -> LockScreenHelperConnection {
         let serviceName = Bundle.main.object(
             forInfoDictionaryKey: "WALILockScreenHelperServiceName"
-        ) as? String ?? "com.wali.WALILockScreenHelper.control"
+        ) as? String ?? "io.github.codewithinferno.wali.WALILockScreenHelper.control"
         return LockScreenHelperConnection(
             transport: LockScreenHelperXPCTransport(serviceName: serviceName),
             preparedThumbnailRoot: libraryPaths.metadata
