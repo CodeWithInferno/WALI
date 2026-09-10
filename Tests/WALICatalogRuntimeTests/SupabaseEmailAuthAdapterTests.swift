@@ -74,11 +74,12 @@ final class SupabaseEmailAuthAdapterTests: XCTestCase {
     func testStaleRefreshCannotOverwriteStagedAdmission() throws {
         let storage = CatalogCheckedAuthStorage(underlying: CatalogMemoryAuthStorage())
         let new = makeSession()
+        let admittedData = try JSONEncoder().encode(new)
         try storage.beginAdmission(accessToken: new.accessToken)
-        try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: JSONEncoder().encode(new))
+        try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: admittedData)
         XCTAssertThrowsError(try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: JSONEncoder().encode(makeSession(accessToken: "obsolete-fixture-access"))))
         try storage.finishAdmission(session: new)
-        XCTAssertEqual(try storage.retrieve(key: CatalogCheckedAuthStorage.sessionKey), try JSONEncoder().encode(new))
+        XCTAssertEqual(try storage.retrieve(key: CatalogCheckedAuthStorage.sessionKey), admittedData)
     }
 
     func testAcknowledgementFailureAndFailedRollbackFailClosed() throws {

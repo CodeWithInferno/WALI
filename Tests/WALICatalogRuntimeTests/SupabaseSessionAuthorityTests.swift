@@ -41,12 +41,13 @@ final class SupabaseSessionAuthorityTests: XCTestCase {
         let refreshed = SDKSessionFixture.session(subject: SDKSessionFixture.firstID, suffix: "refreshed")
         try storage.finishRequest(ticket, data: AuthClient.Configuration.jsonEncoder.encode(refreshed), response: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         let admitted = SDKSessionFixture.session(subject: SDKSessionFixture.secondID, suffix: "new")
+        let admittedData = try JSONEncoder().encode(admitted)
         try storage.beginAdmission(accessToken: admitted.accessToken)
-        try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: JSONEncoder().encode(admitted))
+        try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: admittedData)
         try storage.finishAdmission(session: admitted)
         XCTAssertThrowsError(try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: JSONEncoder().encode(refreshed)))
         XCTAssertThrowsError(try storage.remove(key: CatalogCheckedAuthStorage.sessionKey))
-        XCTAssertEqual(try storage.retrieve(key: CatalogCheckedAuthStorage.sessionKey), try JSONEncoder().encode(admitted))
+        XCTAssertEqual(try storage.retrieve(key: CatalogCheckedAuthStorage.sessionKey), admittedData)
     }
 
     func testRealSDKCurrentRefreshPersistsAndRestarts() async throws {
@@ -99,11 +100,12 @@ final class SupabaseSessionAuthorityTests: XCTestCase {
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
         try storage.finishRequest(firstTicket, data: AuthClient.Configuration.jsonEncoder.encode(first), response: response)
         try storage.finishRequest(secondTicket, data: AuthClient.Configuration.jsonEncoder.encode(second), response: response)
-        try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: JSONEncoder().encode(second))
+        let secondData = try JSONEncoder().encode(second)
+        try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: secondData)
         XCTAssertThrowsError(try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: JSONEncoder().encode(first)))
         let expired = Data("{\"code\":\"session_expired\"}".utf8)
         XCTAssertThrowsError(try storage.finishRequest(firstTicket, data: expired, response: HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!))
-        XCTAssertEqual(try storage.retrieve(key: CatalogCheckedAuthStorage.sessionKey), try JSONEncoder().encode(second))
+        XCTAssertEqual(try storage.retrieve(key: CatalogCheckedAuthStorage.sessionKey), secondData)
         var metadataUpdate = second
         metadataUpdate.user.email = "changed@example.com"
         XCTAssertNoThrow(try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: JSONEncoder().encode(metadataUpdate)))
@@ -113,7 +115,8 @@ final class SupabaseSessionAuthorityTests: XCTestCase {
         let original = SDKSessionFixture.session(subject: SDKSessionFixture.firstID, suffix: "original")
         let different = SDKSessionFixture.session(subject: SDKSessionFixture.secondID, suffix: "different")
         let base = CatalogMemoryAuthStorage()
-        try base.store(key: CatalogCheckedAuthStorage.sessionKey, value: JSONEncoder().encode(original))
+        let originalData = try JSONEncoder().encode(original)
+        try base.store(key: CatalogCheckedAuthStorage.sessionKey, value: originalData)
         let storage = CatalogCheckedAuthStorage(underlying: base)
         var bearerRequest = URLRequest(url: URL(string: "https://api-fixture.example/auth/v1/factors/fixture/verify")!)
         bearerRequest.setValue("Bearer " + original.accessToken, forHTTPHeaderField: "Authorization")
@@ -125,7 +128,7 @@ final class SupabaseSessionAuthorityTests: XCTestCase {
             XCTAssertThrowsError(try storage.finishRequest(ticket, data: AuthClient.Configuration.jsonEncoder.encode(different), response: response))
         }
         XCTAssertThrowsError(try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: JSONEncoder().encode(different)))
-        XCTAssertEqual(try storage.retrieve(key: CatalogCheckedAuthStorage.sessionKey), try JSONEncoder().encode(original))
+        XCTAssertEqual(try storage.retrieve(key: CatalogCheckedAuthStorage.sessionKey), originalData)
     }
 
     func testFailedPersistenceNeverAuthorizesActualSDKFunctionsRequest() async throws {
