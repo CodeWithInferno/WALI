@@ -68,7 +68,116 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         XCTAssertEqual(permanentCalls, 1)
     }
 
-    func testMissingConfigurationUsesHonestEmptyState() {
+    func testUnavailableFactoryRejectsSignInWithoutSuggestingARelaunch() throws {
+        for enabled in ["NO", "YES"] {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("WALI-Marketplace-Availability-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let bundleURL = root.appendingPathComponent("Unavailable.bundle")
+            let contents = bundleURL.appendingPathComponent("Contents")
+            try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+            let info: [String: Any] = [
+                "CFBundleIdentifier": "private.wali.marketplace-availability." + UUID().uuidString,
+                "CFBundlePackageType": "BNDL",
+                "WALIMarketplaceEnabled": enabled,
+            ]
+            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+                .write(to: contents.appendingPathComponent("Info.plist"), options: .atomic)
+            let bundle = try XCTUnwrap(Bundle(url: bundleURL))
+            let coordinator = MarketplaceCoordinator.configured(bundle: bundle)
+            XCTAssertFalse(coordinator.isMarketplaceAvailable)
+            XCTAssertFalse(coordinator.canShowCreatorTools)
+            XCTAssertFalse(coordinator.canShowModeratorTools)
+
+            coordinator.signIn()
+
+            XCTAssertEqual(
+                coordinator.model.authenticationState,
+                .failed(message: "Marketplace accounts are unavailable in this build. Your local wallpapers remain available in Library."),
+                "Disabled and incomplete configurations must not suggest retrying native Apple sign-in"
+            )
+        }
+    }
+
+    func testUnavailableCoordinatorBlocksStaleAccountAndCatalogActions() async throws {
+        let gateway = ScriptedCatalogGateway(homeSteps: [], detailValue: Self.detail())
+        let populated = MarketplaceCoordinator(gateway: gateway)
+        populated.loadDetail(wallpaperID: Self.wallpaperID)
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while populated.model.detailState == .loading, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(populated.model.detailState, .ready)
+        XCTAssertNotNil(populated.model.selectedDetail)
+        populated.stop()
+        let auth = ScriptedAuthStore()
+        let coordinator = MarketplaceCoordinator(
+            model: populated.model,
+            isMarketplaceAvailable: false,
+            gateway: gateway,
+            reportGateway: gateway,
+            authStore: auth
+        )
+        coordinator.model.accountState = .signedIn(userID: "stale-subject")
+        coordinator.model.authenticationState = .working
+
+        coordinator.signIn()
+        XCTAssertEqual(coordinator.model.authenticationState, .failed(message: MarketplaceCoordinator.unavailableAccountMessage))
+        coordinator.toggleFavorite()
+        coordinator.toggleSaved()
+        coordinator.installSelectedWallpaper()
+        coordinator.retryCatalogInstall()
+        coordinator.reportSelectedWallpaper(kind: .technicalIssue, detail: "A stale catalog detail must not submit a report.")
+        coordinator.signOut()
+
+        XCTAssertEqual(coordinator.model.actionState, .failed(message: MarketplaceCoordinator.unavailableAccountMessage))
+        XCTAssertEqual(coordinator.model.reportState, .failed(message: MarketplaceCoordinator.unavailableAccountMessage))
+        XCTAssertEqual(coordinator.model.authenticationState, .failed(message: MarketplaceCoordinator.unavailableAccountMessage))
+        XCTAssertFalse(coordinator.canShowCreatorTools)
+        XCTAssertFalse(coordinator.canShowModeratorTools)
+        XCTAssertNil(coordinator.moderatorAccess)
+        let mutations = await gateway.interactionCallCount
+        let reports = await gateway.recordedReports()
+        let signOutCalls = await auth.signOutCallCount
+        XCTAssertEqual(mutations, 0)
+        XCTAssertTrue(reports.isEmpty)
+        XCTAssertEqual(signOutCalls, 0)
+    }
+
+    func testUnavailableCoordinatorRejectsDeferredSignedOutAuthentication() {
+        let coordinator = MarketplaceCoordinator(isMarketplaceAvailable: false)
+
+        coordinator.toggleFavorite()
+        coordinator.toggleSaved()
+        coordinator.installSelectedWallpaper()
+        coordinator.reportSelectedWallpaper(kind: .technicalIssue, detail: "Unavailable report")
+
+        XCTAssertEqual(coordinator.model.accountState, .signedOut)
+        XCTAssertEqual(coordinator.model.authenticationState, .failed(message: MarketplaceCoordinator.unavailableAccountMessage))
+        XCTAssertEqual(coordinator.model.actionState, .failed(message: MarketplaceCoordinator.unavailableAccountMessage))
+        XCTAssertEqual(coordinator.model.reportState, .failed(message: MarketplaceCoordinator.unavailableAccountMessage))
+    }
+
+    func testConfiguredEmptyCatalogKeepsMarketplaceAvailable() async throws {
+        let gateway = ScriptedCatalogGateway(homeSteps: [.value(CatalogHome(sections: []), delay: .zero)])
+        let coordinator = MarketplaceCoordinator(gateway: gateway)
+        coordinator.loadHome()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while coordinator.model.homeState == .loading, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertTrue(coordinator.isMarketplaceAvailable)
+        XCTAssertEqual(coordinator.model.homeState, .empty)
+        XCTAssertFalse(coordinator.canShowCreatorTools)
+        coordinator.model.accountState = .signedIn(userID: "configured-subject")
+        XCTAssertTrue(coordinator.canShowCreatorTools)
+        coordinator.stop()
+    }
+
+    func testInjectedCatalogWithoutGatewayRemainsEmpty() {
         let coordinator = MarketplaceCoordinator()
 
         coordinator.loadHome()
@@ -194,6 +303,7 @@ final class MarketplaceCoordinatorTests: XCTestCase {
     func testAuthEventsReplaceSubjectAndExpireWithoutRestartingApp() async throws {
         let auth = ScriptedAuthStore()
         let coordinator = MarketplaceCoordinator(authStore: auth)
+        XCTAssertTrue(coordinator.isMarketplaceAvailable)
         coordinator.start()
 
         func waitForSubject(_ expectedUserID: String?) async -> Bool {
@@ -642,6 +752,7 @@ private actor ScriptedMFAStore: AccountMFASessionProviding {
 }
 
 private actor ScriptedAuthStore: CatalogAuthSessionProviding {
+    private(set) var signOutCallCount = 0
     private let stream: AsyncStream<CatalogAuthState?>
     private let continuation: AsyncStream<CatalogAuthState?>.Continuation
 
@@ -656,6 +767,7 @@ private actor ScriptedAuthStore: CatalogAuthSessionProviding {
     func stateChanges() async -> AsyncStream<CatalogAuthState?> { stream }
 
     func signOut() async throws {
+        signOutCallCount += 1
         continuation.yield(nil)
     }
 
@@ -688,6 +800,7 @@ private actor ReceiptRecordingProbe {
 }
 
 private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
+    private(set) var interactionCallCount = 0
     enum HomeStep: Sendable {
         case value(CatalogHome, delay: Duration)
         case failure(CatalogRemoteError)
@@ -743,6 +856,7 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
         expectedRevision: UInt64,
         idempotencyKey: String
     ) async throws -> CatalogInteractionResult {
+        interactionCallCount += 1
         throw CatalogRequestError.notConfigured
     }
 
@@ -752,6 +866,7 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
         expectedRevision: UInt64,
         idempotencyKey: String
     ) async throws -> CatalogInteractionResult {
+        interactionCallCount += 1
         throw CatalogRequestError.notConfigured
     }
 

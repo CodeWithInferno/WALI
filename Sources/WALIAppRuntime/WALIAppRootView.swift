@@ -38,7 +38,7 @@ public struct WALIAppRootView: View {
     public init(
         model: WALIAppModel = WALIAppModel(),
         actions: any WALIUIActionHandling = NoopWALIUIActionHandler(),
-        marketplace: MarketplaceCoordinator = MarketplaceCoordinator(),
+        marketplace: MarketplaceCoordinator = MarketplaceCoordinator(isMarketplaceAvailable: false),
         preparePresentation: ((UUID) -> Void)? = nil
     ) {
         _model = State(initialValue: model)
@@ -122,7 +122,7 @@ public struct WALIAppRootView: View {
                 reportPath.removeAll()
                 creatorPath.removeAll()
             }
-            .onChange(of: marketplace.creatorContext.canShowModeratorTools) { _, allowed in
+            .onChange(of: marketplace.canShowModeratorTools) { _, allowed in
                 if !allowed { reviewPath.removeAll(); reportPath.removeAll() }
             }
             .background(keyboardCommands)
@@ -142,7 +142,9 @@ public struct WALIAppRootView: View {
                 }
         } detail: {
             Group {
-                if route.isMarketplace {
+                if !marketplace.isMarketplaceAvailable && route.isMarketplace {
+                    MarketplaceUnavailableView()
+                } else if route.isMarketplace {
                     if let wallpaperID = catalogPath.last,
                        WALIMarketplaceDetailLayout.hidesDestinationNavigationHeader {
                         MarketplaceWallpaperDetailView(
@@ -207,10 +209,10 @@ public struct WALIAppRootView: View {
             Section("Marketplace") {
                 sidebarRow(.discover)
                 sidebarRow(.browse)
-                if case .signedIn = marketplace.model.accountState {
+                if marketplace.canShowCreatorTools {
                     sidebarRow(.creatorStudio)
                 }
-                if marketplace.creatorContext.canShowModeratorTools {
+                if marketplace.canShowModeratorTools {
                     sidebarRow(.reviewQueue)
                     sidebarRow(.reports)
                 }
@@ -331,6 +333,7 @@ public struct WALIAppRootView: View {
             )
         case .account:
             AccountView(
+                isMarketplaceAvailable: marketplace.isMarketplaceAvailable,
                 account: marketplace.model.accountState,
                 authenticationState: marketplace.model.authenticationState,
                 profile: marketplace.model.accountProfile,
@@ -390,7 +393,7 @@ public struct WALIAppRootView: View {
         case .reviewQueue:
             if let moderationModel = marketplace.creatorContext.moderationModel,
                let moderationMetadata = marketplace.creatorContext.moderationMetadata,
-               marketplace.creatorContext.canShowModeratorTools {
+               marketplace.canShowModeratorTools {
                 NavigationStack(path: $reviewPath) {
                     ReviewQueueView(model: moderationModel)
                         .navigationDestination(for: ModerationQueueItem.self) { item in
@@ -404,7 +407,7 @@ public struct WALIAppRootView: View {
             }
         case .reports:
             if let moderationModel = marketplace.creatorContext.moderationModel,
-               marketplace.creatorContext.canShowModeratorTools {
+               marketplace.canShowModeratorTools {
                 NavigationStack(path: $reportPath) {
                     ReportQueueView(model: moderationModel)
                         .navigationDestination(for: ModerationReport.self) { report in
