@@ -196,27 +196,54 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         let coordinator = MarketplaceCoordinator(authStore: auth)
         coordinator.start()
 
+        func waitForSubject(_ expectedUserID: String?) async -> Bool {
+            func matches() -> Bool {
+                switch coordinator.model.accountState {
+                case let .signedIn(userID): userID == expectedUserID
+                case .signedOut: expectedUserID == nil
+                }
+            }
+            let clock = ContinuousClock()
+            let deadline = clock.now.advanced(by: .seconds(2))
+            while !matches(), clock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            return matches()
+        }
+
+        let firstUserID = "11111111-1111-4111-8111-111111111111"
+        let secondUserID = "22222222-2222-4222-8222-222222222222"
         await auth.emit(CatalogAuthState(
-            userID: "11111111-1111-4111-8111-111111111111",
-            expiresAt: .now.addingTimeInterval(2)
+            userID: firstUserID,
+            expiresAt: .now.addingTimeInterval(60)
         ))
-        try await Task.sleep(for: .milliseconds(20))
-        XCTAssertEqual(
-            coordinator.model.accountState,
-            .signedIn(userID: "11111111-1111-4111-8111-111111111111")
-        )
+        let receivedFirstSubject = await waitForSubject(firstUserID)
+        guard receivedFirstSubject else {
+            XCTFail("The initial auth event did not reach the account model")
+            return
+        }
 
         await auth.emit(CatalogAuthState(
-            userID: "22222222-2222-4222-8222-222222222222",
+            userID: secondUserID,
+            expiresAt: .now.addingTimeInterval(60)
+        ))
+        let receivedSecondSubject = await waitForSubject(secondUserID)
+        guard receivedSecondSubject else {
+            XCTFail("The replacement auth event did not reach the account model")
+            return
+        }
+
+        // Confirm the subject before shortening its session. Observing sign-in
+        // must not depend on resuming within a 50 ms token lifetime.
+        await auth.emit(CatalogAuthState(
+            userID: secondUserID,
             expiresAt: .now.addingTimeInterval(0.05)
         ))
-        try await Task.sleep(for: .milliseconds(20))
-        XCTAssertEqual(
-            coordinator.model.accountState,
-            .signedIn(userID: "22222222-2222-4222-8222-222222222222")
+        let expiredWithoutAnotherAuthEvent = await waitForSubject(nil)
+        XCTAssertTrue(
+            expiredWithoutAnotherAuthEvent,
+            "The account must expire without a sign-out event or app restart"
         )
-        try await Task.sleep(for: .milliseconds(80))
-        XCTAssertEqual(coordinator.model.accountState, .signedOut)
     }
 
     func testReportRetryReusesIdempotencyKeyUntilReceipt() async throws {

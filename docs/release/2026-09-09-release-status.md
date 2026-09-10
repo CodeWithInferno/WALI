@@ -79,7 +79,13 @@ The Store source merged in [PR 27](https://github.com/CodeWithInferno/WALI/pull/
 at 23:38 UTC as `d1cfb0ddacfe188fa95a4d2c371f0f836e1f368b`. All six
 applicable checks passed on head `9fb9094ce9e382e527d1c2523e7252ee1d999d5c`.
 Primary main was fast-forwarded and retained the existing branding output.
-The merge-commit checks are a separate publication requirement.
+The main security, direct Swift, contracts, backend and media checks passed.
+The main Store job exposed an authentication-test scheduling race: it slept
+20 ms before asserting sign-in for a session expiring after 50 ms. A controlled
+100 ms delayed observer reproduced the exact failure. The test now confirms
+each subject with bounded readiness, then checks automatic expiry separately;
+all 61 affected Store app tests passed against unchanged runtime objects. Final
+integrated CI for this test correction remains a separate merge requirement.
 
 The isolated Store implementation now has a helper-free structural build,
 explicit Store graphs/settings, template-only menu identity, unchanged direct
