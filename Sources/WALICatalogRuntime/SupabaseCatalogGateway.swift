@@ -29,7 +29,7 @@ public actor SupabaseCatalogGateway:
             bundleIdentifier: Bundle.main.bundleIdentifier,
             supabaseURL: environment.supabaseURL
         )
-        let authStorage = CatalogCheckedAuthStorage(underlying: KeychainLocalStorage(service: keychainService))
+        let authStorage = CatalogCheckedAuthStorage(underlying: CatalogKeychainAuthStorage(service: keychainService))
         let auth = SupabaseSharedAuth.makeClient(environment: environment, storage: authStorage) {
             try await session.data(for: $0)
         }

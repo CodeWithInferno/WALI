@@ -1,6 +1,47 @@
 import Foundation
+import Security
 import Supabase
 import Synchronization
+
+/// The pinned SDK throws for a missing Keychain item even though AuthLocalStorage.retrieve
+/// is optional. Admission and rollback need an absent session to be nil, and deleting an
+/// absent session to succeed. Preserve its writer, service/account queries and all other errors.
+struct CatalogKeychainAuthStorage: AuthLocalStorage {
+    private let service: String
+    private let writer: KeychainLocalStorage
+
+    init(service: String) {
+        self.service = service
+        writer = KeychainLocalStorage(service: service)
+    }
+
+    func store(key: String, value: Data) throws { try writer.store(key: key, value: value) }
+
+    func retrieve(key: String) throws -> Data? {
+        var query = query(key: key)
+        query[kSecReturnData as String] = kCFBooleanTrue
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        guard let data = result as? Data else { throw CatalogEmailAuthError.admissionFailed }
+        return data
+    }
+
+    func remove(key: String) throws {
+        let status = SecItemDelete(query(key: key) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
+        }
+    }
+
+    private func query(key: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service,
+         kSecAttrAccount as String: key]
+    }
+}
 
 /// SDK AuthLocalStorage is synchronous. Mutex makes the small in-memory attempt store safely
 /// Sendable without unchecked conformance; no attempt ever uses the shared Keychain service.

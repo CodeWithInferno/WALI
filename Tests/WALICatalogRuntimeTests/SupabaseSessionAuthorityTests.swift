@@ -5,6 +5,68 @@ import XCTest
 @testable import WALICatalogRuntime
 
 final class SupabaseSessionAuthorityTests: XCTestCase {
+    func testRealSDKFirstAdmissionPersistsInAnEmptyKeychainNamespace() async throws {
+        let base = CatalogKeychainAuthStorage(service: "com.wali.tests.email-admission." + UUID().uuidString.lowercased())
+        defer { try? base.remove(key: CatalogCheckedAuthStorage.sessionKey) }
+        let accepted = SDKSessionFixture.session(subject: SDKSessionFixture.secondID, suffix: "first-keychain")
+        let storage = CatalogCheckedAuthStorage(underlying: base)
+        let auth = SupabaseSharedAuth.makeClient(environment: try SDKSessionFixture.environment(), storage: storage) { request in
+            XCTAssertEqual(request.url?.path, "/auth/v1/user")
+            let data = try AuthClient.Configuration.jsonEncoder.encode(accepted.user)
+            return (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        defer { Task { await auth.stopAutoRefresh() } }
+        let shared = SupabaseSharedSession(auth: auth, storage: storage)
+
+        let state = try await shared.admit(SDKSessionFixture.candidate(accepted))
+
+        XCTAssertEqual(state.userID, accepted.user.id.uuidString.lowercased())
+        XCTAssertEqual(auth.currentSession?.accessToken, accepted.accessToken)
+        let restartedStorage = CatalogCheckedAuthStorage(underlying: base)
+        let restarted = SupabaseSharedAuth.makeClient(environment: try SDKSessionFixture.environment(), storage: restartedStorage) { _ in
+            XCTFail("A persisted first login should restore without transport")
+            throw URLError(.notConnectedToInternet)
+        }
+        defer { Task { await restarted.stopAutoRefresh() } }
+        let restored = try await restarted.session
+        XCTAssertEqual(restored.accessToken, accepted.accessToken)
+        try base.remove(key: CatalogCheckedAuthStorage.sessionKey)
+        XCTAssertNil(try base.retrieve(key: CatalogCheckedAuthStorage.sessionKey))
+        XCTAssertNoThrow(try base.remove(key: CatalogCheckedAuthStorage.sessionKey))
+    }
+
+    func testRealSDKAdmissionPersistsProductionPrecisionUserDates() async throws {
+        let userData = Data("""
+        {
+          "id":"ca53dd4a-f487-482a-99ed-3ac29ee1cd5e",
+          "app_metadata":{"provider":"email","providers":["email"]},
+          "user_metadata":{"email_verified":true},
+          "aud":"authenticated",
+          "created_at":"2026-09-11T13:43:17.123456Z",
+          "updated_at":"2026-09-11T13:43:18.987654Z",
+          "last_sign_in_at":"2026-09-11T13:43:18.987654Z"
+        }
+        """.utf8)
+        var accepted = SDKSessionFixture.session(subject: SDKSessionFixture.secondID, suffix: "precision")
+        accepted.user = try AuthClient.Configuration.jsonDecoder.decode(User.self, from: userData)
+        let base = CatalogMemoryAuthStorage()
+        let storage = CatalogCheckedAuthStorage(underlying: base)
+        let auth = SupabaseSharedAuth.makeClient(environment: try SDKSessionFixture.environment(), storage: storage) { request in
+            XCTAssertEqual(request.url?.path, "/auth/v1/user")
+            return (userData, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        defer { Task { await auth.stopAutoRefresh() } }
+        let shared = SupabaseSharedSession(auth: auth, storage: storage)
+
+        let state = try await shared.admit(SDKSessionFixture.candidate(accepted))
+
+        XCTAssertEqual(state.userID, accepted.user.id.uuidString.lowercased())
+        XCTAssertEqual(auth.currentSession?.accessToken, accepted.accessToken)
+        let persisted = try JSONDecoder().decode(Session.self, from: XCTUnwrap(base.retrieve(key: CatalogCheckedAuthStorage.sessionKey)))
+        XCTAssertEqual(persisted.user.id, accepted.user.id)
+        XCTAssertEqual(persisted.refreshToken, accepted.refreshToken)
+    }
+
     func testRealSDKLateRefreshCannotOverwriteNewAdmission() async throws {
         let fixture = try SDKSessionFixture()
         let refresh = Task { try await fixture.auth.refreshSession(refreshToken: fixture.original.refreshToken) }
