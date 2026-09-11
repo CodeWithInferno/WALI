@@ -6,6 +6,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -87,6 +88,111 @@ class OfflineTrustTests(unittest.TestCase):
 
     def deploy(self, extra=(), success=True):
         return self.run_shell(shlex.join(['bash', str(DEPLOY)] + self.args + list(extra)), success)
+
+    def rootless_config_harness(self, worker_uid=None):
+        # Exercise real preparation with an isolated HOME. Ownership checks use
+        # the current test user; no host account or privileged command is used.
+        code = DEPLOY.read_text().split('# Full deployment snapshots')[0]
+        code = code.replace('/var/lib/wali-worker', str(self.root / 'worker-home'))
+        copy = self.root / 'deployment-preparation-fixture.sh'
+        copy.write_text(code)
+        uid = os.getuid() if worker_uid is None else worker_uid
+        return (f'source {shlex.quote(str(copy))}\n'
+                'id() { [[ "$2" == wali-worker ]]; case "$1" in '
+                f'-u) printf "{uid}\\n" ;; -g) printf "{os.getgid()}\\n" ;; *) return 99 ;; esac; }}\n'
+                'prepare_rootless_configuration\n')
+
+    def test_rootless_configuration_created_before_first_podman(self):
+        home = self.root / 'worker-home'
+        home.mkdir(mode=0o755)
+        home_before = (home.stat().st_uid, home.stat().st_gid, home.stat().st_mode)
+        self.run_shell(self.rootless_config_harness())
+        self.assertEqual((home.stat().st_uid, home.stat().st_gid, home.stat().st_mode), home_before)
+        for directory in (home / '.config', home / '.config/containers'):
+            self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((directory.stat().st_uid, directory.stat().st_gid), (os.getuid(), os.getgid()))
+        config = home / '.config/containers/containers.conf'
+        config.write_text('existing settings\n')
+        self.run_shell(self.rootless_config_harness())
+        self.assertEqual(config.read_text(), 'existing settings\n')
+        # Pin ordering through the real deploy entry point, not just the helper.
+        body = DEPLOY.read_text().split('# Full deployment snapshots')[1]
+        self.assertLess(body.index('prepare_rootless_configuration'), body.index('podman image exists'))
+
+    def test_rootless_preflight_leaves_private_transfer_working_directory(self):
+        home = self.root / 'worker-home'
+        home.mkdir(mode=0o755)
+        transfer = self.root / 'private-transfer'
+        transfer.mkdir(mode=0o700)
+        # Run the actual preflight preparation statements from a private caller
+        # directory; the child models Podman's inherited-cwd re-execution.
+        body = DEPLOY.read_text().split('# Full deployment snapshots')[1]
+        preparation = body.split('\nprepare_rootless_configuration\n', 1)[1].split('install -d ', 1)[0]
+        preparation = preparation.replace('/var/lib/wali-worker', str(home))
+        probe = 'from pathlib import Path; import sys; assert Path.cwd() == Path(sys.argv[1])'
+        self.run_shell('cd ' + shlex.quote(str(transfer)) + '\n' + self.rootless_config_harness()
+                       + preparation + '\n' + shlex.join(['python3', '-c', probe, str(home)]))
+        self.assertEqual(transfer.stat().st_mode & 0o777, 0o700)
+        self.assertLess(body.index('snapshot_root='), body.index('\nprepare_rootless_configuration\n'))
+
+    def test_standalone_verifier_leaves_private_transfer_working_directory(self):
+        home = self.root / 'worker-home'
+        home.mkdir(mode=0o755)
+        transfer = self.root / 'private-transfer'
+        transfer.mkdir(mode=0o700)
+        # Execute the verifier's statement immediately before its first Podman
+        # call; recovery/rollback and idempotent deploy all reuse this verifier.
+        verify = (REPO / 'deploy/worker/verify.sh').read_text()
+        before_podman = verify.split('runuser -u wali-worker -- env', 1)[0]
+        preparation = before_podman.splitlines()[-1].replace('/var/lib/wali-worker', str(home))
+        probe = 'from pathlib import Path; import sys; assert Path.cwd() == Path(sys.argv[1])'
+        self.run_shell('cd ' + shlex.quote(str(transfer)) + '\n' + preparation + '\n'
+                       + shlex.join(['python3', '-c', probe, str(home)]))
+        self.assertEqual(transfer.stat().st_mode & 0o777, 0o700)
+
+    def test_rootless_commands_do_not_inherit_cosign_registry_configuration(self):
+        private_auth = self.root / 'root-cosign-auth'
+        private_auth.mkdir(mode=0o700)
+        worker_auth = self.root / 'worker-registry-auth.json'
+        worker_auth.write_text('{}\n')
+        probe = ('import os,sys; assert "DOCKER_CONFIG" not in os.environ; '
+                 'assert os.environ["REGISTRY_AUTH_FILE"] == sys.argv[1]')
+        for script in (DEPLOY, REPO / 'deploy/worker/verify.sh'):
+            commands = script.read_text().replace('\\\n', ' ')
+            prefixes = re.findall(r'runuser -u wali-worker -- (env[^\n]*?)\s+podman\b', commands)
+            self.assertGreaterEqual(len(prefixes), 3)
+            for prefix in prefixes:
+                with self.subTest(script=script.name, prefix=prefix):
+                    # Execute the real env prefix without changing local identity
+                    # or invoking Podman. No credential material is used.
+                    self.run_shell('export DOCKER_CONFIG=' + shlex.quote(str(private_auth))
+                                   + '\nexport REGISTRY_AUTH_FILE=' + shlex.quote(str(worker_auth))
+                                   + '\npreflight_storage=/dev/null\n' + prefix + ' '
+                                   + shlex.join(['python3', '-c', probe, str(worker_auth)])
+                                   + '\n[[ "$DOCKER_CONFIG" == ' + shlex.quote(str(private_auth)) + ' ]]')
+
+    def test_rootless_configuration_refuses_links_and_unsafe_directories(self):
+        home = self.root / 'worker-home'
+        home.mkdir(mode=0o755)
+        outside = self.root / 'outside'
+        outside.mkdir(mode=0o755)
+        config = home / '.config'
+        config.symlink_to(outside, target_is_directory=True)
+        self.run_shell(self.rootless_config_harness(), False)
+        self.assertEqual(list(outside.iterdir()), [])
+        config.unlink(); config.mkdir(mode=0o700)
+        nested = config / 'containers'
+        nested.symlink_to(outside, target_is_directory=True)
+        self.run_shell(self.rootless_config_harness(), False)
+        self.assertEqual(list(outside.iterdir()), [])
+        nested.unlink()
+        for mode in (0o755, 0o777):
+            config.chmod(mode)
+            self.run_shell(self.rootless_config_harness(), False)
+            self.assertFalse(nested.exists())
+        config.chmod(0o700)
+        self.run_shell(self.rootless_config_harness(worker_uid=os.getuid() + 1), False)
+        self.assertFalse(nested.exists())
 
     def database_ca(self, snapshot=False):
         ca = self.root / 'database-ca.crt'
