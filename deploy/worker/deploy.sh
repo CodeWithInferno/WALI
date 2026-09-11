@@ -9,7 +9,7 @@ readonly PROJECT_REF_PATTERN='^[a-z]{20}$'
 readonly HOST_BINDING_FILE=/etc/wali-worker/HOST_IS_DEDICATED
 
 usage() {
-  echo 'usage: deploy.sh [--dry-run] --environment staging|production --supabase-project-ref REF --worker-binary PATH --environment-file PATH --media-sbom PATH --verifier-sbom PATH [--classifier-sbom PATH] --cosign-key PATH' >&2
+  echo 'usage: deploy.sh [--dry-run] --environment staging|production --supabase-project-ref REF --worker-binary PATH --environment-file PATH --media-sbom PATH --verifier-sbom PATH [--classifier-sbom PATH] --cosign-key PATH [--offline-trust-root PATH --offline-trust-receipt PATH --offline-trust-receipt-sha256 HEX]' >&2
   echo '       deploy.sh --rollback --environment staging|production --supabase-project-ref REF' >&2
 }
 
@@ -87,11 +87,13 @@ validate_host_binding() {
 }
 
 # Full deployment snapshots and crash-recoverable activation.
+source "$SCRIPT_ROOT/image-verification.sh"
 source "$SCRIPT_ROOT/releases.sh"
 
 dry_run=false
 rollback_requested=false
 deployment_environment= supabase_project_ref= worker_binary= environment_file= media_sbom= verifier_sbom= classifier_sbom= cosign_key=
+offline_trust_root= offline_trust_receipt= offline_trust_receipt_sha256=
 while (($#)); do
   case "$1" in
     --dry-run) dry_run=true; shift ;;
@@ -99,6 +101,11 @@ while (($#)); do
     --environment)
       (($# >= 2)) || { usage; exit 64; }
       deployment_environment=$2; shift 2 ;;
+    --offline-trust-root|--offline-trust-receipt|--offline-trust-receipt-sha256)
+      (($# >= 2)) && [[ -n "$2" ]] || { usage; exit 64; }
+      key="${1#--}"; key="${key//-/_}"
+      [[ -z "${!key}" ]] || { echo 'duplicate offline trust option' >&2; exit 64; }
+      printf -v "$key" '%s' "$2"; shift 2 ;;
     --supabase-project-ref|--worker-binary|--environment-file|--media-sbom|--verifier-sbom|--classifier-sbom|--cosign-key)
       (($# >= 2)) || { usage; exit 64; }
       key="${1#--}"; key="${key//-/_}"; printf -v "$key" '%s' "$2"; shift 2 ;;
@@ -109,6 +116,11 @@ done
 [[ "$deployment_environment" == staging || "$deployment_environment" == production ]] || { echo 'an explicit staging or production environment is required' >&2; exit 64; }
 [[ "$supabase_project_ref" =~ $PROJECT_REF_PATTERN ]] || { echo 'an exact 20-letter Supabase project ref is required' >&2; exit 64; }
 
+if [[ -n "$offline_trust_root" || -n "$offline_trust_receipt" || -n "$offline_trust_receipt_sha256" ]]; then
+  $rollback_requested && { echo 'rollback uses only the selected snapshot trust inputs' >&2; exit 64; }
+  validate_offline_trust "$offline_trust_root" "$offline_trust_receipt" "$offline_trust_receipt_sha256"
+fi
+
 if $rollback_requested; then
   validate_host_binding
   [[ "$(id -u)" == 0 ]] || { echo 'rollback inspection must run as root' >&2; exit 77; }
@@ -116,12 +128,14 @@ if $rollback_requested; then
     [[ ! -e "$TRANSACTION" ]] || release_fail 'pending transaction requires recovery before rollback'
     target="$(release_link previous)"
     validate_release "$target"
+    snapshot_offline_trust "$RELEASE_BASE/$target/payload" current
     printf 'would restore complete WALI snapshot %s and verify it; no mutation performed\n' "$target"
     exit
   fi
   lock_releases
   target="$(release_link previous)"
   validate_release "$target"
+  verify_rollback_offline_images "$RELEASE_BASE/$target/payload"
   capture_baseline
   baseline="$staged_release"
   activate_release "$target" "$baseline"
@@ -165,6 +179,9 @@ if $dry_run; then
   else
     printf 'would verify two immutable images and SBOMs with cosign\n'
   fi
+  if [[ -n "$offline_trust_root" ]]; then
+    printf 'would use hash-bound, fresh offline trust inputs; dry-run does not verify image signatures\n'
+  fi
   printf 'would run systemctl restart wali-media-worker.service with its WALI namespace dependency\n'
   exit
 fi
@@ -206,6 +223,7 @@ stage_release
 target="$staged_release"
 validate_release "$target"
 validate_release "$baseline"
+snapshot_offline_trust "$RELEASE_BASE/$target/payload" current
 if [[ "$target" == "$baseline" ]]; then
   /usr/local/sbin/wali-worker-verify --quick
   echo 'identical WALI deployment already installed; rollback target preserved'
@@ -216,6 +234,12 @@ fi
 snapshot_root="$RELEASE_BASE/$target/payload"
 environment_file="$snapshot_root/environment"
 cosign_key="$snapshot_root/cosign"
+offline_trust_root= offline_trust_receipt= offline_trust_receipt_sha256=
+if [[ -f "$snapshot_root/cosign-trust-root" ]]; then
+  offline_trust_root="$snapshot_root/cosign-trust-root"
+  offline_trust_receipt="$snapshot_root/cosign-trust-receipt"
+  offline_trust_receipt_sha256="$(cat "$snapshot_root/cosign-trust-receipt-digest")"
+fi
 media_image="$(read_env_value WALI_MEDIA_IMAGE "$environment_file")"
 verifier_image="$(read_env_value WALI_VERIFIER_IMAGE "$environment_file")"
 classifier_image="$(read_optional_env_value WALI_CLASSIFIER_IMAGE "$environment_file")"
@@ -238,8 +262,8 @@ trap 'rm -f -- "$preflight_storage"' EXIT
 
 images=("$media_image" "$verifier_image")
 [[ -z "$classifier_image" ]] || images+=("$classifier_image")
+verify_worker_images "$cosign_key" "$offline_trust_root" "$offline_trust_receipt" "$offline_trust_receipt_sha256" "${images[@]}"
 for image in "${images[@]}"; do
-  cosign verify --key "$cosign_key" "$image" >/dev/null
   if ! runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman image exists "$image"; then
     runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman pull "$image" >/dev/null
   fi

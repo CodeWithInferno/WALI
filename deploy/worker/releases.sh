@@ -3,9 +3,9 @@
 # Only these WALI-owned files participate; database and host networking do not.
 readonly RELEASE_BASE=/opt/wali-worker
 readonly TRANSACTION=/opt/wali-worker/.transaction
-release_keys=(environment worker-unit namespace-unit storage verifier cosign media-runbook compromise-runbook)
-release_paths=(/etc/wali-worker/worker.env /etc/systemd/system/wali-media-worker.service /etc/systemd/system/wali-podman-namespace.service /etc/wali-worker/storage.conf /usr/local/sbin/wali-worker-verify /etc/wali-worker/cosign.pub /usr/share/doc/wali-worker/media-worker.md /usr/share/doc/wali-worker/worker-compromise.md)
-release_modes=(0640 0644 0644 0644 0555 0444 0444 0444)
+release_keys=(environment worker-unit namespace-unit storage verifier cosign media-runbook compromise-runbook cosign-trust-root cosign-trust-receipt cosign-trust-receipt-digest)
+release_paths=(/etc/wali-worker/worker.env /etc/systemd/system/wali-media-worker.service /etc/systemd/system/wali-podman-namespace.service /etc/wali-worker/storage.conf /usr/local/sbin/wali-worker-verify /etc/wali-worker/cosign.pub /usr/share/doc/wali-worker/media-worker.md /usr/share/doc/wali-worker/worker-compromise.md /etc/wali-worker/cosign-trusted-root.json /etc/wali-worker/cosign-trust-receipt.json /etc/wali-worker/cosign-trust-receipt.sha256)
+release_modes=(0640 0644 0644 0644 0555 0444 0444 0444 0444 0444 0444)
 readonly SBOM_DIRECTORY=/usr/share/doc/wali-worker/sbom
 
 release_fail() { echo "release transaction: $1" >&2; exit 65; }
@@ -33,6 +33,7 @@ validate_release() {
   safe_tree "$root" || release_fail 'unsafe snapshot ownership or file type'
   [[ -f "$root/manifest.sha256" && "$(file_digest "$root/manifest.sha256")" == "${link#releases/}" ]] || release_fail 'snapshot manifest identity mismatch'
   cmp -s <(manifest "$root") "$root/manifest.sha256" || release_fail 'snapshot contents changed'
+  snapshot_offline_trust "$root/payload" historical || release_fail 'invalid snapshot trust inputs'
   if [[ -f "$root/payload/environment" ]]; then
     validate_target_binding "$(read_env_value WALI_DEPLOY_ENVIRONMENT "$root/payload/environment")" \
       "$(read_env_value WALI_SUPABASE_PROJECT_REF "$root/payload/environment")" \
@@ -42,6 +43,7 @@ validate_release() {
 }
 finish_snapshot() {
   local root=$1 identity target
+  snapshot_offline_trust "$root/payload" historical || release_fail 'invalid snapshot trust inputs'
   find "$root" -type f -exec chmod 0400 {} +
   find "$root" -type d -exec chmod 0700 {} +
   [[ ! -f "$root/wali-media-worker" ]] || chmod 0555 "$root/wali-media-worker"
@@ -97,6 +99,13 @@ stage_release() {
   cp -- "$SCRIPT_ROOT/storage.conf" "$root/payload/storage"
   cp -- "$SCRIPT_ROOT/verify.sh" "$root/payload/verifier"
   cp -- "$cosign_key" "$root/payload/cosign"
+  if [[ -n "$offline_trust_root" ]]; then
+    cp -- "$offline_trust_root" "$root/payload/cosign-trust-root"
+    cp -- "$offline_trust_receipt" "$root/payload/cosign-trust-receipt"
+    printf '%s\n' "$offline_trust_receipt_sha256" > "$root/payload/cosign-trust-receipt-digest"
+  else
+    touch "$root/payload/cosign-trust-root.absent" "$root/payload/cosign-trust-receipt.absent" "$root/payload/cosign-trust-receipt-digest.absent"
+  fi
   cp -- "$SCRIPT_ROOT/../../docs/runbooks/media-worker.md" "$root/payload/media-runbook"
   cp -- "$SCRIPT_ROOT/../../docs/runbooks/worker-compromise.md" "$root/payload/compromise-runbook"
   cp -- "$media_sbom" "$root/payload/sbom/${media_image##*@sha256:}.spdx.json"
@@ -134,6 +143,12 @@ install_snapshot() {
     path="${release_paths[$index]}"; key="${release_keys[$index]}"
     [[ ! -L "$path" ]] || release_fail 'installed configuration became a symlink'
     if [[ -f "$root/$key.absent" ]]; then rm -f -- "$path"; continue; fi
+    # Optional trust files did not exist in legacy complete snapshots. Restoring
+    # one must remove newer installed trust inputs, not retain stale policy.
+    case "$key" in
+      cosign-trust-root|cosign-trust-receipt|cosign-trust-receipt-digest)
+        if [[ ! -e "$root/$key" ]]; then rm -f -- "$path"; continue; fi ;;
+    esac
     validate_file "$root/$key"
     install -d -o root -g root -m 0755 "$(dirname "$path")"
     group=root; [[ "$key" != environment ]] || group=wali-worker
@@ -223,6 +238,7 @@ activate_release() {
   validate_release "$target"
   validate_release "$baseline"
   validate_file "$RELEASE_BASE/$target/wali-media-worker"
+  snapshot_offline_trust "$RELEASE_BASE/$target/payload" current || release_fail 'offline trust expired before activation'
   begin_transaction "$baseline"
   trap transaction_failure EXIT ERR INT TERM
   stop_wali_units
