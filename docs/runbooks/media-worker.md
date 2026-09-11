@@ -34,6 +34,51 @@ and never apply blanket host firewall changes on a shared machine.
 Never place secrets, populated environment files, model weights, proprietary
 media, or signing private keys in this repository or deployment bundle.
 
+## Optional offline signature trust
+
+The default command remains `cosign verify --key <publisher-public-key> <image>`.
+For a host whose approved egress excludes Sigstore trust refresh and transparency
+services, supply all three additional deploy options:
+
+```text
+--offline-trust-root /protected/release/trusted_root.json
+--offline-trust-receipt /protected/release/verification-receipt.json
+--offline-trust-receipt-sha256 <independently-reviewed-64-lowercase-hex-digest>
+```
+
+First authenticate the public trusted root through Sigstore's TUF root and
+metadata chain on an authorized preparation machine. Preserve the export receipt
+with `status: authenticated-public-trust-exported`, UTC `verified_at` and
+`freshness_valid_before`, `trusted_root` SHA-256, byte count and media type, and
+`metadata.root`, `timestamp`, `snapshot` and `targets` expiry values. Review its
+source-authentication evidence and transfer the expected receipt hash through the
+trusted management channel. A receipt and hash supplied by the same untrusted
+party do **not** authenticate arbitrary root bytes; deployment checks the binding
+to an already independently authenticated root. Keep the publisher public key
+under its existing independent custody and review.
+
+The script accepts bounded regular public files only, checks both hashes, byte
+count, root media type and UTC validity, and requires the freshness deadline to
+be no later than any of the four metadata expiries. It rechecks freshness before
+and after each verification and before activation. Missing, partial, modified,
+expired or malformed trust inputs fail closed. Refresh and independently review
+the export before its deadline; no expired-root fallback is provided.
+
+Offline verification uses the fixed Cosign arguments `--offline
+--new-bundle-format=false --trusted-root <root> --key <publisher-public-key>
+--check-claims=true`, suitable for the reviewed legacy signature bundles. A valid
+publisher signature, image-digest claim and bundled transparency evidence remain
+required. Unsupported tool/bundle versions fail; no arbitrary flags, ignored
+transparency checks or egress expansion are added. Offline here disables online
+trust/transparency lookups, **not** authenticated reads from the approved OCI
+registry. Keep root Cosign's registry credentials and the worker's rootless
+Podman pull credentials separately scoped to registry reads.
+
+`--dry-run` validates the public inputs but does not invoke Cosign or prove a
+signature. A real deploy verifies **all** configured images before pulling any.
+The root, receipt and reviewed receipt hash join the immutable deployment
+snapshot; verification reads that sealed copy, not the original transfer paths.
+
 ## Runtime trust boundary
 
 The Go worker accepts only server-issued PGMQ envelopes. It validates the
@@ -141,7 +186,8 @@ isolated restore drill before passing the deployment gate.
 `sudo deploy/worker/deploy.sh --rollback --environment staging --supabase-project-ref <ref>`
 restores a complete immutable snapshot: binary, protected environment, both WALI
 units, Storage configuration, verification script, public verification key, SBOMs,
-and runbooks. Snapshot identity hashes all of these inputs. The environment and
+and runbooks, including optional offline trust inputs. Snapshot identity hashes
+all of these inputs. The environment and
 manifest remain root-only. Both the host binding and snapshot must match the
 explicit environment and project. Legacy binary-only releases cannot be selected
 for rollback; the next successful deployment captures the actual installed files
@@ -155,6 +201,15 @@ transaction is recovered on the next invocation. Failed recovery stops the worke
 and retains the transaction for inspection. An identical deployment is a verified
 no-op that preserves the rollback target. `--rollback --dry-run` validates the
 target without mutating the host.
+
+A complete snapshot made before optional trust inputs existed remains readable
+without changing its bytes or identity. Restoring it removes any newer installed
+trust files. A manual rollback to an offline snapshot uses only its stored trust
+inputs and re-verifies its images while the receipt is fresh; new trust options
+cannot be supplied to override that snapshot. `--rollback --dry-run` checks
+freshness but does not verify signatures. Expired snapshots remain available for
+inspection and restoration of an interrupted activation's already-installed
+baseline; transaction recovery does not pull or authorize a new image release.
 
 Run a deployment/rollback/redeployment drill in staging for the exact candidate.
 Retain root-only snapshots securely: they include scoped credentials. Rotate keys

@@ -7,10 +7,10 @@ readonly UNIT="$ROOT/deploy/worker/wali-media-worker.service"
 readonly RUNNER="$ROOT/Services/WALIMediaWorker/internal/sandbox/runner.go"
 
 readonly DEPLOY_ROOT="$ROOT/deploy/worker"
-for file in cloud-init.yml wali-media-worker.service worker.env.example storage.conf deploy.sh verify.sh; do
+for file in cloud-init.yml wali-media-worker.service worker.env.example storage.conf deploy.sh releases.sh image-verification.sh verify.sh; do
   test -f "$DEPLOY_ROOT/$file"
 done
-bash -n "$DEPLOY_ROOT/deploy.sh" "$DEPLOY_ROOT/verify.sh"
+for file in deploy.sh releases.sh image-verification.sh verify.sh; do bash -n "$DEPLOY_ROOT/$file"; done
 grep -q '^ssh_pwauth: false$' "$DEPLOY_ROOT/cloud-init.yml"
 grep -q '^disable_root: true$' "$DEPLOY_ROOT/cloud-init.yml"
 grep -q 'unattended-upgrades' "$DEPLOY_ROOT/cloud-init.yml"
@@ -103,6 +103,8 @@ done
 runtime_configuration=(
   "$ROOT/deploy/worker/cloud-init.yml"
   "$ROOT/deploy/worker/deploy.sh"
+  "$ROOT/deploy/worker/releases.sh"
+  "$ROOT/deploy/worker/image-verification.sh"
   "$ROOT/deploy/worker/storage.conf"
   "$ROOT/deploy/worker/verify.sh"
   "$ROOT/deploy/worker/wali-media-worker.service"
@@ -116,5 +118,7 @@ if grep -n -E -- '--privileged|--network=(host|bridge)|/var/run/(docker|podman)\
   echo 'worker configuration contains a privileged, networked, socket-sharing, or mutable runtime setting' >&2
   exit 1
 fi
+
+bash "$ROOT/Tests/Worker/deploy-offline-trust-tests.sh"
 
 echo 'worker isolation policy checks passed'
