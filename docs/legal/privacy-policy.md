@@ -2,6 +2,8 @@
 
 **Version:** 2026-09-01
 **Status:** Draft for counsel review; not yet effective for public UGC
+**Draft revision:** 2026-09-10; production publication requires a new effective
+version and the applicable acceptance updates.
 
 WALI is an open-source macOS live-wallpaper application. This policy separates
 information that stays on the Mac from information used by the optional WALI
@@ -21,7 +23,9 @@ network requests, parse media, or browse arbitrary files.
 
 When a person signs in or uses marketplace features, WALI may process:
 
-- an account identifier and Sign in with Apple identity claims;
+- an account identifier and, for the direct email-code edition, the email
+  address and authentication data needed to request and verify a sign-in code;
+- Sign in with Apple identity claims in editions that use native Apple sign-in;
 - profile and creator information the person submits;
 - favorites, saves, follows, reports, downloads, and verified installs;
 - upload bytes and source/attribution metadata, plus rights evidence only when
@@ -38,7 +42,7 @@ intended to identify an individual user.
 Information is used to authenticate accounts, publish licensed content,
 operate search and ranking, prevent abuse, respond to reports, and secure the
 service. Service providers may process the minimum data needed to host the
-database, objects, authentication, and isolated media pipeline. WALI does not
+database, objects, authentication, sign-in email delivery, and isolated media pipeline. WALI does not
 sell personal information or use marketplace activity for third-party ads.
 
 ## Retention and deletion
@@ -59,6 +63,8 @@ remains gated on hosted processing, private export retrieval, fresh MFA for
 deletion, session revocation, Auth identity cleanup, a production support
 contact, and an exercised end-to-end deployment.
 
+The planned public operator is Pratham Patel; support and privacy requests may
+be directed to hello@tryclean.ai. The email delivery provider and other required
+production disclosures must be finalized before this draft becomes effective.
 Material policy changes require a new version and renewed acceptance when
-required. A production operator and contact address must replace this paragraph
-before public beta.
+required.

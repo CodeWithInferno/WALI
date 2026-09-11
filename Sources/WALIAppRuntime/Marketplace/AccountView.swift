@@ -1,10 +1,12 @@
 import AppKit
 import Foundation
 import SwiftUI
+import WALICatalogRuntime
 import WALIUI
 
 struct AccountView: View {
     let isMarketplaceAvailable: Bool
+    let authenticationMethod: CatalogAuthenticationMethod
     let account: WALIAccountPresentation
     let authenticationState: WALIMarketplaceActionState
     let profile: WALIAccountProfilePresentation?
@@ -51,7 +53,7 @@ struct AccountView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             switch account {
                             case .signedOut:
-                                Text("Apple Account")
+                                Text(authenticationMethod == .emailOTP ? "WALI Account" : "Apple Account")
                                     .font(.title2.weight(.semibold))
                                 Text("Not signed in")
                                     .foregroundStyle(.secondary)
@@ -194,14 +196,22 @@ struct AccountView: View {
     @ViewBuilder
     private var signInButton: some View {
         if #available(macOS 26.0, *) {
-            Button("Sign in with Apple", systemImage: "apple.logo", action: onSignIn)
+            Button(signInTitle, systemImage: signInSymbol, action: onSignIn)
                 .buttonStyle(.glassProminent)
                 .disabled(authenticationState == .working)
         } else {
-            Button("Sign in with Apple", systemImage: "apple.logo", action: onSignIn)
+            Button(signInTitle, systemImage: signInSymbol, action: onSignIn)
                 .buttonStyle(.borderedProminent)
                 .disabled(authenticationState == .working)
         }
+    }
+
+    private var signInTitle: String {
+        authenticationMethod == .emailOTP ? "Sign in with Email" : "Sign in with Apple"
+    }
+
+    private var signInSymbol: String {
+        authenticationMethod == .emailOTP ? "envelope" : "apple.logo"
     }
 
     private var accountIsSignedIn: Bool {

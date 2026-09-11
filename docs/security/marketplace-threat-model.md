@@ -80,6 +80,30 @@ safety or approval. A canonical worker output is still untrusted until separate
 verification, moderation, publication, signature, client verification, and
 agent publication complete.
 
+## Direct email authentication boundary
+
+Accepted [ADR 0022](../adr/0022-direct-production-email-otp-authentication.md)
+adds email-code authentication only to the production direct edition. Email and
+codes stay in transient foreground state. Each pending verification has isolated
+in-memory SDK storage and cannot emit the accepted account stream. One shared
+foreground authority serializes admission and sign-out across windows; each
+window retains only its own presentation and pending action.
+
+Cancellation before admission discards late results. Admission has an explicit
+commit point and Completing sign-in state; subsequent sign-out is ordered after
+that admission. Closing a window discards its action without pretending an
+already committed session can be cancelled. Storage failures cannot publish an
+accepted login. Stale cleanup must never globally sign out a newer account.
+
+Email verification is AAL1, not MFA. Fresh TOTP/AAL2, current subject and role,
+revision, deletion-retention, and identity-finalization requirements remain.
+Native Apple and separate session namespaces remain for Development and Store.
+Production source, Xcode, app/agent and release receipts bind the same exact
+project and public trust configuration; public client keys confer no backend
+privilege. SMTP/private catalog/worker credentials remain outside the app and
+repository. Actual provider delivery and account/deletion journeys remain
+separate release evidence.
+
 ## STRIDE analysis and controls
 
 ### Spoofing

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "settings": {
+    "WALI_MARKETPLACE_ENABLED": "YES",
+    "WALI_RELEASE_MODE": "production",
+    "WALI_AUTHENTICATION_METHOD": "email_otp",
+    "WALI_SUPABASE_PROJECT_REF": "afgxvhhubqzgpijcstsv",
+    "WALI_SUPABASE_URL": "https://afgxvhhubqzgpijcstsv.supabase.co",
+    "WALI_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "WALI_SUPABASE_PUBLISHABLE_KEY_SHA256": "7502b9282656dc13e73c37a7be79201b9b4c5d65cce3498391566ab84cf926e0",
+    "WALI_CATALOG_CDN_HOST": "afgxvhhubqzgpijcstsv.supabase.co",
+    "WALI_CATALOG_SIGNING_KEY_ID": "fixture-primary",
+    "WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64": "//////////////////////////////////////////8=",
+    "WALI_CATALOG_RECOVERY_SIGNING_KEY_ID": "fixture-recovery",
+    "WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=",
+    "WALI_LEGAL_BASE_URL": "https://github.com/CodeWithInferno/WALI/blob/main/docs/legal"
+  }
+}

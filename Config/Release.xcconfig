@@ -1,4 +1,7 @@
 #include "Base.xcconfig"
+// A production build is generated from the reviewed public manifest.
+WALI_AUTHENTICATION_METHOD = disabled
+WALI_RELEASE_MODE = local_preview
 #include? "Marketplace.production.local.xcconfig"
 
 WALI_APP_BUNDLE_IDENTIFIER = io.github.codewithinferno.wali.WALI

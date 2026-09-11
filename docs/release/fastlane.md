@@ -34,13 +34,34 @@ Developer ID does not support native Sign in with Apple; direct Release uses
 [ADR 0021](../adr/0021-developer-id-local-only-entitlements.md). Development and
 Store retain it. Keep credentials and profiles outside source control.
 
-Direct Release is local-only. Resolved build settings and the signed app must
-contain marketplace `NO`; missing, enabled, unresolved, or malformed flags fail.
-The ignored `Config/Marketplace.production.local.xcconfig` may explicitly set
-`WALI_MARKETPLACE_ENABLED = NO`. Marketplace activation requires a separately
-approved supported authentication design; native Apple client configuration
-alone cannot enable it. The hosted production workflow keeps its `YES` contract
-and cannot publish this local-only candidate. Use these local Fastlane lanes.
+Direct Release uses the two modes in accepted
+[ADR 0022](../adr/0022-direct-production-email-otp-authentication.md). The default
+OSS build is an explicit local preview: marketplace `NO`, authentication
+`disabled`, and no production digest. Production uses marketplace `YES` and
+`email_otp`, with the exact project, public publishable-key fingerprint, CDN,
+primary/recovery trust, and legal location in the reviewed versioned public
+`Config/Marketplace.production.json`. This file must contain real verified public
+values; `Fixtures/Release/` contains synthetic test values and must never be used
+for a release. See [the production configuration contract](production-configuration.md).
+
+Render the ignored Xcode input from the reviewed manifest:
+
+```sh
+/usr/bin/ruby scripts/production-config.rb render . > Config/Marketplace.production.local.xcconfig
+```
+
+Architecture checks, resolved Xcode settings, and actual app/agent metadata must
+agree. Archive and package receipts bind `release_mode` and
+`production_configuration_sha256` to the same signed bytes and source commit.
+Notarization revalidates that binding; GitHub publication additionally requires
+production mode. Altering a flag, command-line option, or receipt cannot relabel
+a local preview as production. The hosted workflow's public JSON input must
+exactly match the committed manifest and derived digest.
+
+Custom SMTP, email templates, real code delivery outside the project team,
+provider account journeys, trusted catalog state, and signed native acceptance
+remain activation gates. Implementation and fixture passes do not establish
+any of those production results.
 
 Discover, Browse, and Account remain visible in the local-only build with an
 explicit unavailable explanation. Account keeps its Legal & Support links;
@@ -105,8 +126,8 @@ through that old app, then fully quit its app and agent. Do not launch old and
 new playback concurrently or patch Apple's wallpaper store to migrate state.
 The native acceptance below must cover the actual signed candidate; a fresh
 install does not prove an upgrade. Production marketplace activation separately
-requires a separately approved Developer ID authentication design under
-ADR 0021 and successful end-to-end authentication gates.
+requires the successful end-to-end authentication and configuration gates in
+ADR 0022.
 
 ## Publish the verified GitHub release
 

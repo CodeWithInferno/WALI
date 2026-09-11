@@ -68,33 +68,73 @@ public protocol AccountMFASessionProviding: Sendable {
     func cancelTOTPEnrollment(factorID: String) async throws
 }
 
-public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionProviding {
-    private nonisolated let client: SupabaseClient
+public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionProviding, CatalogEmailAuthenticating {
+    private nonisolated let auth: AuthClient
+    private nonisolated let storage: CatalogCheckedAuthStorage
+    private nonisolated let authority: CatalogAuthAuthority
+    private let nativeAppleEnabled: Bool
 
-    public init(client: SupabaseClient) {
-        self.client = client
-    }
-
-    public func currentState() async -> CatalogAuthState? {
-        do {
-            return Self.activeState(from: try await client.auth.session)
-        } catch {
-            return nil
+    init(auth: AuthClient, storage: CatalogCheckedAuthStorage, environment: CatalogEnvironment) {
+        self.auth = auth
+        self.storage = storage
+        nativeAppleEnabled = environment.authenticationMethod == .nativeApple
+        let factory: CatalogAuthAuthority.AttemptFactory?
+        if environment.authenticationMethod == .emailOTP {
+            factory = { @Sendable in SupabaseEmailAttempt(environment: environment) }
+        } else {
+            factory = nil
         }
+        authority = CatalogAuthAuthority(shared: SupabaseSharedSession(auth: auth, storage: storage), attemptFactory: factory)
     }
 
-    public nonisolated func stateChanges() async -> AsyncStream<CatalogAuthState?> {
-        let changes = client.auth.authStateChanges
-        return AsyncStream { continuation in
-            let task = Task {
-                for await (_, session) in changes {
-                    continuation.yield(session.flatMap(Self.activeState(from:)))
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { _ in task.cancel() }
-        }
+    /// API requests obtain credentials through the same serialized foreground authority. A
+    /// stale SDK refresh result is not usable unless its exact credentials survived persistence.
+    func validatedSession() async throws -> Session {
+        try await authority.withSessionTransition { try await self.validatedAuthSession() }
     }
+
+    func accessToken() async -> String? {
+        if let snapshot = CatalogRequestAuthentication.snapshot,
+           snapshot.ownerID == ObjectIdentifier(self) {
+            return snapshot.validAccessToken
+        }
+        do { return try await validatedSession().accessToken }
+        catch { return nil }
+    }
+
+    private func validatedAuthSession() async throws -> Session {
+        let returned = try await auth.session
+        guard let persisted = auth.currentSession,
+              Self.activeState(from: persisted) != nil,
+              persisted.accessToken == returned.accessToken,
+              persisted.refreshToken == returned.refreshToken,
+              persisted.user.id == returned.user.id else { throw CatalogEmailAuthError.superseded }
+        return persisted
+    }
+
+    public func currentState() async -> CatalogAuthState? { await authority.currentState() }
+    public func stateChanges() async -> AsyncStream<CatalogAuthState?> { await authority.stateChanges() }
+
+    public func beginEmailSignIn(email: String, ownerID: UUID) async throws -> CatalogEmailAuthAttempt {
+        try await authority.beginEmailSignIn(email: email, ownerID: ownerID)
+    }
+
+    public func resendEmailCode(attemptID: UUID, ownerID: UUID) async throws -> CatalogEmailAuthAttempt {
+        try await authority.resendEmailCode(attemptID: attemptID, ownerID: ownerID)
+    }
+
+    public func verifyEmailCode(
+        code: String, attemptID: UUID, ownerID: UUID,
+        onAdmissionCommitted: @escaping @Sendable () async -> Void
+    ) async throws -> CatalogAuthState {
+        try await authority.verifyEmailCode(code: code, attemptID: attemptID, ownerID: ownerID, onAdmissionCommitted: onAdmissionCommitted)
+    }
+
+    public func cancelEmailSignIn(attemptID: UUID, ownerID: UUID) async -> Bool {
+        await authority.cancelEmailSignIn(attemptID: attemptID, ownerID: ownerID)
+    }
+
+    public func detachEmailSignIn(ownerID: UUID) async { await authority.detachEmailSignIn(ownerID: ownerID) }
 
     @discardableResult
     public func signInWithApple(idToken: String, nonce: String) async throws -> CatalogAuthState {
@@ -104,15 +144,23 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
         else {
             throw CatalogRequestError.invalidRequest
         }
+        guard nativeAppleEnabled else { throw CatalogEmailAuthError.unavailable }
+        return try await authority.withSessionTransition(replacingEmail: true) {
+            try await self.performAppleSignIn(idToken: idToken, nonce: nonce)
+        }
+    }
+
+    private func performAppleSignIn(idToken: String, nonce: String) async throws -> CatalogAuthState {
         do {
-            let session = try await client.auth.signInWithIdToken(
+            try storage.beginReplacement()
+            let session = try await auth.signInWithIdToken(
                 credentials: OpenIDConnectCredentials(
                     provider: .apple,
                     idToken: idToken,
                     nonce: nonce
                 )
             )
-            guard let state = Self.activeState(from: session) else {
+            guard let state = Self.activeState(from: session), auth.currentSession == session else {
                 throw CatalogRemoteError(
                     code: "authentication_failed",
                     safeMessage: nil,
@@ -131,30 +179,22 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
         }
     }
 
-    public func signOut() async throws {
-        do {
-            try await client.auth.signOut(scope: .global)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw CatalogRemoteError(
-                code: "sign_out_failed",
-                safeMessage: nil,
-                retryable: true
-            )
-        }
-    }
+    public func signOut() async throws { try await authority.signOut() }
 
     public func mfaStatus() async throws -> CatalogMFAStatus {
+        try await authority.withSessionTransition { try await self.performMFAStatus() }
+    }
+
+    private func performMFAStatus() async throws -> CatalogMFAStatus {
         do {
-            let session = try await client.auth.session
+            let session = try await validatedAuthSession()
             guard let active = Self.activeState(from: session) else {
                 throw CatalogRequestError.invalidRequest
             }
-            let assurance = try await client.auth.mfa.getAuthenticatorAssuranceLevel()
-            let factors = try await client.auth.mfa.listFactors()
+            let assurance = try await auth.mfa.getAuthenticatorAssuranceLevel()
+            let factors = try await currentFactors(for: session)
             var verifiedTOTP: (id: String, updatedAt: Date)?
-            for factor in factors.totp {
+            for factor in factors where factor.factorType == "totp" && factor.status == .verified {
                 guard let id = Self.canonicalUUID(factor.id) else {
                     throw CatalogMappingError.invalidResponse
                 }
@@ -188,18 +228,22 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
     }
 
     public func beginTOTPEnrollment() async throws -> CatalogTOTPEnrollment {
+        try await authority.withSessionTransition { try await self.performTOTPEnrollment() }
+    }
+
+    private func performTOTPEnrollment() async throws -> CatalogTOTPEnrollment {
         do {
-            let sessionBefore = try await client.auth.session
+            let sessionBefore = try await validatedAuthSession()
             guard let active = Self.activeState(from: sessionBefore) else {
                 throw CatalogRequestError.invalidRequest
             }
-            let factors = try await client.auth.mfa.listFactors()
-            for factor in factors.all where factor.factorType == "totp"
+            let factors = try await currentFactors(for: sessionBefore)
+            for factor in factors where factor.factorType == "totp"
                 && factor.status == .unverified
                 && factor.friendlyName == "WALI account security" {
-                try await client.auth.mfa.unenroll(params: MFAUnenrollParams(factorId: factor.id))
+                try await auth.mfa.unenroll(params: MFAUnenrollParams(factorId: factor.id))
             }
-            let response = try await client.auth.mfa.enroll(
+            let response = try await auth.mfa.enroll(
                 params: .totp(issuer: "WALI", friendlyName: "WALI account security")
             )
             guard response.type == "totp",
@@ -215,7 +259,7 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
                   uri.user == nil,
                   uri.password == nil,
                   uri.absoluteString.utf8.count <= 2_048,
-                  let activeAfter = Self.activeState(from: try await client.auth.session),
+                  let activeAfter = Self.activeState(from: try await validatedAuthSession()),
                   activeAfter.userID == active.userID
             else { throw CatalogMappingError.invalidResponse }
             return CatalogTOTPEnrollment(
@@ -234,23 +278,27 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
     }
 
     public func verifyTOTP(factorID: String, code: String) async throws -> CatalogMFAStatus {
+        try await authority.withSessionTransition { try await self.performTOTPVerification(factorID: factorID, code: code) }
+    }
+
+    private func performTOTPVerification(factorID: String, code: String) async throws -> CatalogMFAStatus {
         guard let factorID = Self.canonicalUUID(factorID),
               code.utf8.count == 6,
               code.utf8.allSatisfy({ (48...57).contains($0) })
         else { throw CatalogRequestError.invalidRequest }
         do {
-            let sessionBefore = try await client.auth.session
+            let sessionBefore = try await validatedAuthSession()
             guard let active = Self.activeState(from: sessionBefore) else {
                 throw CatalogRequestError.invalidRequest
             }
-            let factors = try await client.auth.mfa.listFactors()
-            guard factors.all.contains(where: {
+            let factors = try await currentFactors(for: sessionBefore)
+            guard factors.contains(where: {
                 $0.id.lowercased() == factorID && $0.factorType == "totp"
             }) else { throw CatalogMappingError.invalidResponse }
-            try await client.auth.mfa.challengeAndVerify(
+            try await auth.mfa.challengeAndVerify(
                 params: MFAChallengeAndVerifyParams(factorId: factorID, code: code)
             )
-            let result = try await mfaStatus()
+            let result = try await performMFAStatus()
             guard result.subjectID == active.userID,
                   result.currentLevel == .aal2,
                   result.isFresh()
@@ -266,21 +314,25 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
     }
 
     public func cancelTOTPEnrollment(factorID: String) async throws {
+        try await authority.withSessionTransition { try await self.performTOTPEnrollmentCancellation(factorID: factorID) }
+    }
+
+    private func performTOTPEnrollmentCancellation(factorID: String) async throws {
         guard let factorID = Self.canonicalUUID(factorID) else {
             throw CatalogRequestError.invalidRequest
         }
         do {
-            let sessionBefore = try await client.auth.session
+            let sessionBefore = try await validatedAuthSession()
             guard let active = Self.activeState(from: sessionBefore) else {
                 throw CatalogRequestError.invalidRequest
             }
-            let factors = try await client.auth.mfa.listFactors()
-            guard let factor = factors.all.first(where: { $0.id.lowercased() == factorID }),
+            let factors = try await currentFactors(for: sessionBefore)
+            guard let factor = factors.first(where: { $0.id.lowercased() == factorID }),
                   factor.factorType == "totp",
                   factor.status == .unverified
             else { throw CatalogRequestError.invalidRequest }
-            try await client.auth.mfa.unenroll(params: MFAUnenrollParams(factorId: factorID))
-            guard let activeAfter = Self.activeState(from: try await client.auth.session),
+            try await auth.mfa.unenroll(params: MFAUnenrollParams(factorId: factorID))
+            guard let activeAfter = Self.activeState(from: try await validatedAuthSession()),
                   activeAfter.userID == active.userID
             else { throw CatalogMappingError.invalidResponse }
         } catch let error as CatalogRequestError {
@@ -290,6 +342,18 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
         } catch {
             throw CatalogRemoteError(code: "mfa_enrollment_cancel_failed", safeMessage: nil, retryable: true)
         }
+    }
+
+    /// The SDK's listFactors reads cached session.user and enrollment does not refresh it.
+    /// Reconcile with the authenticated server user inside the existing transition gate before
+    /// using factor ownership or status, then revalidate the persisted foreground subject.
+    private func currentFactors(for session: Session) async throws -> [Factor] {
+        let user = try await auth.user(jwt: session.accessToken)
+        let current = try await validatedAuthSession()
+        guard user.id == session.user.id, current.user.id == session.user.id else {
+            throw CatalogMappingError.invalidResponse
+        }
+        return user.factors ?? []
     }
 
     private nonisolated static func activeState(from session: Session) -> CatalogAuthState? {

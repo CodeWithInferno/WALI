@@ -27,8 +27,8 @@ module WALICIRelease
     "AGENT" => "io.github.codewithinferno.wali.WALIAgent",
     "HELPER" => "io.github.codewithinferno.wali.WALILockScreenHelper"
   }.freeze
-  CLIENT_INFO_KEYS = %w[WALIMarketplaceEnabled WALIMarketplaceURL WALIMarketplacePublishableKey WALIApprovedCDNHosts WALICatalogSigningKeyID WALICatalogSigningPublicKeyBase64 WALICatalogRecoverySigningKeyID WALICatalogRecoverySigningPublicKeyBase64 WALILegalBaseURL].freeze
-  CLIENT_KEYS = %w[WALI_MARKETPLACE_ENABLED WALI_SUPABASE_URL WALI_SUPABASE_PUBLISHABLE_KEY WALI_CATALOG_CDN_HOST WALI_CATALOG_SIGNING_KEY_ID WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64 WALI_CATALOG_RECOVERY_SIGNING_KEY_ID WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64 WALI_LEGAL_BASE_URL].freeze
+  CLIENT_KEYS = WALIProductionConfig::INFO_KEYS.keys.freeze
+  CLIENT_INFO_KEYS = WALIProductionConfig::INFO_KEYS.values.freeze
   SECRET_KEYS = %w[WALI_SIGNING_P12_BASE64 WALI_SIGNING_P12_PASSWORD WALI_APP_PROFILE_BASE64 WALI_AGENT_PROFILE_BASE64 WALI_HELPER_PROFILE_BASE64 WALI_NOTARY_KEY_BASE64].freeze
   module_function
 
@@ -73,7 +73,7 @@ module WALICIRelease
     demand(env["GITHUB_RUN_ATTEMPT"] == "1", "Do not rerun release jobs; dispatch a new candidate after reconciling any draft release")
     demand(env.fetch("GITHUB_RUN_ID", "").match?(/\A[1-9][0-9]*\z/), "Invalid workflow run")
     demand(env.fetch("GITHUB_SHA", "").match?(/\A[0-9a-f]{40}\z/), "Invalid workflow commit")
-    demand(env.fetch("WALI_RELEASE_TAG", "").match?(/\Av[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?\z/) && env["WALI_RELEASE_TAG"].bytesize <= 100, "Use a version tag such as v0.1.0 or v0.1.0-beta.1")
+    demand(env.fetch("WALI_RELEASE_TAG", "").match?(/\Av[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*\z/) && env["WALI_RELEASE_TAG"].bytesize <= 100, "Use a prerelease version tag such as v0.1.0-beta.1 (ADR 0022)")
     demand(env["RUNNER_DEBUG"] != "1" && !%w[ACTIONS_STEP_DEBUG ACTIONS_RUNNER_DEBUG].any? { |key| env[key] == "true" }, "Release credential steps forbid debug logging")
     demand(File.realpath(env.fetch("GITHUB_WORKSPACE")) == File.realpath(root), "Unexpected checkout root")
     commit = WALIReleaseSupport.source_commit(root)
@@ -124,22 +124,8 @@ module WALICIRelease
     demand(approved, "Production approval must include exactly: #{expected}")
   end
 
-  def client_config(text)
-    demand(text.bytesize <= 16 * 1024, "Public marketplace configuration exceeds bound")
-    data = JSON.parse(text)
-    demand(data.is_a?(Hash) && data.keys.sort == CLIENT_KEYS.sort && data.values.all? { |value| value.is_a?(String) && value.bytesize.between?(1, 2048) && !value.match?(/[\r\n\x00$#\\]/) }, "Supply exactly the reviewed public marketplace fields")
-    demand(data["WALI_MARKETPLACE_ENABLED"] == "YES", "This production workflow requires explicit marketplace enablement")
-    %w[WALI_SUPABASE_URL WALI_LEGAL_BASE_URL].each do |key|
-      url = URI.parse(data.fetch(key))
-      demand(url.is_a?(URI::HTTPS) && url.host.to_s.match?(/\A[a-z0-9]+(?:[.-][a-z0-9]+)*\.[a-z]{2,}\z/) && !url.userinfo && !url.query && !url.fragment && url.port == 443 && url.path.match?(/\A[A-Za-z0-9\/._~-]*\z/), "Use an approved public HTTPS origin/legal location")
-      demand(["", "/"].include?(url.path), "Supabase URL must be an origin") if key == "WALI_SUPABASE_URL"
-    end
-    demand(data.fetch("WALI_SUPABASE_PUBLISHABLE_KEY").match?(/\Asb_publishable_[A-Za-z0-9_-]{20,}\z/), "Only a Supabase publishable client key is permitted; no JWT/service-role/secret key")
-    demand(data.fetch("WALI_CATALOG_CDN_HOST").match?(/\A[a-z0-9]+(?:[.-][a-z0-9]+)*\.[a-z]{2,}\z/), "Use the reviewed public CDN hostname")
-    %w[WALI_CATALOG_SIGNING_KEY_ID WALI_CATALOG_RECOVERY_SIGNING_KEY_ID].each { |key| demand(data.fetch(key).match?(/\A[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z/), "Invalid public signing key identifier") }
-    %w[WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64 WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64].each { |key| demand(Base64.strict_decode64(data.fetch(key)).bytesize == 32, "Use raw 32-byte Ed25519 public keys only") }
-    demand(data["WALI_CATALOG_SIGNING_KEY_ID"] != data["WALI_CATALOG_RECOVERY_SIGNING_KEY_ID"] && data["WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64"] != data["WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64"], "Primary and recovery public keys must be distinct")
-    CLIENT_KEYS.map { |key| "#{key} = #{data.fetch(key).gsub('/', '/$()')}\n" }.join
+  def client_config(text, root: ROOT)
+    WALIProductionConfig.xcconfig(text, root: root)
   end
 
   def plist_value(element)

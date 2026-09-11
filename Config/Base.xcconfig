@@ -12,6 +12,11 @@ CURRENT_PROJECT_VERSION = 1
 // in ignored environment files; privileged secrets are forbidden. Release is
 // fail-closed unless an authorized production config explicitly overrides this.
 WALI_MARKETPLACE_ENABLED = NO
+WALI_AUTHENTICATION_METHOD = native_apple
+WALI_RELEASE_MODE = development
+WALI_SUPABASE_PROJECT_REF =
+WALI_SUPABASE_PUBLISHABLE_KEY_SHA256 =
+WALI_PRODUCTION_CONFIGURATION_SHA256 =
 WALI_SUPABASE_URL =
 WALI_SUPABASE_PUBLISHABLE_KEY =
 WALI_CATALOG_CDN_HOST =

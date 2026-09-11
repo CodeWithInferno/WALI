@@ -176,6 +176,20 @@ public final class MarketplaceCreatorContext {
     }
 }
 
+/// One foreground gateway/session authority, shared by otherwise independent windows.
+@MainActor
+struct MarketplaceForegroundServices {
+    let environment: CatalogEnvironment
+    let gateway: SupabaseCatalogGateway
+
+    init?(bundle: Bundle) {
+        guard let environment = try? CatalogEnvironment.from(bundle: bundle),
+              let gateway = try? SupabaseCatalogGateway(environment: environment) else { return nil }
+        self.environment = environment
+        self.gateway = gateway
+    }
+}
+
 @MainActor
 public final class MarketplaceCoordinator {
     private static let logger = Logger(
@@ -185,6 +199,8 @@ public final class MarketplaceCoordinator {
 
     public let model: WALIMarketplaceModel
     public let isMarketplaceAvailable: Bool
+    public let authenticationMethod: CatalogAuthenticationMethod
+    let emailSignIn = EmailCodeSignInModel()
     static let unavailableAccountMessage = "Marketplace accounts are unavailable in this build. Your local wallpapers remain available in Library."
 
     public var canShowCreatorTools: Bool {
@@ -206,6 +222,16 @@ public final class MarketplaceCoordinator {
     private let authStore: (any CatalogAuthSessionProviding)?
     private let mfaStore: (any AccountMFASessionProviding)?
     private let appleSignIn: AppleSignInCoordinator?
+    private let emailAuth: (any CatalogEmailAuthenticating)?
+    private let emailNow: @MainActor () -> Date
+    private var emailOwnerID: UUID?
+    private var emailAttempt: CatalogEmailAuthAttempt?
+    private var emailGeneration: UInt64 = 0
+    private var emailTask: Task<Void, Never>?
+    private var emailCancellationTask: Task<Void, Never>?
+    private var pendingEmailFailure: (error: CatalogEmailAuthError, retryPhase: EmailCodeSignInPhase)?
+    private var emailIntent: EmailIntent?
+    private var acceptsAuthenticationResults = true
     private let installPreparer: CatalogInstallPreparer?
     private let presentationMediaCache: (any CatalogPresentationMediaCaching)?
     private var homeMediaLease = CatalogMediaLease()
@@ -261,6 +287,14 @@ public final class MarketplaceCoordinator {
         case report
     }
 
+    private struct EmailIntent {
+        let action: DeferredAction?
+        let wallpaperID: String?
+        let releaseID: String?
+        let detailGeneration: UInt64
+        let report: CatalogReportRequest?
+    }
+
     private struct CreatorAcceptanceResult: Sendable {
         let authorization: CreatorAuthorizationSnapshot
         let metadata: CreatorMetadata
@@ -270,6 +304,7 @@ public final class MarketplaceCoordinator {
     public init(
         model: WALIMarketplaceModel = WALIMarketplaceModel(),
         isMarketplaceAvailable: Bool = true,
+        authenticationMethod: CatalogAuthenticationMethod = .nativeApple,
         gateway: (any CatalogGateway)? = nil,
         reportGateway: (any CatalogReportGateway)? = nil,
         accountGateway: (any AccountPrivacyGateway)? = nil,
@@ -280,15 +315,19 @@ public final class MarketplaceCoordinator {
         authStore: (any CatalogAuthSessionProviding)? = nil,
         mfaStore: (any AccountMFASessionProviding)? = nil,
         appleSignIn: AppleSignInCoordinator? = nil,
+        emailAuth: (any CatalogEmailAuthenticating)? = nil,
         installPreparer: CatalogInstallPreparer? = nil,
         presentationMediaCache: (any CatalogPresentationMediaCaching)? = nil,
         securityStore: CatalogSecurityStateStore? = nil,
         installHandler: (@MainActor (PreparedCatalogInstall) async throws -> Void)? = nil,
         securityHandler: (@MainActor (CatalogSecuritySnapshot) async throws -> Void)? = nil,
-        creatorRequestTimeout: Duration = .seconds(15)
+        creatorRequestTimeout: Duration = .seconds(15),
+        emailNow: (@MainActor () -> Date)? = nil
     ) {
+        let isMarketplaceAvailable = isMarketplaceAvailable && authenticationMethod != .disabled
         self.model = model
         self.isMarketplaceAvailable = isMarketplaceAvailable
+        self.authenticationMethod = isMarketplaceAvailable ? authenticationMethod : .disabled
         self.gateway = isMarketplaceAvailable ? gateway : nil
         self.reportGateway = isMarketplaceAvailable ? reportGateway : nil
         self.accountGateway = isMarketplaceAvailable ? accountGateway : nil
@@ -305,6 +344,8 @@ public final class MarketplaceCoordinator {
         self.mfaStore = isMarketplaceAvailable ? mfaStore : nil
         moderatorAccess = self.mfaStore.map { ModeratorAccessModel(store: $0) }
         self.appleSignIn = isMarketplaceAvailable ? appleSignIn : nil
+        self.emailAuth = isMarketplaceAvailable && authenticationMethod == .emailOTP ? emailAuth : nil
+        self.emailNow = emailNow ?? { .now }
         self.installPreparer = isMarketplaceAvailable ? installPreparer : nil
         self.presentationMediaCache = isMarketplaceAvailable ? presentationMediaCache : nil
         self.securityStore = isMarketplaceAvailable ? securityStore : nil
@@ -322,12 +363,25 @@ public final class MarketplaceCoordinator {
         installHandler: (@MainActor (PreparedCatalogInstall) async throws -> Void)? = nil,
         securityHandler: (@MainActor (CatalogSecuritySnapshot) async throws -> Void)? = nil
     ) -> MarketplaceCoordinator {
-        guard let environment = try? CatalogEnvironment.from(bundle: bundle) else {
+        configured(
+            services: MarketplaceForegroundServices(bundle: bundle),
+            bundle: bundle,
+            installHandler: installHandler,
+            securityHandler: securityHandler
+        )
+    }
+
+    static func configured(
+        services: MarketplaceForegroundServices?,
+        bundle: Bundle = .main,
+        installHandler: (@MainActor (PreparedCatalogInstall) async throws -> Void)? = nil,
+        securityHandler: (@MainActor (CatalogSecuritySnapshot) async throws -> Void)? = nil
+    ) -> MarketplaceCoordinator {
+        guard let services else {
             return MarketplaceCoordinator(isMarketplaceAvailable: false)
         }
-        guard let gateway = try? SupabaseCatalogGateway(environment: environment) else {
-            return MarketplaceCoordinator(isMarketplaceAvailable: false)
-        }
+        let environment = services.environment
+        let gateway = services.gateway
         var uploadHosts = environment.approvedCDNHosts
         if let supabaseHost = environment.supabaseURL.host { uploadHosts.insert(supabaseHost) }
         let uploadTransport = try? URLSessionCreatorUploadTransport(approvedHosts: uploadHosts)
@@ -340,6 +394,7 @@ public final class MarketplaceCoordinator {
             )
         )
         return MarketplaceCoordinator(
+            authenticationMethod: environment.authenticationMethod,
             gateway: gateway,
             reportGateway: gateway,
             accountGateway: gateway,
@@ -349,7 +404,9 @@ public final class MarketplaceCoordinator {
             moderationGateway: gateway,
             authStore: authStore,
             mfaStore: authStore,
-            appleSignIn: AppleSignInCoordinator(sessionStore: authStore),
+            appleSignIn: environment.authenticationMethod == .nativeApple
+                ? AppleSignInCoordinator(sessionStore: authStore) : nil,
+            emailAuth: environment.authenticationMethod == .emailOTP ? authStore : nil,
             installPreparer: try? CatalogInstallPreparer(
                 environment: environment,
                 bundleIdentifier: bundleIdentifier
@@ -365,6 +422,7 @@ public final class MarketplaceCoordinator {
     }
 
     public func start() {
+        acceptsAuthenticationResults = true
         guard isMarketplaceAvailable else {
             model.homeState = .empty
             return
@@ -379,6 +437,8 @@ public final class MarketplaceCoordinator {
     }
 
     public func stop() {
+        acceptsAuthenticationResults = false
+        detachEmailFlow()
         Self.logger.info("Marketplace lifecycle stopped")
         installTask?.cancel()
         moderatorAccess?.cancel()
@@ -619,7 +679,30 @@ public final class MarketplaceCoordinator {
             }
             return
         }
-        guard model.authenticationState != .working else { return }
+        guard acceptsAuthenticationResults, model.authenticationState != .working else { return }
+        if authenticationMethod == .emailOTP {
+            guard emailAuth != nil else {
+                model.authenticationState = .failed(message: "Email sign-in is unavailable. Please try again later.")
+                pendingReport = nil
+                return
+            }
+            emailGeneration &+= 1
+            emailOwnerID = UUID()
+            emailAttempt = nil
+            emailIntent = EmailIntent(
+                action: action,
+                wallpaperID: model.selectedDetail?.id,
+                releaseID: model.selectedDetail?.currentReleaseID,
+                detailGeneration: detailGeneration,
+                report: pendingReport
+            )
+            pendingReport = nil
+            deferredAction = nil
+            emailSignIn.clear()
+            emailSignIn.isPresented = true
+            model.authenticationState = .working
+            return
+        }
         guard let appleSignIn,
               let window = NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first
         else {
@@ -674,16 +757,267 @@ public final class MarketplaceCoordinator {
         }
     }
 
+    func requestEmailCode() {
+        guard emailSignIn.isPresented, emailSignIn.phase == .email,
+              let emailAuth, let ownerID = emailOwnerID else { return }
+        let email = emailSignIn.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !email.isEmpty, email.utf8.count <= 254 else {
+            emailSignIn.message = Self.emailMessage(for: CatalogEmailAuthError.invalidEmail)
+            return
+        }
+        let generation = emailGeneration
+        emailSignIn.phase = .requesting
+        emailSignIn.message = nil
+        emailTask = Task { [weak self] in
+            do {
+                let attempt = try await emailAuth.beginEmailSignIn(email: email, ownerID: ownerID)
+                guard let self, isCurrentEmailFlow(ownerID: ownerID, generation: generation),
+                      emailSignIn.phase != .cancelling else { return }
+                emailAttempt = attempt
+                emailSignIn.email = attempt.email
+                emailSignIn.code = ""
+                emailSignIn.resendAvailableAt = attempt.resendAvailableAt
+                emailSignIn.phase = .code
+            } catch {
+                self?.handleEmailFailure(error, ownerID: ownerID, generation: generation, retryPhase: .email)
+            }
+        }
+    }
+
+    func resendEmailCode() {
+        guard emailSignIn.isPresented, emailSignIn.phase == .code,
+              let emailAuth, let ownerID = emailOwnerID, let attempt = emailAttempt else { return }
+        guard attempt.resendAvailableAt <= emailNow() else {
+            emailSignIn.message = "Please wait before requesting another code."
+            return
+        }
+        let generation = emailGeneration
+        emailSignIn.phase = .resending
+        emailSignIn.code = ""
+        emailSignIn.message = nil
+        emailTask = Task { [weak self] in
+            do {
+                let renewed = try await emailAuth.resendEmailCode(attemptID: attempt.id, ownerID: ownerID)
+                guard let self, isCurrentEmailFlow(ownerID: ownerID, generation: generation),
+                      emailSignIn.phase != .cancelling else { return }
+                emailAttempt = renewed
+                emailSignIn.resendAvailableAt = renewed.resendAvailableAt
+                emailSignIn.phase = .code
+            } catch {
+                self?.handleEmailFailure(error, ownerID: ownerID, generation: generation, retryPhase: .code)
+            }
+        }
+    }
+
+    func verifyEmailCode() {
+        guard emailSignIn.isPresented, emailSignIn.phase == .code,
+              let emailAuth, let authStore, let ownerID = emailOwnerID, let attempt = emailAttempt else { return }
+        let code = emailSignIn.code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty, code.utf8.count <= 16 else {
+            emailSignIn.message = Self.emailMessage(for: CatalogEmailAuthError.invalidCode)
+            return
+        }
+        let generation = emailGeneration
+        emailSignIn.phase = .verifying
+        emailSignIn.message = nil
+        emailSignIn.code = ""
+        emailTask = Task { [weak self] in
+            do {
+                let accepted = try await emailAuth.verifyEmailCode(
+                    code: code,
+                    attemptID: attempt.id,
+                    ownerID: ownerID,
+                    onAdmissionCommitted: { [weak self] in
+                        await self?.emailAdmissionDidCommit(ownerID: ownerID, generation: generation)
+                    }
+                )
+                // A completed isolated verification alone is not current account authority.
+                let current = await authStore.currentState()
+                guard let self, isCurrentEmailFlow(ownerID: ownerID, generation: generation) else { return }
+                guard let current, current.userID == accepted.userID, current.expiresAt > emailNow() else {
+                    handleEmailFailure(CatalogEmailAuthError.superseded, ownerID: ownerID, generation: generation, retryPhase: .email)
+                    return
+                }
+                if case let .signedIn(subjectID) = model.accountState, subjectID != accepted.userID {
+                    handleEmailFailure(CatalogEmailAuthError.superseded, ownerID: ownerID, generation: generation, retryPhase: .email)
+                    return
+                }
+                let intent = emailIntent
+                finishEmailPresentation()
+                applyAccountState(current)
+                resumeEmailIntent(intent)
+            } catch {
+                self?.handleEmailFailure(error, ownerID: ownerID, generation: generation, retryPhase: .code)
+            }
+        }
+    }
+
+    func changeSignInEmail() {
+        guard emailSignIn.isPresented, emailSignIn.phase == .code else { return }
+        let address = emailSignIn.email
+        let intent = emailIntent
+        detachEmailFlow()
+        emailOwnerID = UUID()
+        emailIntent = intent
+        emailSignIn.email = address
+        emailSignIn.isPresented = true
+        model.authenticationState = .working
+    }
+
+    func cancelEmailSignIn() {
+        guard emailSignIn.isPresented, emailSignIn.canCancel,
+              let emailAuth, let ownerID = emailOwnerID else { return }
+        let generation = emailGeneration
+        let attempt = emailAttempt
+        emailSignIn.phase = .cancelling
+        emailSignIn.message = nil
+        emailSignIn.code = ""
+        emailTask?.cancel()
+        emailCancellationTask = Task { [weak self] in
+            let cancelled: Bool
+            if let attempt {
+                cancelled = await emailAuth.cancelEmailSignIn(attemptID: attempt.id, ownerID: ownerID)
+            } else {
+                await emailAuth.detachEmailSignIn(ownerID: ownerID)
+                cancelled = true
+            }
+            guard let self, isCurrentEmailFlow(ownerID: ownerID, generation: generation) else { return }
+            if cancelled {
+                finishEmailPresentation()
+            } else {
+                // The service owns this boundary; an already committed login is not cancelled.
+                emailSignIn.phase = .completing
+                if let pending = pendingEmailFailure {
+                    pendingEmailFailure = nil
+                    let failure: CatalogEmailAuthError
+                    if case .cancelled = pending.error { failure = .admissionFailed }
+                    else { failure = pending.error }
+                    handleEmailFailure(failure, ownerID: ownerID, generation: generation, retryPhase: pending.retryPhase)
+                }
+            }
+        }
+    }
+
+    private func emailAdmissionDidCommit(ownerID: UUID, generation: UInt64) {
+        guard isCurrentEmailFlow(ownerID: ownerID, generation: generation) else { return }
+        emailSignIn.phase = .completing
+        emailSignIn.code = ""
+        emailSignIn.message = nil
+    }
+
+    private func isCurrentEmailFlow(ownerID: UUID, generation: UInt64) -> Bool {
+        acceptsAuthenticationResults && emailSignIn.isPresented
+            && emailOwnerID == ownerID && emailGeneration == generation
+    }
+
+    private func finishEmailPresentation() {
+        emailGeneration &+= 1
+        emailOwnerID = nil
+        emailAttempt = nil
+        emailIntent = nil
+        pendingEmailFailure = nil
+        emailSignIn.clear()
+        model.authenticationState = .idle
+    }
+
+    private func detachEmailFlow() {
+        let ownerID = emailOwnerID
+        emailTask?.cancel()
+        emailCancellationTask?.cancel()
+        finishEmailPresentation()
+        if let ownerID, let emailAuth {
+            Task { await emailAuth.detachEmailSignIn(ownerID: ownerID) }
+        }
+    }
+
+    private func resumeEmailIntent(_ intent: EmailIntent?) {
+        guard acceptsAuthenticationResults, let intent, let action = intent.action,
+              let wallpaperID = intent.wallpaperID,
+              model.selectedDetail?.id == wallpaperID,
+              model.selectedDetail?.currentReleaseID == intent.releaseID,
+              detailGeneration == intent.detailGeneration else { return }
+        if case .report = action {
+            guard let report = intent.report, report.wallpaperID == wallpaperID,
+                  report.releaseID == intent.releaseID else { return }
+            submitReport(report)
+        } else {
+            resume(action)
+        }
+    }
+
+    private func handleEmailFailure(
+        _ error: Error, ownerID: UUID, generation: UInt64, retryPhase: EmailCodeSignInPhase
+    ) {
+        guard isCurrentEmailFlow(ownerID: ownerID, generation: generation) else { return }
+        if emailSignIn.phase == .cancelling {
+            let safeError = (error as? CatalogEmailAuthError) ?? .admissionFailed
+            pendingEmailFailure = (safeError, retryPhase)
+            switch safeError {
+            case .cancelled, .superseded: break
+            default: emailSignIn.message = Self.emailMessage(for: safeError)
+            }
+            return
+        }
+        if let error = error as? CatalogEmailAuthError {
+            switch error {
+            case .cancelled:
+                finishEmailPresentation()
+                return
+            case .superseded:
+                finishEmailPresentation()
+                model.authenticationState = .failed(message: Self.emailMessage(for: error))
+                return
+            case let .resendTooSoon(retryAt):
+                emailSignIn.resendAvailableAt = retryAt
+            case .admissionFailed, .expiredAttempt:
+                let message = Self.emailMessage(for: error)
+                let address = emailSignIn.email
+                detachEmailFlow()
+                emailOwnerID = UUID()
+                emailSignIn.email = address
+                emailSignIn.isPresented = true
+                emailSignIn.message = message
+                model.authenticationState = .working
+                return
+            default: break
+            }
+        }
+        emailSignIn.phase = retryPhase
+        emailSignIn.code = ""
+        emailSignIn.message = Self.emailMessage(for: error)
+    }
+
+    static func emailMessage(for error: Error) -> String {
+        guard let error = error as? CatalogEmailAuthError else {
+            return "Sign-in couldn’t be completed. Please try again."
+        }
+        switch error {
+        case .invalidEmail: return "Enter a valid email address."
+        case .invalidCode: return "Enter the one-time code from your email."
+        case .invalidOrExpiredCode: return "That code is invalid or expired. Check it or request a new code."
+        case .rateLimited, .resendTooSoon: return "Please wait before requesting another code."
+        case .timedOut: return "The request timed out. Check your connection and try again."
+        case .networkUnavailable: return "Check your internet connection and try again."
+        case .expiredAttempt: return "This sign-in attempt expired. Request a new code."
+        case .attemptInProgress: return "Another sign-in is completing. Please wait and try again."
+        case .superseded: return "Your sign-in session changed. Continue with the current account or try again."
+        case .admissionFailed: return "Sign-in couldn’t be completed. Request a new code to try again."
+        case .unavailable: return "Email sign-in is unavailable. Please try again later."
+        case .cancelled: return "Sign-in was cancelled before completion."
+        }
+    }
+
     public func signOut() {
         guard isMarketplaceAvailable else {
             model.authenticationState = .failed(message: Self.unavailableAccountMessage)
             return
         }
-        guard model.authenticationState != .working else { return }
+        guard model.authenticationState != .working || emailSignIn.isPresented else { return }
         guard let authStore else {
             model.authenticationState = .failed(message: "Sign out is unavailable. Reopen WALI and try again.")
             return
         }
+        detachEmailFlow()
         model.authenticationState = .working
         authenticationTask = Task { [weak self] in
             guard let self else { return }

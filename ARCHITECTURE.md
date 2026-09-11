@@ -193,15 +193,19 @@ anonymous endpoint is not an acceptable fallback.
   Ed25519 verification, approved-host checks, and revocation values. It depends
   only on `WALIModel` internally and Foundation/CryptoKit from the platform; it
   has no transport, UI, media, persistence, or Supabase dependency.
-- `WALICatalogRuntime` implements native Apple sign-in, public catalog,
+- `WALICatalogRuntime` implements native Apple and direct email-code sign-in, public catalog,
   interaction/report/install transport, bounded mapping, public caching, and
   create-exclusive downloads, creator submissions, authenticated moderation,
   and account export/deletion. Their native routes are composed; the evidence
   ledger identifies which end-to-end flows still require verification.
-  Supabase types do not escape the runtime boundary. Direct Release keeps these
-  marketplace routes disabled under ADR 0021; Developer ID does not support
-  native Sign in with Apple. Development and Store retain their existing
-  authentication capability.
+  Supabase types do not escape the runtime boundary. Under ADR 0022, one shared
+  foreground session authority admits isolated email attempts; window-local
+  pending actions never own account persistence. Gateway operations retain their
+  original authentication snapshot across retries. Direct Release defaults to a
+  disabled local preview and permits production email authentication only with
+  the exact reviewed configuration and completed release gates. Developer ID
+  still excludes native Sign in with Apple under ADR 0021. Development and Store
+  retain native Apple authentication.
 - `WALILockScreenHelperRuntime` owns only authenticated, fixed-root, version-
   gated Lock Screen transactions and process refreshes. Its composition app is
   the only product eligible for Full Disk Access and imports no media, network,

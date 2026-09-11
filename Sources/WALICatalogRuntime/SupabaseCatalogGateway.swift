@@ -13,6 +13,7 @@ public actor SupabaseCatalogGateway:
 {
     private static let logger = Logger(subsystem: "com.wali.catalog", category: "Gateway")
     private nonisolated let client: SupabaseClient
+    private nonisolated let authSessionStore: AuthSessionStore
     private let mapper: CatalogMapper
     private let remoteURLPolicy: CatalogRemoteURLPolicy
     private let accountExportDownloader: AccountExportDownloader
@@ -20,26 +21,24 @@ public actor SupabaseCatalogGateway:
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
         configuration.timeoutIntervalForResource = 30
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
         let session = CatalogURLSessionFactory.redirectRejecting(configuration: configuration)
         let keychainService = try CatalogAuthKeychainNamespace.service(
             bundleIdentifier: Bundle.main.bundleIdentifier,
             supabaseURL: environment.supabaseURL
         )
-        let options = SupabaseClientOptions(
-            auth: .init(
-                storage: KeychainLocalStorage(
-                    service: keychainService
-                ),
-                storageKey: "wali.marketplace.session",
-                autoRefreshToken: true,
-                emitLocalSessionAsInitialSession: true
-            ),
-            global: .init(session: session)
-        )
-        client = SupabaseClient(
-            supabaseURL: environment.supabaseURL,
-            supabaseKey: environment.publishableKey,
-            options: options
+        let authStorage = CatalogCheckedAuthStorage(underlying: KeychainLocalStorage(service: keychainService))
+        let auth = SupabaseSharedAuth.makeClient(environment: environment, storage: authStorage) {
+            try await session.data(for: $0)
+        }
+        let authSessionStore = AuthSessionStore(auth: auth, storage: authStorage, environment: environment)
+        self.authSessionStore = authSessionStore
+        client = SupabaseSharedAuth.makeDataClient(
+            environment: environment,
+            authSessionStore: authSessionStore,
+            session: session
         )
         let remoteURLPolicy = try CatalogRemoteURLPolicy(
             supabaseURL: environment.supabaseURL,
@@ -50,8 +49,19 @@ public actor SupabaseCatalogGateway:
         accountExportDownloader = AccountExportDownloader(remoteURLPolicy: remoteURLPolicy)
     }
 
+    /// Deterministic adapter composition uses the same API client and mapping path without
+    /// opening Keychain or creating a network-backed AuthClient in tests.
+    init(environment: CatalogEnvironment, authSessionStore: AuthSessionStore, session: URLSession) throws {
+        self.authSessionStore = authSessionStore
+        client = SupabaseSharedAuth.makeDataClient(environment: environment, authSessionStore: authSessionStore, session: session)
+        let policy = try CatalogRemoteURLPolicy(supabaseURL: environment.supabaseURL, approvedCDNHosts: environment.approvedCDNHosts)
+        remoteURLPolicy = policy
+        mapper = CatalogMapper(remoteURLPolicy: policy)
+        accountExportDownloader = AccountExportDownloader(remoteURLPolicy: policy)
+    }
+
     public nonisolated func makeAuthSessionStore() -> AuthSessionStore {
-        AuthSessionStore(client: client)
+        authSessionStore
     }
 
     public func home(locale: String, ratingCeiling: String) async throws -> CatalogHome {
@@ -364,7 +374,7 @@ public actor SupabaseCatalogGateway:
 
     public func authorizationSnapshot() async throws -> CreatorAuthorizationSnapshot {
         try await safelyReading {
-            let session = try await client.auth.session
+            let session = try requestSession()
             let subjectID = session.user.id.uuidString.lowercased()
             let dto: CreatorAuthorizationDTO = try await client
                 .rpc("creator_authorization_v1", params: EmptyParameters())
@@ -451,7 +461,7 @@ public actor SupabaseCatalogGateway:
             )
         )
         try await safely {
-            let sessionBefore = try await client.auth.session
+            let sessionBefore = try requestSession()
             guard sessionBefore.user.id.uuidString.lowercased() == expectedSubjectID,
                   sessionBefore.expiresAt > Date.now.timeIntervalSince1970
             else { throw CatalogMappingError.invalidResponse }
@@ -795,7 +805,7 @@ public actor SupabaseCatalogGateway:
             exportID: nil
         )
         return try await safely {
-            let sessionBefore = try await client.auth.session
+            let sessionBefore = try requestSession()
             let expectedSubjectID = sessionBefore.user.id.uuidString.lowercased()
             let envelope: CatalogFunctionEnvelope<AccountExportResponseDTO> = try await invokeFunction(
                 "request-account-export",
@@ -807,7 +817,7 @@ public actor SupabaseCatalogGateway:
                 apiVersion: "account.v1",
                 expectedRequestID: requestID
             )
-            let sessionAfter = try await client.auth.session
+            let sessionAfter = try await authSessionStore.validatedSession()
             guard sessionAfter.user.id.uuidString.lowercased() == expectedSubjectID,
                   sessionAfter.expiresAt > Date.now.timeIntervalSince1970
             else { throw CatalogMappingError.invalidResponse }
@@ -828,7 +838,7 @@ public actor SupabaseCatalogGateway:
             exportID: id
         )
         return try await safely {
-            let sessionBefore = try await client.auth.session
+            let sessionBefore = try requestSession()
             let expectedSubjectID = sessionBefore.user.id.uuidString.lowercased()
             let envelope: CatalogFunctionEnvelope<AccountExportResponseDTO> = try await invokeFunction(
                 "request-account-export",
@@ -840,7 +850,7 @@ public actor SupabaseCatalogGateway:
                 apiVersion: "account.v1",
                 expectedRequestID: requestID
             )
-            let sessionAfter = try await client.auth.session
+            let sessionAfter = try await authSessionStore.validatedSession()
             guard sessionAfter.user.id.uuidString.lowercased() == expectedSubjectID,
                   sessionAfter.expiresAt > Date.now.timeIntervalSince1970
             else { throw CatalogMappingError.invalidResponse }
@@ -861,12 +871,12 @@ public actor SupabaseCatalogGateway:
             }
         }
         return try await safelyReading {
-            let session = try await client.auth.session
+            let session = try requestSession()
             let subjectID = session.user.id.uuidString.lowercased()
             let dto: ReferencesDTO = try await client
                 .rpc("account_operation_references_v1", params: EmptyParameters())
                 .execute().value
-            let currentSession = try await client.auth.session
+            let currentSession = try await authSessionStore.validatedSession()
             guard dto.subjectID == subjectID,
                   currentSession.user.id.uuidString.lowercased() == subjectID
             else { throw CatalogMappingError.invalidResponse }
@@ -901,7 +911,7 @@ public actor SupabaseCatalogGateway:
             confirmation: confirmation
         )
         return try await safely {
-            let sessionBefore = try await client.auth.session
+            let sessionBefore = try requestSession()
             let expectedSubjectID = sessionBefore.user.id.uuidString.lowercased()
             let envelope: CatalogFunctionEnvelope<AccountDeletionResponseDTO> = try await invokeFunction(
                 "request-account-deletion",
@@ -913,7 +923,7 @@ public actor SupabaseCatalogGateway:
                 apiVersion: "account.v1",
                 expectedRequestID: requestID
             )
-            let sessionAfter = try await client.auth.session
+            let sessionAfter = try await authSessionStore.validatedSession()
             guard sessionAfter.user.id.uuidString.lowercased() == expectedSubjectID,
                   sessionAfter.expiresAt > Date.now.timeIntervalSince1970
             else { throw CatalogMappingError.invalidResponse }
@@ -940,7 +950,7 @@ public actor SupabaseCatalogGateway:
             confirmation: nil
         )
         return try await safely {
-            let sessionBefore = try await client.auth.session
+            let sessionBefore = try requestSession()
             let expectedSubjectID = sessionBefore.user.id.uuidString.lowercased()
             let envelope: CatalogFunctionEnvelope<AccountDeletionResponseDTO> = try await invokeFunction(
                 "request-account-deletion",
@@ -952,7 +962,7 @@ public actor SupabaseCatalogGateway:
                 apiVersion: "account.v1",
                 expectedRequestID: requestID
             )
-            let sessionAfter = try await client.auth.session
+            let sessionAfter = try await authSessionStore.validatedSession()
             guard sessionAfter.user.id.uuidString.lowercased() == expectedSubjectID,
                   sessionAfter.expiresAt > Date.now.timeIntervalSince1970
             else { throw CatalogMappingError.invalidResponse }
@@ -1427,6 +1437,15 @@ public actor SupabaseCatalogGateway:
     /// These RPCs read state but travel as POST requests, so URLSession cannot
     /// infer that retrying a dropped connection is safe. Retry once only for
     /// explicitly read-only operations; mutations keep their own recovery rules.
+    private func requestSession() throws -> Session {
+        guard let snapshot = CatalogRequestAuthentication.snapshot,
+              snapshot.ownerID == ObjectIdentifier(authSessionStore),
+              snapshot.validAccessToken != nil, let session = snapshot.session else {
+            throw CatalogRemoteError(code: "authentication_required", safeMessage: nil, retryable: false)
+        }
+        return session
+    }
+
     private func safelyReading<Value: Sendable>(
         context: StaticString = #function,
         _ operation: () async throws -> Value
@@ -1455,7 +1474,7 @@ public actor SupabaseCatalogGateway:
         _ operation: () async throws -> Value
     ) async throws -> Value {
         do {
-            let result = try await operation()
+            let result = try await CatalogRequestAuthentication.withSnapshot(for: authSessionStore, operation)
             try Task.checkCancellation()
             return result
         } catch is CancellationError {
