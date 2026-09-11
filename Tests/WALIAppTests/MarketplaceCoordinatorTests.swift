@@ -456,6 +456,96 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         }
     }
 
+    func testUnavailableCreatorTermsPermitStaffMFAWithoutCreatorMetadataOrDeletion() async throws {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let mfa = ScriptedMFAStore(userID: userID, startsFresh: false)
+        let account = ScriptedAccountPrivacyGateway(userID: userID)
+        let creator = ScriptedCreatorAuthorizationGateway(
+            userID: userID, termsVersion: "", moderatorGrantRevision: 7, mfaStore: mfa
+        )
+        let moderation = StaffModerationMetadataProbe()
+        let coordinator = MarketplaceCoordinator(
+            accountGateway: account, creatorAuthorizationGateway: creator,
+            moderationGateway: moderation, authStore: auth, mfaStore: mfa
+        )
+        defer { coordinator.stop() }
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        let ready = await waitForCreatorState(.ready, in: coordinator)
+        XCTAssertTrue(ready)
+        await assertEmailEventually { coordinator.model.accountProfile != nil }
+        let initial = try XCTUnwrap(coordinator.creatorContext.moderationModel?.authorization)
+        XCTAssertEqual(initial.moderatorGrantRevision, 7)
+        XCTAssertFalse(initial.canAccessCreatorStudio())
+        XCTAssertFalse(initial.canAccessModeration())
+        XCTAssertNil(coordinator.creatorContext.metadata)
+        XCTAssertFalse(coordinator.canShowModeratorTools)
+        let initialMetadataRequests = await creator.metadataRequestCount()
+        let initialModerationRequests = await moderation.metadataRequests
+        XCTAssertEqual(initialMetadataRequests, 0)
+        XCTAssertEqual(initialModerationRequests, 0)
+
+        coordinator.acceptCreatorTerms()
+        let access = try XCTUnwrap(coordinator.moderatorAccess)
+        access.begin(subjectID: userID)
+        await assertEmailEventually {
+            if case .setup = access.state { return true }
+            return false
+        }
+        access.verify(code: "123456")
+        await assertEmailEventually { coordinator.canShowModeratorTools }
+        let verified = try XCTUnwrap(coordinator.creatorContext.moderationModel?.authorization)
+        XCTAssertTrue(verified.canAccessModeration())
+        XCTAssertFalse(verified.canAccessCreatorStudio())
+        XCTAssertNil(coordinator.creatorContext.metadata)
+        let metadataRequests = await creator.metadataRequestCount()
+        let acceptanceRequests = await creator.acceptanceRequestCount()
+        let moderationRequests = await moderation.metadataRequests
+        let deletionRequests = await account.deletionRequestCount
+        XCTAssertEqual(metadataRequests, 0)
+        XCTAssertEqual(acceptanceRequests, 0)
+        XCTAssertEqual(moderationRequests, 1)
+        XCTAssertEqual(deletionRequests, 0)
+    }
+
+    func testUnavailableCreatorTermsDoNotGrantOrdinaryAccountReviewAccess() async {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let creator = ScriptedCreatorAuthorizationGateway(userID: userID, termsVersion: "")
+        let moderation = StaffModerationMetadataProbe()
+        let coordinator = MarketplaceCoordinator(
+            creatorAuthorizationGateway: creator, moderationGateway: moderation, authStore: auth
+        )
+        defer { coordinator.stop() }
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        let ready = await waitForCreatorState(.ready, in: coordinator)
+        XCTAssertTrue(ready)
+        XCTAssertNil(coordinator.creatorContext.moderationModel?.authorization.moderatorGrantRevision)
+        XCTAssertFalse(coordinator.canShowModeratorTools)
+        XCTAssertFalse(coordinator.creatorContext.moderationModel?.authorization.canAccessCreatorStudio() ?? true)
+        let creatorRequests = await creator.metadataRequestCount()
+        let moderationRequests = await moderation.metadataRequests
+        XCTAssertEqual(creatorRequests, 0)
+        XCTAssertEqual(moderationRequests, 0)
+    }
+
+    func testAvailableCreatorTermsStillRequireMatchingMetadataVersion() async {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let creator = ScriptedCreatorAuthorizationGateway(userID: userID, metadataVersion: "2026-08-01")
+        let coordinator = MarketplaceCoordinator(creatorAuthorizationGateway: creator, authStore: auth)
+        defer { coordinator.stop() }
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        let failed = await waitForCreatorState(.failed, in: coordinator)
+        XCTAssertTrue(failed)
+        XCTAssertNil(coordinator.creatorContext.metadata)
+        let metadataRequests = await creator.metadataRequestCount()
+        XCTAssertEqual(metadataRequests, 1)
+    }
+
     func testAcceptingCreatorTermsCompletesWithTheConfirmedServerVersion() async throws {
         let userID = "11111111-1111-4111-8111-111111111111"
         let auth = ScriptedAuthStore()
@@ -986,6 +1076,7 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
 
 private actor ScriptedAccountPrivacyGateway: AccountPrivacyGateway {
     private let userID: String
+    private(set) var deletionRequestCount = 0
 
     init(userID: String) {
         self.userID = userID
@@ -1028,6 +1119,7 @@ private actor ScriptedAccountPrivacyGateway: AccountPrivacyGateway {
         confirmation: String,
         idempotencyKey: String
     ) async throws -> AccountDeletionSnapshot {
+        deletionRequestCount += 1
         guard expectedProfileRevision == 4, confirmation == "DELETE MY WALI" else {
             throw CatalogRequestError.invalidRequest
         }
@@ -1055,6 +1147,10 @@ private actor ScriptedAccountPrivacyGateway: AccountPrivacyGateway {
 private actor ScriptedCreatorAuthorizationGateway: CreatorAuthorizationGateway {
     private var authenticatedSubjectID: String
     private let termsVersion: String
+    private let metadataVersion: String
+    private let moderatorGrantRevision: UInt64?
+    private let mfaStore: ScriptedMFAStore?
+    private var metadataRequests = 0
     private let acceptanceDelay: Duration
     private let ignoresAcceptanceCancellation: Bool
     private let confirmsAcceptance: Bool
@@ -1065,23 +1161,35 @@ private actor ScriptedCreatorAuthorizationGateway: CreatorAuthorizationGateway {
     init(
         userID: String,
         termsVersion: String = "2026-09-01",
+        metadataVersion: String? = nil,
+        moderatorGrantRevision: UInt64? = nil,
+        mfaStore: ScriptedMFAStore? = nil,
         acceptanceDelay: Duration = .zero,
         ignoresAcceptanceCancellation: Bool = false,
         confirmsAcceptance: Bool = true
     ) {
         authenticatedSubjectID = userID
         self.termsVersion = termsVersion
+        self.metadataVersion = metadataVersion ?? termsVersion
+        self.moderatorGrantRevision = moderatorGrantRevision
+        self.mfaStore = mfaStore
         self.acceptanceDelay = acceptanceDelay
         self.ignoresAcceptanceCancellation = ignoresAcceptanceCancellation
         self.confirmsAcceptance = confirmsAcceptance
     }
 
     func authorizationSnapshot() async throws -> CreatorAuthorizationSnapshot {
-        snapshot(subjectID: authenticatedSubjectID, acceptedVersion: accepted)
+        let value = snapshot(subjectID: authenticatedSubjectID, acceptedVersion: accepted)
+        if let mfaStore {
+            let status = try await mfaStore.mfaStatus()
+            return value.withAssuranceLevel(status.currentLevel == .aal2 ? .aal2 : .aal1)
+        }
+        return value
     }
 
     func creatorMetadata() async throws -> CreatorMetadata {
-        try CreatorMetadata(
+        metadataRequests += 1
+        return try CreatorMetadata(
             categories: [CreatorTaxonomyOption(id: UUID(), name: "Nature", slug: "nature")],
             tags: [],
             licenses: [CreatorLicenseOption(
@@ -1094,7 +1202,7 @@ private actor ScriptedCreatorAuthorizationGateway: CreatorAuthorizationGateway {
                     requiresProof: false
                 )
             )],
-            currentCreatorTermsVersion: termsVersion
+            currentCreatorTermsVersion: metadataVersion
         )
     }
 
@@ -1131,6 +1239,8 @@ private actor ScriptedCreatorAuthorizationGateway: CreatorAuthorizationGateway {
 
     func acceptanceRequestCount() -> Int { acceptanceRequests }
 
+    func metadataRequestCount() -> Int { metadataRequests }
+
     func acceptanceExpectedSubjects() -> [String] { expectedSubjects }
 
     func switchAuthenticatedSubject(to subjectID: String) {
@@ -1149,8 +1259,23 @@ private actor ScriptedCreatorAuthorizationGateway: CreatorAuthorizationGateway {
             creatorGrantRevision: acceptedVersion == nil ? nil : 1,
             acceptedCreatorTermsVersion: acceptedVersion,
             currentCreatorTermsVersion: termsVersion,
-            moderatorGrantRevision: nil,
+            moderatorGrantRevision: moderatorGrantRevision,
             assuranceLevel: .aal1
         )
     }
+}
+
+private actor StaffModerationMetadataProbe: ModerationGateway {
+    private(set) var metadataRequests = 0
+
+    func moderationMetadata() async throws -> ModerationMetadata {
+        metadataRequests += 1
+        return try ModerationMetadata(checklistRevision: 1, creatorNoteRequired: true, reasonCodes: [
+            try ModerationReasonOption(code: "policy_pass", label: "Meets policy", decisions: [.approved]),
+        ])
+    }
+
+    func queue(_ request: ModerationQueueRequest) async throws -> ModerationQueuePage { throw CatalogRequestError.notConfigured }
+    func moderate(_ request: ModerationDecisionRequest) async throws -> ModerationDecisionResult { throw CatalogRequestError.notConfigured }
+    func reports(_ request: ModerationReportQueueRequest) async throws -> ModerationReportPage { throw CatalogRequestError.notConfigured }
 }

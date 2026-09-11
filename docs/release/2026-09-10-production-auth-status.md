@@ -14,6 +14,15 @@ restoring or replacing a newer session. Each gateway operation retains its
 original authentication snapshot across retries. MFA factor reconciliation uses
 the authenticated server user instead of stale SDK factor metadata.
 
+An unset production Creator Terms version no longer prevents staff authorization
+from loading. The gateway accepts the RPC's explicit null while rejecting missing
+or malformed values, and the coordinator skips unavailable creator metadata.
+Creator access stays disabled until effective terms and acceptance are present;
+staff review still requires an active account, a current grant and AAL2. This
+allows the existing Account review-access flow to offer MFA setup independently
+of creator publication. Controlled native tests cover that flow; they do not
+establish a real production MFA enrollment.
+
 Production requires the reviewed public manifest, exact Supabase project,
 publishable-key fingerprint, distinct primary/recovery catalog keys, and matching
 app/agent configuration digest. Archive, notarization and publication revalidate
