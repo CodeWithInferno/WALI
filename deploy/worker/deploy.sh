@@ -86,6 +86,47 @@ validate_host_binding() {
   }
 }
 
+# A freshly provisioned dedicated HOME may be root-owned. Prepare only Podman's
+# per-user configuration, preserving HOME ownership and existing configuration.
+prepare_rootless_configuration() {
+  python3 - "$(id -u wali-worker)" "$(id -g wali-worker)" <<'PYCONFIG'
+import os
+import stat
+import sys
+
+uid, gid = map(int, sys.argv[1:])
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+descriptors = []
+try:
+    parent = os.open('/var/lib/wali-worker', flags)
+    descriptors.append(parent)
+    home = os.fstat(parent)
+    if home.st_uid not in (0, uid) or home.st_mode & 0o022:
+        raise ValueError('unsafe worker home')
+    for name in ('.config', 'containers'):
+        created = False
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent)
+            created = True
+        except FileExistsError:
+            pass
+        child = os.open(name, flags, dir_fd=parent)
+        descriptors.append(child)
+        if created:
+            os.fchown(child, uid, gid)
+            os.fchmod(child, 0o700)
+        metadata = os.fstat(child)
+        if (metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode)) != (uid, gid, 0o700):
+            raise ValueError('unsafe worker configuration directory')
+        parent = child
+except (OSError, ValueError):
+    sys.exit('worker configuration directory is absent or unsafe; refusing deployment')
+finally:
+    for descriptor in reversed(descriptors):
+        os.close(descriptor)
+PYCONFIG
+}
+
 # Full deployment snapshots and crash-recoverable activation.
 source "$SCRIPT_ROOT/image-verification.sh"
 source "$SCRIPT_ROOT/releases.sh"
@@ -261,6 +302,10 @@ if [[ -f /etc/wali-worker/storage.conf ]] && ! cmp -s "$snapshot_root/storage" /
   echo 'Podman storage configuration differs; migrate it explicitly before deployment' >&2
   exit 65
 fi
+prepare_rootless_configuration
+# Inputs above now refer to the sealed, absolute snapshot paths. Podman drops
+# privileges and re-executes; it must not inherit an operator-only transfer cwd.
+cd /var/lib/wali-worker
 install -d -o wali-worker -g wali-worker -m 0700 /var/lib/wali-worker/attempts /var/lib/wali-worker/containers /var/lib/wali-worker/volumes /run/wali-media-worker
 preflight_storage="$(mktemp /run/wali-storage-preflight.XXXXXX)"
 install -o root -g root -m 0644 "$snapshot_root/storage" "$preflight_storage"
@@ -270,14 +315,14 @@ images=("$media_image" "$verifier_image")
 [[ -z "$classifier_image" ]] || images+=("$classifier_image")
 verify_worker_images "$cosign_key" "$offline_trust_root" "$offline_trust_receipt" "$offline_trust_receipt_sha256" "${images[@]}"
 for image in "${images[@]}"; do
-  if ! runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman image exists "$image"; then
-    runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman pull "$image" >/dev/null
+  if ! runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman image exists "$image"; then
+    runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman pull "$image" >/dev/null
   fi
-  runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman image inspect "$image" >/dev/null
+  runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" podman image inspect "$image" >/dev/null
 done
 if [[ -n "$classifier_image" ]]; then
   classifier_label() {
-    runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" \
+    runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF="$preflight_storage" \
       podman image inspect --format "{{ index .Labels \"$1\" }}" "$classifier_image"
   }
   [[ "$(classifier_label com.wali.classifier.production)" == true ]] || { echo 'classifier image is not a verified production build' >&2; exit 65; }

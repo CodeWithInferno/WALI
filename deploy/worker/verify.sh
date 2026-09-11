@@ -89,18 +89,20 @@ while IFS= read -r metric; do
      "$metric" =~ ^wali_worker_jobs_by_safe_code_total\{safe_code=\"[a-z][a-z0-9_]{0,63}\"\}\ [0-9]+$ ]] || fail 'metrics violate the aggregate-only schema'
 done <<<"$metrics"
 
-runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman info --format '{{.Host.Security.Rootless}}' | grep -qx true || fail 'Podman is not rootless'
+# Standalone, idempotent and recovery verification may start in a private cwd.
+cd /var/lib/wali-worker
+runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman info --format '{{.Host.Security.Rootless}}' | grep -qx true || fail 'Podman is not rootless'
 for key in WALI_MEDIA_IMAGE WALI_VERIFIER_IMAGE; do
   image="$(read_env_value "$key")" || fail "$key missing"
   [[ "$image" =~ $IMAGE_PATTERN ]] || fail "$key is mutable"
-  runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman image inspect "$image" >/dev/null || fail "$key is not present"
+  runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman image inspect "$image" >/dev/null || fail "$key is not present"
 done
 classifier_image="$(read_optional_env_value WALI_CLASSIFIER_IMAGE)" || fail 'WALI_CLASSIFIER_IMAGE missing'
 if [[ -n "$classifier_image" ]]; then
   [[ "$classifier_image" =~ $IMAGE_PATTERN ]] || fail 'WALI_CLASSIFIER_IMAGE is mutable'
-  runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman image inspect "$classifier_image" >/dev/null || fail 'WALI_CLASSIFIER_IMAGE is not present'
+  runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman image inspect "$classifier_image" >/dev/null || fail 'WALI_CLASSIFIER_IMAGE is not present'
   classifier_label() {
-    runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf \
+    runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf \
       podman image inspect --format "{{ index .Labels \"$1\" }}" "$classifier_image"
   }
   [[ "$(classifier_label com.wali.classifier.production)" == true ]] || fail 'classifier image is not a verified production build'
@@ -110,7 +112,7 @@ if [[ -n "$classifier_image" ]]; then
   [[ "$(classifier_label com.wali.classifier.taxonomy-revision)" == wali-taxonomy-v1 ]] || fail 'classifier taxonomy differs from the reviewed contract'
 fi
 
-if runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman ps -a --filter status=exited --format '{{.Names}}' | grep -q '^wali-'; then
+if runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman ps -a --filter status=exited --format '{{.Names}}' | grep -q '^wali-'; then
   fail 'a stopped WALI sandbox remains'
 fi
 if find /var/lib/wali-worker/attempts -mindepth 1 -maxdepth 1 -mmin +30 -print -quit | grep -q .; then fail 'stale scratch directory exists'; fi
@@ -128,7 +130,7 @@ chmod 0600 "$probe_log"
 cleanup_probes() {
   if [[ -n "$probe_name" ]]; then
     systemctl stop "$probe_name.service" >/dev/null 2>&1 || true
-    runuser -u wali-worker -- env HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman rm -f "$probe_name" >/dev/null 2>&1 || true
+    runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman rm -f "$probe_name" >/dev/null 2>&1 || true
   fi
   rm -rf -- "$probe_root"
   [[ -z "$classifier_root" ]] || rm -rf -- "$classifier_root"

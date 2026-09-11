@@ -95,7 +95,22 @@ required. Unsupported tool/bundle versions fail; no arbitrary flags, ignored
 transparency checks or egress expansion are added. Offline here disables online
 trust/transparency lookups, **not** authenticated reads from the approved OCI
 registry. Keep root Cosign's registry credentials and the worker's rootless
-Podman pull credentials separately scoped to registry reads.
+Podman pull credentials separately scoped to registry reads. Rootless commands
+explicitly remove inherited `DOCKER_CONFIG`, so Podman uses its own worker auth
+context rather than attempting to read root Cosign's private configuration.
+
+Before the first rootless Podman command, deployment prepares
+`/var/lib/wali-worker/.config` and its `containers` child as
+`wali-worker:wali-worker` mode `0700`. A fresh dedicated home may remain
+root-owned; deployment does not change its ownership. Existing configuration
+contents are preserved. Symbolic links, non-directories, unexpected ownership,
+and permissive configuration-directory modes are refused rather than repaired
+implicitly. This preparation uses directory descriptors so it never follows a
+replacement link while creating or assigning directory ownership. Once inputs
+have been staged into the immutable snapshot, deployment switches its working
+directory to the dedicated home before Podman drops privileges and re-executes.
+The installed verifier does the same for standalone, repeated-deployment, and
+rollback/recovery checks. The caller's transfer directory can remain root-only.
 
 `--dry-run` validates the public inputs but does not invoke Cosign or prove a
 signature. A real deploy verifies **all** configured images before pulling any.
