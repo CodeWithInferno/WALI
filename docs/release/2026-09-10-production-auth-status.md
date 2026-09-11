@@ -29,6 +29,14 @@ app/agent configuration digest. Archive, notarization and publication revalidate
 those values. The default remains an explicitly disabled local preview.
 Local-preview archives are rejected by publication. Synthetic fixtures do not
 establish the required live production or key-custody evidence.
+
+The public production manifest now contains the verified production publishable
+key and distinct primary/recovery catalog public keys from the recorded local
+Keychain roundtrips. Its canonical configuration SHA256 is
+`ad33b18a127ae5bd305166371fb3e132ed04852b6c249f7ee553b12e7afc3ee7`.
+This establishes the source input and its rendered configuration, not a compiled
+or signed production artifact, backend catalog activation, independent recovery,
+or completion of the remaining release gates.
 See [production configuration](production-configuration.md) and the
 [Fastlane guide](fastlane.md).
 
@@ -67,6 +75,15 @@ or production release readiness. Recipient identity, codes, tokens, and private
 mailbox evidence are excluded from this public ledger.
 
 ## Production preparation
+
+Production Supabase now has the primary catalog signing identifier, private key
+and approved CDN configuration. Provider SHA256 metadata matched all three
+expected values. The recovery private key was not uploaded; both keys remain in
+the local Keychain. The temporary environment file and primary private-key export
+were removed. Catalog key rows and the initial signed document have not been
+published, and live function signing remains unverified. An empty revision-1
+revocations document passed signing and offline verification; it is not evidence
+of a published catalog or independent-host recovery.
 
 The dedicated production host's approved base remediation and network checks
 completed. That host verified the prepared immutable media image against its
