@@ -34,6 +34,29 @@ and never apply blanket host firewall changes on a shared machine.
 Never place secrets, populated environment files, model weights, proprietary
 media, or signing private keys in this repository or deployment bundle.
 
+## Optional database CA
+
+When the database certificate needs a provider-specific trust anchor,
+independently authenticate the provider's public CA certificate and retain its
+source and SHA-256 in the release evidence. Supply `--database-ca PATH` together
+with the exact environment line
+`PGSSLROOTCERT=/etc/wali-worker/database-ca.crt`. Keep the database URL's sole TLS
+option `sslmode=verify-full`; no database URL, credentials or global trust store
+changes are needed for this CA input.
+
+Deployment accepts a nonempty regular PEM certificate bundle of at most 64 KiB,
+validated with OpenSSL. Private keys, unrelated content, duplicate settings,
+noncanonical paths and either half of a missing CA/environment pair are rejected.
+`--dry-run` checks this configuration without connecting to the database; it
+does not authenticate the certificate's source or prove a live TLS connection.
+
+The CA joins the immutable release snapshot and installs as root:root `0444` at
+the fixed path. Only the worker's PostgreSQL connection uses `PGSSLROOTCERT`;
+the system trust store and sandbox configuration remain unchanged. Verification
+checks the installed file's permissions and bytes against the current snapshot
+before the existing database readiness check. Updating or removing the CA uses
+a complete deployment, including the matching environment setting.
+
 ## Optional offline signature trust
 
 The default command remains `cosign verify --key <publisher-public-key> <image>`.
@@ -186,7 +209,7 @@ isolated restore drill before passing the deployment gate.
 `sudo deploy/worker/deploy.sh --rollback --environment staging --supabase-project-ref <ref>`
 restores a complete immutable snapshot: binary, protected environment, both WALI
 units, Storage configuration, verification script, public verification key, SBOMs,
-and runbooks, including optional offline trust inputs. Snapshot identity hashes
+and runbooks, including optional offline trust inputs and database CA. Snapshot identity hashes
 all of these inputs. The environment and
 manifest remain root-only. Both the host binding and snapshot must match the
 explicit environment and project. Legacy binary-only releases cannot be selected
@@ -201,6 +224,12 @@ transaction is recovered on the next invocation. Failed recovery stops the worke
 and retains the transaction for inspection. An identical deployment is a verified
 no-op that preserves the rollback target. `--rollback --dry-run` validates the
 target without mutating the host.
+
+A legacy complete snapshot without a database CA remains readable when its
+environment also omits `PGSSLROOTCERT`. Restoring it removes a newer installed
+CA without rewriting the legacy snapshot. A CA-enabled snapshot missing its
+certificate fails before installation. Rollback uses the selected snapshot's
+CA/environment pair and rejects a new `--database-ca` input.
 
 A complete snapshot made before optional trust inputs existed remains readable
 without changing its bytes or identity. Restoring it removes any newer installed

@@ -9,7 +9,7 @@ readonly PROJECT_REF_PATTERN='^[a-z]{20}$'
 readonly HOST_BINDING_FILE=/etc/wali-worker/HOST_IS_DEDICATED
 
 usage() {
-  echo 'usage: deploy.sh [--dry-run] --environment staging|production --supabase-project-ref REF --worker-binary PATH --environment-file PATH --media-sbom PATH --verifier-sbom PATH [--classifier-sbom PATH] --cosign-key PATH [--offline-trust-root PATH --offline-trust-receipt PATH --offline-trust-receipt-sha256 HEX]' >&2
+  echo 'usage: deploy.sh [--dry-run] --environment staging|production --supabase-project-ref REF --worker-binary PATH --environment-file PATH --media-sbom PATH --verifier-sbom PATH [--classifier-sbom PATH] --cosign-key PATH [--database-ca PATH] [--offline-trust-root PATH --offline-trust-receipt PATH --offline-trust-receipt-sha256 HEX]' >&2
   echo '       deploy.sh --rollback --environment staging|production --supabase-project-ref REF' >&2
 }
 
@@ -94,6 +94,7 @@ dry_run=false
 rollback_requested=false
 deployment_environment= supabase_project_ref= worker_binary= environment_file= media_sbom= verifier_sbom= classifier_sbom= cosign_key=
 offline_trust_root= offline_trust_receipt= offline_trust_receipt_sha256=
+database_ca=
 while (($#)); do
   case "$1" in
     --dry-run) dry_run=true; shift ;;
@@ -101,10 +102,10 @@ while (($#)); do
     --environment)
       (($# >= 2)) || { usage; exit 64; }
       deployment_environment=$2; shift 2 ;;
-    --offline-trust-root|--offline-trust-receipt|--offline-trust-receipt-sha256)
+    --offline-trust-root|--offline-trust-receipt|--offline-trust-receipt-sha256|--database-ca)
       (($# >= 2)) && [[ -n "$2" ]] || { usage; exit 64; }
       key="${1#--}"; key="${key//-/_}"
-      [[ -z "${!key}" ]] || { echo 'duplicate offline trust option' >&2; exit 64; }
+      [[ -z "${!key}" ]] || { echo 'duplicate trust option' >&2; exit 64; }
       printf -v "$key" '%s' "$2"; shift 2 ;;
     --supabase-project-ref|--worker-binary|--environment-file|--media-sbom|--verifier-sbom|--classifier-sbom|--cosign-key)
       (($# >= 2)) || { usage; exit 64; }
@@ -122,6 +123,7 @@ if [[ -n "$offline_trust_root" || -n "$offline_trust_receipt" || -n "$offline_tr
 fi
 
 if $rollback_requested; then
+  [[ -z "$database_ca" ]] || { echo 'rollback uses only the selected snapshot database CA' >&2; exit 64; }
   validate_host_binding
   [[ "$(id -u)" == 0 ]] || { echo 'rollback inspection must run as root' >&2; exit 77; }
   if $dry_run; then
@@ -145,6 +147,7 @@ for value in worker_binary environment_file media_sbom verifier_sbom cosign_key;
   [[ -n "${!value}" ]] || { usage; exit 64; }
   validate_file "${!value}"
 done
+validate_database_ca "$environment_file" "$database_ca"
 
 media_image="$(read_env_value WALI_MEDIA_IMAGE "$environment_file")" || { echo 'WALI_MEDIA_IMAGE is missing or duplicated' >&2; exit 65; }
 verifier_image="$(read_env_value WALI_VERIFIER_IMAGE "$environment_file")" || { echo 'WALI_VERIFIER_IMAGE is missing or duplicated' >&2; exit 65; }
@@ -174,6 +177,9 @@ if $dry_run; then
   printf 'would bind deployment to %s/%s\n' "$deployment_environment" "$supabase_project_ref"
   printf 'would install worker at %s/wali-media-worker\n' "$release_root"
   printf 'would install protected environment at /etc/wali-worker/worker.env\n'
+  if [[ -n "$database_ca" ]]; then
+    printf 'would install snapshot-bound database CA at /etc/wali-worker/database-ca.crt as root:root 0444\n'
+  fi
   if [[ -n "$classifier_image" ]]; then
     printf 'would verify three immutable images and SBOMs with cosign\n'
   else

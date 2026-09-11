@@ -88,6 +88,52 @@ class OfflineTrustTests(unittest.TestCase):
     def deploy(self, extra=(), success=True):
         return self.run_shell(shlex.join(['bash', str(DEPLOY)] + self.args + list(extra)), success)
 
+    def database_ca(self, snapshot=False):
+        ca = self.root / 'database-ca.crt'
+        # Synthetic public test CA; the throwaway key is never retained.
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+                        '-keyout', os.devnull, '-out', str(ca), '-days', '1',
+                        '-subj', '/CN=WALI deployment test CA'],
+                       check=True, capture_output=True, timeout=20)
+        installed = '/etc/wali-worker/database-ca.crt'
+        if snapshot:
+            installed = str(self.root / 'host' / installed.lstrip('/'))
+        with (self.root / 'environment').open('a') as env:
+            env.write(f'PGSSLROOTCERT={installed}\n')
+        return ca
+
+    def test_database_ca_dry_run_and_configuration_refusals(self):
+        ca = self.database_ca()
+        args = ['--database-ca', str(ca)]
+        result = self.deploy(args)
+        self.assertIn('database CA', result.stdout)
+        self.assertNotIn(str(ca), result.stdout)
+        self.deploy([], False)
+        self.deploy(args + args, False)
+        self.deploy(args + ['--rollback'], False)
+        self.deploy(['--database-ca', ''], False)
+        env = self.root / 'environment'
+        original = env.read_text()
+        for setting in ('', 'PGSSLROOTCERT=\n', 'PGSSLROOTCERT=/tmp/ca.crt\n',
+                        'PGSSLROOTCERT=/etc/wali-worker/database-ca.crt\n' * 2,
+                        ' PGSSLROOTCERT=/etc/wali-worker/database-ca.crt\n'):
+            with self.subTest(setting=setting):
+                env.write_text(original[:original.index('PGSSLROOTCERT=')] + setting)
+                self.deploy(args, False)
+
+    def test_database_ca_invalid_public_files_refused(self):
+        ca = self.database_ca()
+        original = ca.read_bytes()
+        invalid_certificate = b'-----BEGIN CERTIFICATE-----\nbm90LWRlcg==\n-----END CERTIFICATE-----\n'
+        for value in (b'', b'not a certificate\n', original + b'-----BEGIN PRIVATE KEY-----\n',
+                      b'x' * 65537, invalid_certificate, original + invalid_certificate,
+                      original + b'-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n'):
+            with self.subTest(value=value[:30]):
+                ca.write_bytes(value)
+                self.deploy(['--database-ca', str(ca)], False)
+        ca.unlink(); ca.symlink_to(self.key)
+        self.deploy(['--database-ca', str(ca)], False)
+
     def helper(self):
         return (f'source {shlex.quote(str(HELPER))}\n'
                 'file_digest() { shasum -a 256 "$1" | cut -d\' \' -f1; }\n'
@@ -219,12 +265,112 @@ validate_target_binding() { [[ "$1" == staging && "$2" == abcdefghijklmnopqrst ]
         prefix += '''
 safe_tree() { inside "$1"; [[ -d "$1" && ! -L "$1" && -z "$(find "$1" -type l -print -quit)" ]]; }
 worker_binary="$FIXTURE/worker"; environment_file="$FIXTURE/environment"; cosign_key="$FIXTURE/publisher.pub"
+database_ca=
 media_sbom="$FIXTURE/media.spdx"; verifier_sbom="$FIXTURE/verifier.spdx"; classifier_sbom="$FIXTURE/classifier.spdx"
 offline_trust_root="$FIXTURE/root.json"; offline_trust_receipt="$FIXTURE/receipt.json"
 '''
         prefix += shlex.join(['printf', '%s\n', self.pin]) + ' > "$FIXTURE/pin"\n'
         prefix += f'offline_trust_receipt_sha256={shlex.quote(self.pin)}\nmedia_image={shlex.quote(MEDIA)}\nverifier_image={shlex.quote(VERIFIER)}\nclassifier_image=\n'
         return prefix
+
+    def test_database_ca_snapshot_capture_replacement_and_restore(self):
+        self.database_ca(snapshot=True)
+        self.run_shell(self.snapshot_harness() + '''
+database_ca="$FIXTURE/database-ca.crt"
+stage_release; original="$staged_release"; validate_release "$original"
+grep -q 'payload/database-ca$' "$RELEASE_BASE/$original/manifest.sha256"
+install_snapshot "$original"; set_release_link current "$original"
+capture_baseline; [[ "$staged_release" == "$original" ]]
+printf '\n' >> "$database_ca"
+stage_release; replacement="$staged_release"; [[ "$replacement" != "$original" ]]
+install_snapshot "$replacement"
+cmp "$database_ca" "${release_paths[11]}"
+rm "$database_ca"
+chmod u+w "${release_paths[11]}"; printf damaged > "${release_paths[11]}"
+install_snapshot "$original"
+cmp "$RELEASE_BASE/$original/payload/database-ca" "${release_paths[11]}"
+cmp "$RELEASE_BASE/$original/payload/environment" "${release_paths[0]}"
+''')
+        self.assertEqual((self.root / 'host/etc/wali-worker/database-ca.crt').stat().st_mode & 0o777, 0o444)
+
+    def test_database_ca_legacy_snapshot_removes_newer_ca(self):
+        self.database_ca(snapshot=True)
+        self.run_shell(self.snapshot_harness() + '''
+database_ca="$FIXTURE/database-ca.crt"
+stage_release; original="$staged_release"; install_snapshot "$original"
+sed '/^PGSSLROOTCERT=/d' "$environment_file" > "$FIXTURE/legacy.env"
+environment_file="$FIXTURE/legacy.env"; database_ca=
+stage_release; without_ca="$staged_release"
+root=$(mktemp -d "$RELEASE_BASE/.legacy.XXXXXX")
+cp -R "$RELEASE_BASE/$without_ca/." "$root/"; chmod -R u+w "$root"
+rm "$root/manifest.sha256" "$root/payload/database-ca.absent"
+finish_snapshot "$root"; legacy="$staged_release"
+before=$(file_digest "$RELEASE_BASE/$legacy/manifest.sha256")
+install_snapshot "$legacy"
+[[ ! -e "${release_paths[11]}" ]]
+[[ "$before" == "$(file_digest "$RELEASE_BASE/$legacy/manifest.sha256")" ]]
+cmp "$environment_file" "${release_paths[0]}"
+install_snapshot "$original"; install_snapshot "$without_ca"
+[[ ! -e "${release_paths[11]}" ]]
+''')
+
+    def test_database_ca_partial_rehashed_snapshot_refuses_before_install(self):
+        self.database_ca(snapshot=True)
+        self.run_shell(self.snapshot_harness() + '''
+database_ca="$FIXTURE/database-ca.crt"
+stage_release; original="$staged_release"; install_snapshot "$original"
+for malformed in missing ambiguous disabled; do
+  root=$(mktemp -d "$RELEASE_BASE/.malformed.XXXXXX")
+  cp -R "$RELEASE_BASE/$original/." "$root/"; chmod -R u+w "$root"
+  case "$malformed" in
+    missing) rm "$root/payload/database-ca" ;;
+    ambiguous) touch "$root/payload/database-ca.absent" ;;
+    disabled) sed '/^PGSSLROOTCERT=/d' "$root/payload/environment" > "$FIXTURE/disabled.env"; cp "$FIXTURE/disabled.env" "$root/payload/environment" ;;
+  esac
+  manifest "$root" > "$root/manifest.sha256"
+  target="releases/$(file_digest "$root/manifest.sha256")"; mv -T "$root" "$RELEASE_BASE/$target"
+  if (install_snapshot "$target") >/dev/null 2>&1; then exit 1; fi
+  cmp "${release_paths[11]}" "$RELEASE_BASE/$original/payload/database-ca"
+  cmp "${release_paths[0]}" "$RELEASE_BASE/$original/payload/environment"
+done
+rm "${release_paths[11]}"
+if (capture_baseline) >/dev/null 2>&1; then exit 1; fi
+''')
+
+    def test_database_ca_installed_verifier_binding(self):
+        self.database_ca(snapshot=True)
+        prefix = self.snapshot_harness()
+        # Source only the real verifier definitions, then invoke its CA check.
+        # Linux ownership is simulated; file contents, modes and symlinks are real.
+        verify = (REPO / 'deploy/worker/verify.sh').read_text().split('[[ "$(id -u)" == 0 ]]')[0]
+        for path in ('/opt/wali-worker', '/etc/wali-worker'):
+            verify = verify.replace(path, str(self.root / 'host' / path.lstrip('/')))
+        copy = self.root / 'verify-fixture.sh'; copy.write_text(verify)
+        prefix += 'database_ca="$FIXTURE/database-ca.crt"\nstage_release; original="$staged_release"\ninstall_snapshot "$original"; set_release_link current "$original"\n'
+        prefix += f'source {shlex.quote(str(copy))}\n'
+        prefix += '''
+stat() {
+  [[ "$1" == -c && "$2" == %U:%G:%a ]]; inside "$3"
+  local mode
+  mode=$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$3")
+  printf 'root:root:%s\n' "$mode"
+}
+verify_database_ca
+chmod u+w "${release_paths[11]}"
+if (verify_database_ca) >/dev/null 2>&1; then exit 1; fi
+printf damaged > "${release_paths[11]}"; chmod 0444 "${release_paths[11]}"
+if (verify_database_ca) >/dev/null 2>&1; then exit 1; fi
+rm "${release_paths[11]}"
+if (verify_database_ca) >/dev/null 2>&1; then exit 1; fi
+cp "$database_ca" "$FIXTURE/replacement.crt"
+ln -s "$FIXTURE/replacement.crt" "${release_paths[11]}"
+if (verify_database_ca) >/dev/null 2>&1; then exit 1; fi
+rm "${release_paths[11]}"; cp "$database_ca" "${release_paths[11]}"; chmod 0444 "${release_paths[11]}"
+verify_database_ca
+printf ' PGSSLROOTCERT=/tmp/unmanaged.crt\n' >> "${release_paths[0]}"
+if (verify_database_ca) >/dev/null 2>&1; then exit 1; fi
+'''
+        self.run_shell(prefix)
 
     def test_snapshot_capture_restore_and_default_identity(self):
         self.run_shell(self.snapshot_harness() + '''

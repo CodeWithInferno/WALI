@@ -50,6 +50,7 @@ marketplace-contracts:
 worker-test:
 	cd Services/WALIMediaWorker && go vet ./... && go test -race ./...
 	./Tests/Worker/deploy-optional-classifier-tests.sh
+	./Tests/Worker/deploy-offline-trust-tests.sh
 
 classifier-test:
 	cd Services/WALIClassifier && uv lock --check && uv run --frozen pytest

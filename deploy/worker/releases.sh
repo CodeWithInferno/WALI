@@ -3,12 +3,57 @@
 # Only these WALI-owned files participate; database and host networking do not.
 readonly RELEASE_BASE=/opt/wali-worker
 readonly TRANSACTION=/opt/wali-worker/.transaction
-release_keys=(environment worker-unit namespace-unit storage verifier cosign media-runbook compromise-runbook cosign-trust-root cosign-trust-receipt cosign-trust-receipt-digest)
-release_paths=(/etc/wali-worker/worker.env /etc/systemd/system/wali-media-worker.service /etc/systemd/system/wali-podman-namespace.service /etc/wali-worker/storage.conf /usr/local/sbin/wali-worker-verify /etc/wali-worker/cosign.pub /usr/share/doc/wali-worker/media-worker.md /usr/share/doc/wali-worker/worker-compromise.md /etc/wali-worker/cosign-trusted-root.json /etc/wali-worker/cosign-trust-receipt.json /etc/wali-worker/cosign-trust-receipt.sha256)
-release_modes=(0640 0644 0644 0644 0555 0444 0444 0444 0444 0444 0444)
+readonly DATABASE_CA_PATH=/etc/wali-worker/database-ca.crt
+release_keys=(environment worker-unit namespace-unit storage verifier cosign media-runbook compromise-runbook cosign-trust-root cosign-trust-receipt cosign-trust-receipt-digest database-ca)
+release_paths=(/etc/wali-worker/worker.env /etc/systemd/system/wali-media-worker.service /etc/systemd/system/wali-podman-namespace.service /etc/wali-worker/storage.conf /usr/local/sbin/wali-worker-verify /etc/wali-worker/cosign.pub /usr/share/doc/wali-worker/media-worker.md /usr/share/doc/wali-worker/worker-compromise.md /etc/wali-worker/cosign-trusted-root.json /etc/wali-worker/cosign-trust-receipt.json /etc/wali-worker/cosign-trust-receipt.sha256 "$DATABASE_CA_PATH")
+release_modes=(0640 0644 0644 0644 0555 0444 0444 0444 0444 0444 0444 0444)
 readonly SBOM_DIRECTORY=/usr/share/doc/wali-worker/sbom
 
 release_fail() { echo "release transaction: $1" >&2; exit 65; }
+
+validate_database_ca() {
+  local environment=$1 ca=$2 count=0 bytes
+  if [[ -e "$environment" || -L "$environment" ]]; then
+    [[ -f "$environment" && ! -L "$environment" ]] || release_fail 'unsafe database CA environment'
+    count="$(grep -c -E '^[[:space:]]*PGSSLROOTCERT[[:space:]]*=' "$environment" || true)"
+  fi
+  if [[ -z "$ca" ]]; then
+    [[ "$count" == 0 ]] || release_fail 'PGSSLROOTCERT requires a managed database CA'
+    return
+  fi
+  [[ "$count" == 1 ]] && grep -qxF "PGSSLROOTCERT=$DATABASE_CA_PATH" "$environment" ||
+    release_fail 'database CA requires the exact managed PGSSLROOTCERT setting'
+  [[ -f "$ca" && ! -L "$ca" && -s "$ca" ]] || release_fail 'database CA must be a nonempty regular public file'
+  bytes=$(wc -c < "$ca")
+  ((bytes <= 65536)) || release_fail 'database CA exceeds its 64 KiB bound'
+  # Only public PEM certificates are accepted, never keys or other PEM objects.
+  awk '
+    { sub(/\r$/, "") }
+    /^-----BEGIN CERTIFICATE-----$/ { if (inside) exit 1; inside=1; count++; next }
+    /^-----END CERTIFICATE-----$/ { if (!inside) exit 1; inside=0; next }
+    inside { if ($0 !~ /^[A-Za-z0-9+\/=]+$/) exit 1; next }
+    /[^[:space:]]/ { exit 1 }
+    END { if (inside || !count) exit 1 }
+  ' "$ca" || release_fail 'database CA must contain only PEM certificates'
+  command -v openssl >/dev/null || release_fail 'openssl is required to validate a database CA'
+  openssl crl2pkcs7 -nocrl -certfile "$ca" -outform DER >/dev/null 2>&1 ||
+    release_fail 'database CA contains an invalid certificate'
+}
+
+snapshot_database_ca() {
+  local payload=$1 ca=
+  if [[ -e "$payload/database-ca" || -L "$payload/database-ca" ]]; then
+    [[ ! -e "$payload/database-ca.absent" && ! -L "$payload/database-ca.absent" ]] ||
+      release_fail 'ambiguous snapshot database CA'
+    ca="$payload/database-ca"
+  elif [[ -e "$payload/database-ca.absent" || -L "$payload/database-ca.absent" ]]; then
+    [[ -f "$payload/database-ca.absent" && ! -L "$payload/database-ca.absent" && ! -s "$payload/database-ca.absent" ]] ||
+      release_fail 'invalid snapshot database CA absence marker'
+  fi
+  # Legacy snapshots have neither field, and may not refer to an unmanaged CA.
+  validate_database_ca "$payload/environment" "$ca"
+}
+
 safe_tree() {
   [[ -d "$1" && ! -L "$1" && "$(stat -c %u "$1")" == 0 ]] || return 1
   [[ -z "$(find "$1" \( -type l -o ! -user root -o -perm /022 \) -print -quit)" ]] || return 1
@@ -34,6 +79,7 @@ validate_release() {
   [[ -f "$root/manifest.sha256" && "$(file_digest "$root/manifest.sha256")" == "${link#releases/}" ]] || release_fail 'snapshot manifest identity mismatch'
   cmp -s <(manifest "$root") "$root/manifest.sha256" || release_fail 'snapshot contents changed'
   snapshot_offline_trust "$root/payload" historical || release_fail 'invalid snapshot trust inputs'
+  snapshot_database_ca "$root/payload"
   if [[ -f "$root/payload/environment" ]]; then
     validate_target_binding "$(read_env_value WALI_DEPLOY_ENVIRONMENT "$root/payload/environment")" \
       "$(read_env_value WALI_SUPABASE_PROJECT_REF "$root/payload/environment")" \
@@ -44,6 +90,7 @@ validate_release() {
 finish_snapshot() {
   local root=$1 identity target
   snapshot_offline_trust "$root/payload" historical || release_fail 'invalid snapshot trust inputs'
+  snapshot_database_ca "$root/payload"
   find "$root" -type f -exec chmod 0400 {} +
   find "$root" -type d -exec chmod 0700 {} +
   [[ ! -f "$root/wali-media-worker" ]] || chmod 0555 "$root/wali-media-worker"
@@ -99,6 +146,11 @@ stage_release() {
   cp -- "$SCRIPT_ROOT/storage.conf" "$root/payload/storage"
   cp -- "$SCRIPT_ROOT/verify.sh" "$root/payload/verifier"
   cp -- "$cosign_key" "$root/payload/cosign"
+  if [[ -n "$database_ca" ]]; then
+    cp -- "$database_ca" "$root/payload/database-ca"
+  else
+    touch "$root/payload/database-ca.absent"
+  fi
   if [[ -n "$offline_trust_root" ]]; then
     cp -- "$offline_trust_root" "$root/payload/cosign-trust-root"
     cp -- "$offline_trust_receipt" "$root/payload/cosign-trust-receipt"
@@ -146,7 +198,7 @@ install_snapshot() {
     # Optional trust files did not exist in legacy complete snapshots. Restoring
     # one must remove newer installed trust inputs, not retain stale policy.
     case "$key" in
-      cosign-trust-root|cosign-trust-receipt|cosign-trust-receipt-digest)
+      cosign-trust-root|cosign-trust-receipt|cosign-trust-receipt-digest|database-ca)
         if [[ ! -e "$root/$key" ]]; then rm -f -- "$path"; continue; fi ;;
     esac
     validate_file "$root/$key"
