@@ -1,8 +1,9 @@
 # Direct production configuration
 
 [ADR 0022](../adr/0022-direct-production-email-otp-authentication.md) authorizes the
-email-code design. The direct app remains a local preview until the real
-production configuration and independent operational gates are complete.
+email-code design. An unconfigured checkout remains a local preview. Rendering
+the reviewed manifest selects production mode for direct Release; publication
+still requires the independent operational gates below.
 
 `Config/Marketplace.production.json` is a reviewed public source input. Its exact
 shape is `{ "schema_version": 1, "settings": { ... } }`; the allowed setting names
@@ -18,6 +19,31 @@ checks the public key fingerprint and distinct canonical 32-byte catalog keys.
 The fingerprint identifies bytes; a private provider receipt must separately
 prove the publishable key works with the exact production service. Key presence
 does not prove catalog bootstrap or recovery readiness.
+
+The current source manifest uses the production publishable key verified against
+the exact Auth settings endpoint (HTTP 200 in the retained receipt dated
+11 September 2026 UTC). Its SHA256 is
+`4d9c2b130f7b4c46abfe86485d5e87ef3298763619bd37d8821a149cc876ee6e`.
+The primary and recovery raw public files each contain 32 bytes and match the
+key-custody receipt:
+
+| Role | Key ID | Raw public-key SHA256 |
+| --- | --- | --- |
+| Primary | `wali-production-primary-20260910` | `7f4f2416e8ba0ed6eba0b8b132e419644223803e17a63db9c508bd9a60c768ef` |
+| Recovery | `wali-production-recovery-20260910` | `579d8306209c8026b2e083fa263552ff6ef299a0a9952ddde4b95be53dab5e46` |
+
+Both keys passed the recorded local Keychain roundtrip. A separate production
+receipt confirms that the primary signing identifier, private key and approved
+CDN configuration were installed, with all three provider SHA256 metadata values
+matching the expected inputs. The recovery private key was not uploaded.
+Independent-host recovery, backup or migration, catalog key registration and
+catalog bootstrap remain separate gates. The source manifest's canonical
+configuration digest is
+`ad33b18a127ae5bd305166371fb3e132ed04852b6c249f7ee553b12e7afc3ee7`.
+The CDN host is the same approved Supabase Storage host,
+`afgxvhhubqzgpijcstsv.supabase.co`; the legal base remains the repository's public
+`docs/legal` directory on `main`. This public configuration does not establish
+catalog activation or make draft legal documents effective.
 
 The configuration digest is SHA256 over UTF-8 `schema_version=1\n` followed by
 all manifest setting names in ascending ASCII order, each encoded as
