@@ -27,10 +27,41 @@ read_optional_env_value() {
 }
 
 fail() { echo "verification failed: $1" >&2; exit 1; }
+
+verify_database_ca() {
+  local ca=/etc/wali-worker/database-ca.crt base=/opt/wali-worker current payload count
+  count="$(grep -c -E '^[[:space:]]*PGSSLROOTCERT[[:space:]]*=' "$ENV_FILE" || true)"
+  if [[ "$count" != 0 ]]; then
+    [[ "$count" == 1 ]] && grep -qxF "PGSSLROOTCERT=$ca" "$ENV_FILE" ||
+      fail 'database CA environment binding is invalid'
+  fi
+  current="$(readlink "$base/current")" || fail 'database CA release link is missing'
+  [[ "$current" =~ ^releases/[a-f0-9]{64}$ ]] || fail 'database CA release link is invalid'
+  payload="$base/$current/payload"
+  [[ -d "$payload" && ! -L "$payload" && "$(stat -c '%U:%G:%a' "$payload")" == root:root:700 ]] ||
+    fail 'database CA snapshot directory is unsafe'
+  if [[ -e "$payload/database-ca" || -L "$payload/database-ca" ]]; then
+    [[ "$count" == 1 && ! -e "$payload/database-ca.absent" && ! -L "$payload/database-ca.absent" ]] ||
+      fail 'database CA snapshot binding is incomplete'
+    [[ -f "$payload/database-ca" && ! -L "$payload/database-ca" && "$(stat -c '%U:%G:%a' "$payload/database-ca")" == root:root:400 ]] ||
+      fail 'database CA snapshot file is unsafe'
+    [[ -f "$ca" && ! -L "$ca" && "$(stat -c '%U:%G:%a' "$ca")" == root:root:444 ]] ||
+      fail 'database CA ownership/mode is not root:root 0444'
+    cmp -s "$payload/database-ca" "$ca" || fail 'database CA differs from the installed release snapshot'
+  else
+    if [[ -e "$payload/database-ca.absent" || -L "$payload/database-ca.absent" ]]; then
+      [[ -f "$payload/database-ca.absent" && ! -L "$payload/database-ca.absent" && ! -s "$payload/database-ca.absent" ]] ||
+        fail 'database CA absence marker is invalid'
+    fi
+    [[ "$count" == 0 && ! -e "$ca" && ! -L "$ca" ]] || fail 'unexpected or missing managed database CA'
+  fi
+}
+
 [[ "$(id -u)" == 0 ]] || fail 'run as root'
 id wali-worker >/dev/null 2>&1 || fail 'dedicated identity missing'
 if id -nG wali-worker | tr ' ' '\n' | grep -Eq '^(sudo|wheel|docker|adm)$'; then fail 'worker has a privileged group'; fi
 [[ "$(stat -c '%U:%G:%a' "$ENV_FILE")" == root:wali-worker:640 ]] || fail 'environment ownership/mode is not root:wali-worker 0640'
+verify_database_ca
 [[ "$(stat -c '%U:%G:%a' /var/lib/wali-worker/attempts)" == wali-worker:wali-worker:700 ]] || fail 'scratch ownership/mode is incorrect'
 systemctl is-active --quiet "$UNIT" || fail 'worker service is not active'
 
