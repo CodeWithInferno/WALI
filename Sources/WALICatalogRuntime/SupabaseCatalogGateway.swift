@@ -386,7 +386,9 @@ public actor SupabaseCatalogGateway:
                   abs(sessionExpiresAt.timeIntervalSince1970 - session.expiresAt) < 60,
                   dto.creatorGrantRevision.map(isSafeRevision) ?? true,
                   dto.moderatorGrantRevision.map(isSafeRevision) ?? true,
-                  isBoundedCreatorToken(dto.currentCreatorTermsVersion, maximum: 64),
+                  dto.currentCreatorTermsVersion.map({
+                      isBoundedCreatorToken($0, maximum: 64)
+                  }) ?? true,
                   dto.acceptedCreatorTermsVersion.map({
                       isBoundedCreatorToken($0, maximum: 64)
                   }) ?? true
@@ -397,7 +399,7 @@ public actor SupabaseCatalogGateway:
                 sessionExpiresAt: sessionExpiresAt,
                 creatorGrantRevision: dto.creatorGrantRevision,
                 acceptedCreatorTermsVersion: dto.acceptedCreatorTermsVersion,
-                currentCreatorTermsVersion: dto.currentCreatorTermsVersion,
+                currentCreatorTermsVersion: dto.currentCreatorTermsVersion ?? "",
                 moderatorGrantRevision: dto.moderatorGrantRevision,
                 assuranceLevel: assurance
             )
@@ -1741,7 +1743,7 @@ private struct CreatorAuthorizationDTO: Decodable, Sendable {
     let sessionExpiresAt: String
     let creatorGrantRevision: UInt64?
     let acceptedCreatorTermsVersion: String?
-    let currentCreatorTermsVersion: String
+    let currentCreatorTermsVersion: String?
     let moderatorGrantRevision: UInt64?
     let assuranceLevel: String
 
@@ -1753,6 +1755,19 @@ private struct CreatorAuthorizationDTO: Decodable, Sendable {
         case currentCreatorTermsVersion = "current_creator_terms_version"
         case moderatorGrantRevision = "moderator_grant_revision"
         case assuranceLevel = "assurance_level"
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        accountIsActive = try values.decode(Bool.self, forKey: .accountIsActive)
+        sessionExpiresAt = try values.decode(String.self, forKey: .sessionExpiresAt)
+        creatorGrantRevision = try values.decodeIfPresent(UInt64.self, forKey: .creatorGrantRevision)
+        acceptedCreatorTermsVersion = try values.decodeIfPresent(String.self, forKey: .acceptedCreatorTermsVersion)
+        // The RPC emits explicit null until creator terms are configured; a missing field
+        // remains a malformed response rather than a second unavailable representation.
+        currentCreatorTermsVersion = try values.decode(String?.self, forKey: .currentCreatorTermsVersion)
+        moderatorGrantRevision = try values.decodeIfPresent(UInt64.self, forKey: .moderatorGrantRevision)
+        assuranceLevel = try values.decode(String.self, forKey: .assuranceLevel)
     }
 }
 

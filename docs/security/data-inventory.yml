@@ -6,6 +6,18 @@ owner_role: security_responder
 accepted_by: project_owner
 approval_reference: project-owner AFK marketplace implementation directive 2026-09-01
 
+# Production email observations, 2026-09-10, under accepted ADR 0022:
+# Supabase Auth processes email-code requests, verification, and account/session
+# state. Configured Resend delivery processes recipient email addresses,
+# authentication-message contents (including the code), and delivery metadata.
+# Provider reference: https://resend.com/legal/dpa (Exhibit A).
+# These observations do not change the accepted collection/logging restrictions
+# or retention/deletion rules below. They do not establish provider retention,
+# tracking settings, deletion, or backup behavior; those require separate evidence.
+# The operator/contact and draft user disclosure are in docs/legal/privacy-policy.md.
+# Outside-team delivery and API-only auth results, with native checks still pending,
+# are recorded in docs/release/2026-09-10-production-auth-status.md.
+
 defaults:
   encryption_in_transit: required
   encryption_at_rest: required

@@ -14,6 +14,15 @@ restoring or replacing a newer session. Each gateway operation retains its
 original authentication snapshot across retries. MFA factor reconciliation uses
 the authenticated server user instead of stale SDK factor metadata.
 
+An unset production Creator Terms version no longer prevents staff authorization
+from loading. The gateway accepts the RPC's explicit null while rejecting missing
+or malformed values, and the coordinator skips unavailable creator metadata.
+Creator access stays disabled until effective terms and acceptance are present;
+staff review still requires an active account, a current grant and AAL2. This
+allows the existing Account review-access flow to offer MFA setup independently
+of creator publication. Controlled native tests cover that flow; they do not
+establish a real production MFA enrollment.
+
 Production requires the reviewed public manifest, exact Supabase project,
 publishable-key fingerprint, distinct primary/recovery catalog keys, and matching
 app/agent configuration digest. Archive, notarization and publication revalidate
@@ -26,6 +35,36 @@ See [production configuration](production-configuration.md) and the
 Development and Store preserve native Apple sign-in. The direct app preserves
 its Lock Screen helper and Developer ID identities. No local library schema,
 wire protocol, hosted database schema or automatic edition migration changed.
+
+## Production email and API checks
+
+Production Supabase now uses the existing Resend service with the verified
+sending domain and sender WALI <hello@tryclean.ai>. Pratham Patel is the
+owner-confirmed operator. SMTP save and reload were verified with port 465 and a
+60-second sending interval. Supabase indicated an initial 30-message/hour limit;
+the separate rate-limit settings page has not been verified. Email
+confirmation remains enabled and the server code expiry remains 3,600 seconds.
+The configured code length changed from eight to six digits and persisted on
+readback, matching WALI's validator. Both signup and existing-account templates
+now present branded instructions for entering the code in WALI.
+
+The following checks used production Auth API calls and an owner-controlled
+mailbox. Authenticated organization-team inspection confirmed the recipient is
+outside the project's team; delivery was not limited to a team address.
+
+| Check | Observed result |
+| --- | --- |
+| New-account email | Received; subject matched the signup template |
+| Existing-account email | Received; subject matched the sign-in template |
+| Code verification and authenticated user lookup | HTTP 200 for both flows; same account confirmed |
+| Session refresh | HTTP 200; same subject confirmed |
+| Reuse of an already consumed code | HTTP 403 |
+| Probe-session sign-out | HTTP 204 for both sessions |
+
+These are email-delivery and API results. They do not establish a signed native
+authentication journey, native cancellation/session restoration, MFA, deletion,
+or production release readiness. Recipient identity, codes, tokens, and private
+mailbox evidence are excluded from this public ledger.
 
 ## Production preparation
 
@@ -43,11 +82,12 @@ the production quality comparison are still required.
 
 ## Remaining release gates
 
-Custom email delivery, real new/existing-account journeys, product operator MFA,
-catalog signing/recovery bootstrap, active worker operation, production quality,
-and effective legal/provider disclosures remain separate work. The privacy
-document is still a draft. The root checkout's staging linkage is not authority
-to configure production.
+Native new/existing-account journeys, cancellation and session restoration,
+production expiry/resend/rate-limit checks, product operator MFA, account
+deletion, catalog signing/recovery bootstrap, active worker operation, production
+quality, and effective legal disclosures remain separate work. The privacy
+document names the verified email provider but is still a draft. The root
+checkout's staging linkage is not authority to configure production.
 
 No notarized public GitHub app package or App Store submission is established by
 this source change. Publication additionally requires final-source CI, signed

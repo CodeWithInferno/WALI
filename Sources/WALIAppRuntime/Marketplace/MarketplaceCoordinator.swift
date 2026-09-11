@@ -297,7 +297,7 @@ public final class MarketplaceCoordinator {
 
     private struct CreatorAcceptanceResult: Sendable {
         let authorization: CreatorAuthorizationSnapshot
-        let metadata: CreatorMetadata
+        let metadata: CreatorMetadata?
         let moderationMetadata: ModerationMetadata?
     }
 
@@ -1727,7 +1727,13 @@ public final class MarketplaceCoordinator {
             do {
                 let result = try await Self.withTimeout(creatorRequestTimeout) {
                     let authorization = try await creatorAuthorizationGateway.authorizationSnapshot()
-                    let metadata = try await creatorAuthorizationGateway.creatorMetadata()
+                    let metadata: CreatorMetadata?
+                    if authorization.currentCreatorTermsVersion.isEmpty {
+                        // Staff MFA and review authorization do not activate creator terms.
+                        metadata = nil
+                    } else {
+                        metadata = try await creatorAuthorizationGateway.creatorMetadata()
+                    }
                     let moderationMetadata: ModerationMetadata?
                     if authorization.canAccessModeration(), let moderationGateway {
                         moderationMetadata = try await moderationGateway.moderationMetadata()
@@ -1745,7 +1751,7 @@ public final class MarketplaceCoordinator {
                       currentUserID == expectedUserID
                 else { return }
                 guard result.authorization.subjectID == expectedUserID,
-                      result.authorization.currentCreatorTermsVersion == result.metadata.currentCreatorTermsVersion
+                      result.authorization.currentCreatorTermsVersion == (result.metadata?.currentCreatorTermsVersion ?? "")
                 else {
                     creatorContext.fail()
                     return

@@ -42,8 +42,17 @@ intended to identify an individual user.
 Information is used to authenticate accounts, publish licensed content,
 operate search and ranking, prevent abuse, respond to reports, and secure the
 service. Service providers may process the minimum data needed to host the
-database, objects, authentication, sign-in email delivery, and isolated media pipeline. WALI does not
-sell personal information or use marketplace activity for third-party ads.
+database, objects, authentication, sign-in email delivery, and isolated media
+pipeline. WALI does not sell personal information or use marketplace activity
+for third-party ads.
+
+Supabase provides hosted authentication, database, and object storage. For the
+direct email-code edition, Resend delivers sign-in emails on WALI's behalf.
+Resend processes the recipient email address, authentication-message contents
+including the sign-in code, and delivery metadata. Its
+[Data Processing Addendum](https://resend.com/legal/dpa) describes that provider
+processing. WALI's local-data and logging restrictions do not establish that
+service providers retain no operational records.
 
 ## Retention and deletion
 
@@ -60,11 +69,10 @@ sent directly to the wallpaper renderer. Users may use local wallpapers without
 creating a marketplace account. The native Account screen implements export
 and deletion request/status UX in the development build. Public enablement
 remains gated on hosted processing, private export retrieval, fresh MFA for
-deletion, session revocation, Auth identity cleanup, a production support
-contact, and an exercised end-to-end deployment.
+deletion, session revocation, Auth identity cleanup, production support intake,
+and an exercised end-to-end deployment.
 
-The planned public operator is Pratham Patel; support and privacy requests may
-be directed to hello@tryclean.ai. The email delivery provider and other required
-production disclosures must be finalized before this draft becomes effective.
-Material policy changes require a new version and renewed acceptance when
-required.
+WALI is operated by Pratham Patel. Support and privacy requests may be directed
+to hello@tryclean.ai. This document remains a draft pending the required review
+and publication gates. Material policy changes require a new version and
+renewed acceptance when required.
