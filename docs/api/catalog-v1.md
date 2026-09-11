@@ -191,7 +191,9 @@ moderation state, uploads, rights evidence, and follower identities are absent.
 
 `my_favorites_v1(cursor, limit)` and `my_saved_wallpapers_v1(cursor, limit)`
 require a user session and return only the caller's summaries. `my_profile_v1`
-returns the caller's safe profile/preferences. An unauthenticated response is
+returns the caller's safe profile/preferences before catalog activation as well.
+Its optional `avatar_url` is null until a public catalog base is configured.
+An unauthenticated response is
 `authentication_required`, never an empty list that could conceal auth drift.
 
 ## Interaction RPCs
