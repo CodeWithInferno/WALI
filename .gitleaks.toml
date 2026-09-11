@@ -12,3 +12,21 @@ condition = "AND"
 paths = ['''^Fixtures/Release/production-config-v1\.json$''']
 regexTarget = "line"
 regexes = ['''^\s*"WALI_SUPABASE_PUBLISHABLE_KEY_SHA256": "7502b9282656dc13e73c37a7be79201b9b4c5d65cce3498391566ab84cf926e0",?\s*$''']
+
+# Verified public production client key. Only this complete reviewed line is exempt.
+# Gitleaks 8.30.1's Line slice can include the preceding newline delimiter.
+[[allowlists]]
+description = "Reviewed public production publishable key"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^Config/Marketplace\.production\.json$''']
+regexTarget = "line"
+regexes = ['''^\n?    "WALI_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_DmzCmnDk_nKorEciLeq2ng_KiOvSkXS",$''']
+
+[[allowlists]]
+description = "Reviewed public production publishable-key checksum"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^Config/Marketplace\.production\.json$''']
+regexTarget = "line"
+regexes = ['''^\n?    "WALI_SUPABASE_PUBLISHABLE_KEY_SHA256": "4d9c2b130f7b4c46abfe86485d5e87ef3298763619bd37d8821a149cc876ee6e",$''']

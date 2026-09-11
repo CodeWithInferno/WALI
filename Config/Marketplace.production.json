@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "settings": {
+    "WALI_MARKETPLACE_ENABLED": "YES",
+    "WALI_RELEASE_MODE": "production",
+    "WALI_AUTHENTICATION_METHOD": "email_otp",
+    "WALI_SUPABASE_PROJECT_REF": "afgxvhhubqzgpijcstsv",
+    "WALI_SUPABASE_URL": "https://afgxvhhubqzgpijcstsv.supabase.co",
+    "WALI_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_DmzCmnDk_nKorEciLeq2ng_KiOvSkXS",
+    "WALI_SUPABASE_PUBLISHABLE_KEY_SHA256": "4d9c2b130f7b4c46abfe86485d5e87ef3298763619bd37d8821a149cc876ee6e",
+    "WALI_CATALOG_CDN_HOST": "afgxvhhubqzgpijcstsv.supabase.co",
+    "WALI_CATALOG_SIGNING_KEY_ID": "wali-production-primary-20260910",
+    "WALI_CATALOG_SIGNING_PUBLIC_KEY_BASE64": "bViKAfpsTe180NzJ1iR6W46uOs9a3v3cs1i0oI83qCY=",
+    "WALI_CATALOG_RECOVERY_SIGNING_KEY_ID": "wali-production-recovery-20260910",
+    "WALI_CATALOG_RECOVERY_SIGNING_PUBLIC_KEY_BASE64": "uCkW6S8V8SEMfCkuJzKYYuzuIKpHnsY6zM4w4c3KY9Y=",
+    "WALI_LEGAL_BASE_URL": "https://github.com/CodeWithInferno/WALI/blob/main/docs/legal"
+  }
+}

@@ -92,6 +92,83 @@ class SecretScanTests(unittest.TestCase):
         self.assertTrue(any(finding['RuleID'] == 'github-pat' for finding in json.loads(report)))
         self.assertNotIn(token, report + result.stdout + result.stderr)
 
+    def add_reviewed_production_manifest(self, relative_path='Config/Marketplace.production.json', overrides=None):
+        manifest = json.loads((ROOT / 'Config/Marketplace.production.json').read_text())
+        settings = manifest['settings']
+        public_key = settings['WALI_SUPABASE_PUBLISHABLE_KEY']
+        self.assertTrue(public_key.startswith('sb_publishable_'), 'fixture must use a public publishable key')
+        self.assertEqual(settings['WALI_SUPABASE_PUBLISHABLE_KEY_SHA256'],
+                         hashlib.sha256(public_key.encode()).hexdigest())
+        settings.update(overrides or {})
+        path = self.repo / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(manifest, indent=2) + '\n')
+        self.command('git', 'add', relative_path)
+        self.command('git', 'commit', '-qm', 'add reviewed public production scanner fixture')
+        return path
+
+    def assert_generic_findings(self, relative_path, count):
+        result = self.scan()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads((self.repo / '.build/security/gitleaks-history.json').read_text())
+        findings = [finding for finding in report
+                    if finding['RuleID'] == 'generic-api-key' and finding['File'] == relative_path]
+        self.assertEqual(len(findings), count)
+
+    def test_reviewed_production_public_fields_pass(self):
+        self.add_reviewed_production_manifest()
+        result = self.scan()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.repo / '.build/security/gitleaks-history.json').read_text()), [])
+
+    def test_changed_production_publishable_key_is_still_scanned(self):
+        changed_key = 'sb_publishable_' + secrets.token_urlsafe(24)
+        self.add_reviewed_production_manifest(overrides={'WALI_SUPABASE_PUBLISHABLE_KEY': changed_key})
+        self.assert_generic_findings('Config/Marketplace.production.json', 1)
+
+    def test_changed_production_publishable_checksum_is_still_scanned(self):
+        changed_checksum = hashlib.sha256(b'an unreviewed production checksum').hexdigest()
+        self.add_reviewed_production_manifest(overrides={'WALI_SUPABASE_PUBLISHABLE_KEY_SHA256': changed_checksum})
+        self.assert_generic_findings('Config/Marketplace.production.json', 1)
+
+    def test_reviewed_production_public_fields_in_another_file_are_still_scanned(self):
+        self.add_reviewed_production_manifest(relative_path='Config/Marketplace.unreviewed.json')
+        self.assert_generic_findings('Config/Marketplace.unreviewed.json', 2)
+
+    def test_reviewed_production_values_under_other_fields_are_still_scanned(self):
+        path = self.add_reviewed_production_manifest()
+        text = path.read_text().replace('WALI_SUPABASE_PUBLISHABLE_KEY"', 'UNREVIEWED_API_KEY"')
+        text = text.replace('WALI_SUPABASE_PUBLISHABLE_KEY_SHA256"', 'OTHER_API_KEY"')
+        path.write_text(text)
+        self.command('git', 'add', str(path.relative_to(self.repo)))
+        self.command('git', 'commit', '-qm', 'move public values to unreviewed field names')
+        self.assert_generic_findings('Config/Marketplace.production.json', 2)
+
+    def test_production_exceptions_require_complete_reviewed_lines(self):
+        path = self.add_reviewed_production_manifest()
+        lines = path.read_text().splitlines()
+        fields = ('"WALI_SUPABASE_PUBLISHABLE_KEY":', '"WALI_SUPABASE_PUBLISHABLE_KEY_SHA256":')
+        lines = [line + ' # extra unreviewed content' if any(field in line for field in fields)
+                 else line for line in lines]
+        path.write_text('\n'.join(lines) + '\n')
+        self.command('git', 'add', str(path.relative_to(self.repo)))
+        self.command('git', 'commit', '-qm', 'append unreviewed content to public field line')
+        self.assert_generic_findings('Config/Marketplace.production.json', 2)
+
+    def test_provider_token_in_production_manifest_is_still_scanned_and_redacted(self):
+        path = self.add_reviewed_production_manifest()
+        token = 'ghp_' + ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(36))
+        with path.open('a') as output:
+            output.write('github_token = "' + token + '"\n')
+        self.command('git', 'add', str(path.relative_to(self.repo)))
+        self.command('git', 'commit', '-qm', 'append generated provider scanner fixture token')
+        result = self.scan()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = (self.repo / '.build/security/gitleaks-history.json').read_text()
+        self.assertTrue(any(finding['RuleID'] == 'github-pat' for finding in json.loads(report)))
+        self.assertTrue(token not in report + result.stdout + result.stderr,
+                        'generated provider token must be fully redacted')
+
     def test_deleted_synthetic_token_fails_and_report_is_redacted(self):
         token, path = self.add_synthetic_token()
         self.command('git', 'rm', str(path.relative_to(self.repo)))
