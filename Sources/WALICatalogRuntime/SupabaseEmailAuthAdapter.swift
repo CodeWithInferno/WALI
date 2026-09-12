@@ -68,6 +68,7 @@ final class CatalogCheckedAuthStorage: AuthLocalStorage {
         fileprivate let epoch: UInt64
         fileprivate let accessToken: String?
         fileprivate let refreshToken: String?
+        fileprivate let responseByteLimit: Int
     }
     private struct AuthorizedWrite {
         let session: Session
@@ -162,19 +163,24 @@ final class CatalogCheckedAuthStorage: AuthLocalStorage {
                 else { throw CatalogEmailAuthError.superseded }
                 refreshToken = token
             }
-            let ticket = RequestTicket(epoch: state.epoch, accessToken: accessToken, refreshToken: refreshToken)
+            // GoTrue's enrollment SVG can exceed 256 KiB after HTTP decompression.
+            // Only an authenticated TOTP enrollment gets the larger response bound.
+            let responseByteLimit = accessToken != nil && Self.isTOTPEnrollment(request) ? 1_048_576 : 262_144
+            let ticket = RequestTicket(epoch: state.epoch, accessToken: accessToken, refreshToken: refreshToken,
+                                       responseByteLimit: responseByteLimit)
             guard try matches(ticket, state: state) else { throw CatalogEmailAuthError.superseded }
             return ticket
         }
     }
 
     func finishRequest(_ ticket: RequestTicket, data: Data, response: URLResponse) throws {
-        guard data.count <= 262_144 else { throw CatalogEmailAuthError.admissionFailed }
+        guard data.count <= ticket.responseByteLimit else { throw CatalogEmailAuthError.admissionFailed }
         try state.withLock { state in
             guard !state.blocked, try matches(ticket, state: state) else { throw CatalogEmailAuthError.superseded }
             guard let response = response as? HTTPURLResponse else { throw CatalogEmailAuthError.networkUnavailable }
             if (200..<300).contains(response.statusCode) {
-                if let session = try? AuthClient.Configuration.jsonDecoder.decode(Session.self, from: data) {
+                if data.count <= 262_144,
+                   let session = try? AuthClient.Configuration.jsonDecoder.decode(Session.self, from: data) {
                     if ticket.accessToken != nil || ticket.refreshToken != nil {
                         let current = try underlying.retrieve(key: Self.sessionKey)
                             .flatMap { try JSONDecoder().decode(Session.self, from: $0) }
@@ -194,6 +200,20 @@ final class CatalogCheckedAuthStorage: AuthLocalStorage {
                 }
             }
         }
+    }
+
+    private static func isTOTPEnrollment(_ request: URLRequest) -> Bool {
+        guard request.httpMethod == "POST",
+              request.url?.path == "/auth/v1/factors",
+              request.url?.query == nil, request.url?.fragment == nil,
+              let data = request.httpBody, data.count <= 16_384,
+              let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              body["factor_type"] as? String == "totp",
+              body.keys.allSatisfy({ ["factor_type", "issuer", "friendly_name"].contains($0) }),
+              body["issuer"].map({ $0 is String }) ?? true,
+              body["friendly_name"].map({ $0 is String }) ?? true
+        else { return false }
+        return true
     }
 
     func beginReplacement() throws {

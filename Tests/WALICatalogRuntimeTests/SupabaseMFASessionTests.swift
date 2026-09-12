@@ -4,6 +4,82 @@ import XCTest
 @testable import WALICatalogRuntime
 
 final class SupabaseMFASessionTests: XCTestCase {
+    func testEnrollmentAcceptsProductionSizedQRCodeThroughCheckedSDKTransport() async throws {
+        let fixture = try MFASDKFixture()
+        defer { Task { await fixture.auth.stopAutoRefresh() } }
+        await fixture.server.setEnrollmentRectangleCount(3_721)
+        let originalSession = fixture.auth.currentSession
+
+        let enrollment = try await fixture.store.beginTOTPEnrollment()
+
+        XCTAssertEqual(enrollment.subjectID, MFASDKFixture.subject.uuidString.lowercased())
+        XCTAssertEqual(enrollment.secret.count, 32)
+        XCTAssertEqual(enrollment.uri.host, "totp")
+        XCTAssertEqual(fixture.auth.currentSession, originalSession)
+        let responseBytes = await fixture.server.enrollmentResponseByteCount
+        XCTAssertGreaterThan(responseBytes, 262_144)
+        XCTAssertLessThan(responseBytes, 1_048_576)
+    }
+
+    func testEnrollmentRejectsQRCodeResponseOverOneMiB() async throws {
+        let fixture = try MFASDKFixture()
+        defer { Task { await fixture.auth.stopAutoRefresh() } }
+        await fixture.server.setEnrollmentRectangleCount(16_000)
+        let originalSession = fixture.auth.currentSession
+
+        do {
+            _ = try await fixture.store.beginTOTPEnrollment()
+            XCTFail("An oversized enrollment response passed checked transport")
+        } catch {
+            XCTAssertEqual((error as? CatalogRemoteError)?.code, "mfa_enrollment_failed")
+        }
+
+        let responseBytes = await fixture.server.enrollmentResponseByteCount
+        XCTAssertGreaterThan(responseBytes, 1_048_576)
+        XCTAssertEqual(fixture.auth.currentSession, originalSession)
+    }
+
+    func testLargeEnrollmentResponseAllowanceDoesNotApplyToOtherRequests() throws {
+        let original = try MFASDKFixture.session(factors: [], aal2: false)
+        let base = CatalogMemoryAuthStorage()
+        let originalData = try JSONEncoder().encode(original)
+        try base.store(key: CatalogCheckedAuthStorage.sessionKey, value: originalData)
+        let storage = CatalogCheckedAuthStorage(underlying: base)
+        let publicKey = "sb_publishable_mfa_fixture"
+        let data = try MFASDKFixture.enrollmentResponse(rectangleCount: 3_721)
+        XCTAssertGreaterThan(data.count, 262_144)
+        let validBody = Data(#"{"factor_type":"totp","issuer":"WALI","friendly_name":"WALI account security"}"#.utf8)
+        let cases: [(path: String, method: String, body: Data?, bearer: String?)] = [
+            ("/auth/v1/user", "POST", validBody, original.accessToken),
+            ("/auth/v1/token", "POST", validBody, original.accessToken),
+            ("/auth/v1/factors/fixture/verify", "POST", validBody, original.accessToken),
+            ("/auth/v1/factors", "GET", validBody, original.accessToken),
+            ("/auth/v1/factors", "DELETE", validBody, original.accessToken),
+            ("/auth/v1/factors", "POST", Data(#"{"factor_type":"phone"}"#.utf8), original.accessToken),
+            ("/auth/v1/factors", "POST", Data(#"{"factor_type":"totp","issuer":false}"#.utf8), original.accessToken),
+            ("/auth/v1/factors", "POST", Data(#"{"factor_type":"totp","unexpected":true}"#.utf8), original.accessToken),
+            ("/auth/v1/factors", "POST", Data("invalid-json".utf8), original.accessToken),
+            ("/auth/v1/factors", "POST", nil, original.accessToken),
+            ("/auth/v1/factors", "POST", validBody, nil),
+            ("/auth/v1/factors", "POST", validBody, publicKey)
+        ]
+        for value in cases {
+            var request = URLRequest(url: URL(string: "https://mfa-fixture.example" + value.path)!)
+            request.httpMethod = value.method
+            request.httpBody = value.body
+            if let bearer = value.bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }
+            let ticket = try storage.beginRequest(request, publicKey: publicKey)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            XCTAssertThrowsError(try storage.finishRequest(ticket, data: data, response: response), "\(value.method) \(value.path)") {
+                XCTAssertEqual($0 as? CatalogEmailAuthError, .admissionFailed)
+            }
+        }
+        XCTAssertEqual(try storage.retrieve(key: CatalogCheckedAuthStorage.sessionKey), originalData)
+        XCTAssertThrowsError(try storage.store(key: CatalogCheckedAuthStorage.sessionKey, value: data)) {
+            XCTAssertEqual($0 as? CatalogEmailAuthError, .admissionFailed)
+        }
+    }
+
     func testNewEnrollmentVerifiesImmediatelyDespiteEmptySDKFactorCache() async throws {
         let fixture = try MFASDKFixture()
         defer { Task { await fixture.auth.stopAutoRefresh() } }
@@ -118,6 +194,22 @@ private struct MFASDKFixture: Sendable {
              updatedAt: Date(timeIntervalSince1970: 1_000_000), factors: factors)
     }
 
+    static func enrollmentResponse(
+        factorID: String = "b25a41c6-0c01-4da3-9aaf-f6732faeb529", rectangleCount: Int
+    ) throws -> Data {
+        // GoTrue's QR.H SVG has 61 x 61 rectangles for a typical email enrollment.
+        // Generate similarly sized valid SVG, not a checked-in blob or a real secret.
+        let rectangle = #"<rect x="0" y="0" width="3" height="3" style="fill:rgb(0,0,0);stroke:none" />"# + "\n"
+        let svg = #"<svg xmlns="http://www.w3.org/2000/svg" width="183" height="183">"#
+            + String(repeating: rectangle, count: rectangleCount) + "</svg>"
+        let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+        return try JSONSerialization.data(withJSONObject: [
+            "id": factorID, "type": "totp", "friendly_name": "WALI account security",
+            "totp": ["qr_code": rectangleCount == 0 ? "fixture" : svg, "secret": secret,
+                     "uri": "otpauth://totp/WALI:dummy@examples.io?algorithm=SHA1&digits=6&issuer=WALI&period=30&secret=\(secret)"]
+        ])
+    }
+
     static func session(factors: [Factor], aal2: Bool) throws -> Session {
         func segment(_ value: [String: Any]) throws -> String {
             try JSONSerialization.data(withJSONObject: value).base64EncodedString()
@@ -144,10 +236,13 @@ private actor MFASDKServer {
     }
     private var factors: [ServerFactor] = []
     private var differentSubject = false
+    private var enrollmentRectangleCount = 0
+    private(set) var enrollmentResponseByteCount = 0
     private(set) var requests: [String] = []
     var factorIDs: [String] { factors.map(\.id) }
 
     func returnDifferentSubject() { differentSubject = true }
+    func setEnrollmentRectangleCount(_ value: Int) { enrollmentRectangleCount = value }
     func markVerified(_ id: String) {
         if let index = factors.firstIndex(where: { $0.id == id }) { factors[index].verified = true }
     }
@@ -168,11 +263,8 @@ private actor MFASDKServer {
         } else if method == "POST", url.path == "/auth/v1/factors" {
             let id = UUID().uuidString.lowercased()
             factors.append(ServerFactor(id: id))
-            data = try JSONSerialization.data(withJSONObject: [
-                "id": id, "type": "totp",
-                "totp": ["qr_code": "fixture", "secret": "JBSWY3DPEHPK3PXP",
-                         "uri": "otpauth://totp/WALI:fixture?secret=JBSWY3DPEHPK3PXP&issuer=WALI"]
-            ])
+            data = try MFASDKFixture.enrollmentResponse(factorID: id, rectangleCount: enrollmentRectangleCount)
+            enrollmentResponseByteCount = data.count
         } else {
             let parts = url.path.split(separator: "/")
             guard parts.count >= 4, parts[0] == "auth", parts[1] == "v1", parts[2] == "factors",
