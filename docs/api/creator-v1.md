@@ -4,9 +4,13 @@ Status: accepted contract under ADRs 0011, 0014, and 0015. Common envelopes,
 IDs, text normalization, request bounds, idempotency, revision handling, and
 stable errors are defined by `catalog-v1.md`.
 
-Implementation status: server upload, submission, processing, and moderation
-primitives are implemented and tested locally, but no production creator
-gateway is composed into the app and public creator uploads remain disabled.
+Implementation status: the native creator gateway and server upload,
+submission, processing, and moderation primitives are composed. Creator
+metadata requires a configured current Creator Terms version. Missing service
+configuration is an unavailable creator service, not a failed sign-in; the
+native app preserves this distinction from signed-out, loading, and request
+failure states. Public creator uploads remain gated by the activation
+requirements in `docs/legal/README.md` and production processing readiness.
 Only `original` and `public_domain` rights bases without proof objects are
 accepted. The proof workflow below is reserved and unavailable.
 

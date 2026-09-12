@@ -177,6 +177,27 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         coordinator.stop()
     }
 
+    func testHomeWithOnlyEmptySectionsShowsTheEmptyCatalog() async throws {
+        let home = CatalogHome(sections: [
+            section(id: "trending", title: "Trending"),
+            section(id: "new", title: "New"),
+        ])
+        let coordinator = MarketplaceCoordinator(
+            gateway: ScriptedCatalogGateway(homeSteps: [.value(home, delay: .zero)])
+        )
+        defer { coordinator.stop() }
+
+        coordinator.loadHome()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while coordinator.model.homeState == .loading, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        XCTAssertEqual(coordinator.model.homeState, .empty)
+        XCTAssertTrue(coordinator.model.homeSections.isEmpty)
+    }
+
     func testInjectedCatalogWithoutGatewayRemainsEmpty() {
         let coordinator = MarketplaceCoordinator()
 
@@ -187,8 +208,8 @@ final class MarketplaceCoordinatorTests: XCTestCase {
     }
 
     func testNewerHomeRequestWinsWhenAnOlderRequestFinishesLater() async throws {
-        let oldHome = CatalogHome(sections: [section(id: "old", title: "Old")])
-        let newHome = CatalogHome(sections: [section(id: "new", title: "New")])
+        let oldHome = CatalogHome(sections: [section(id: "old", title: "Old", items: [Self.summary(id: Self.wallpaperID, title: "Wallpaper")])])
+        let newHome = CatalogHome(sections: [section(id: "new", title: "New", items: [Self.summary(id: Self.wallpaperID, title: "Wallpaper")])])
         let gateway = ScriptedCatalogGateway(homeSteps: [
             .value(oldHome, delay: .milliseconds(250)),
             .value(newHome, delay: .milliseconds(5)),
@@ -201,13 +222,14 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(320))
 
         XCTAssertEqual(coordinator.model.homeState, .ready)
-        XCTAssertEqual(coordinator.model.homeSections.map(\.id), ["new"])
+        XCTAssertEqual(coordinator.model.homeSections.map(\.id), [WALIDiscoverLayout.heroSectionID, "new"])
     }
 
     func testDiscoverHomeCarouselCollectsUniqueItemsFromEverySection() async throws {
         let rick = Self.summary(id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", title: "Rick")
         let aurora = Self.summary(id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", title: "Aurora")
         let home = CatalogHome(sections: [
+            section(id: "empty", title: "Empty"),
             CatalogHomeSection(
                 id: "editorial",
                 title: "Picks",
@@ -456,6 +478,43 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         }
     }
 
+    func testCreatorUnavailableRequestCanRetryWithoutRequestingSignInOrAcceptingTerms() async {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let creator = ScriptedCreatorAuthorizationGateway(
+            userID: userID, termsVersion: "", authorizationFailuresRemaining: 1
+        )
+        let coordinator = MarketplaceCoordinator(creatorAuthorizationGateway: creator, authStore: auth)
+        defer { coordinator.stop() }
+        XCTAssertEqual(coordinator.creatorStudioUnavailableReason, .signedOut)
+
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        let failed = await waitForCreatorState(.failed, in: coordinator)
+        XCTAssertTrue(failed)
+        XCTAssertEqual(coordinator.model.accountState, .signedIn(userID: userID))
+        XCTAssertEqual(coordinator.creatorStudioUnavailableReason, .failed)
+
+        coordinator.refreshAccountPrivacy()
+        XCTAssertEqual(coordinator.creatorStudioUnavailableReason, .loading)
+        let ready = await waitForCreatorState(.ready, in: coordinator)
+        XCTAssertTrue(ready)
+        XCTAssertEqual(coordinator.model.accountState, .signedIn(userID: userID))
+        XCTAssertEqual(coordinator.creatorStudioUnavailableReason, .notConfigured)
+        XCTAssertNil(coordinator.creatorContext.metadata)
+        let authorizationRequests = await creator.authorizationRequests
+        let metadataRequests = await creator.metadataRequestCount()
+        let acceptanceRequests = await creator.acceptanceRequestCount()
+        XCTAssertEqual(authorizationRequests, 2)
+        XCTAssertEqual(metadataRequests, 0)
+        XCTAssertEqual(acceptanceRequests, 0)
+
+        await auth.emit(nil)
+        let cleared = await waitForCreatorState(.idle, in: coordinator)
+        XCTAssertTrue(cleared)
+        XCTAssertEqual(coordinator.creatorStudioUnavailableReason, .signedOut)
+    }
+
     func testUnavailableCreatorTermsPermitStaffMFAWithoutCreatorMetadataOrDeletion() async throws {
         let userID = "11111111-1111-4111-8111-111111111111"
         let auth = ScriptedAuthStore()
@@ -522,6 +581,7 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
         let ready = await waitForCreatorState(.ready, in: coordinator)
         XCTAssertTrue(ready)
+        XCTAssertEqual(coordinator.creatorStudioUnavailableReason, .notConfigured)
         XCTAssertNil(coordinator.creatorContext.moderationModel?.authorization.moderatorGrantRevision)
         XCTAssertFalse(coordinator.canShowModeratorTools)
         XCTAssertFalse(coordinator.creatorContext.moderationModel?.authorization.canAccessCreatorStudio() ?? true)
@@ -710,8 +770,12 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.creatorContext.state, .failed)
     }
 
-    private func section(id: String, title: String) -> CatalogHomeSection {
-        CatalogHomeSection(id: id, title: title, kind: .editorial, cursor: nil, items: [])
+    private func section(
+        id: String,
+        title: String,
+        items: [CatalogWallpaperSummary] = []
+    ) -> CatalogHomeSection {
+        CatalogHomeSection(id: id, title: title, kind: .editorial, cursor: nil, items: items)
     }
 
     func testEmailAuthenticationResumesFavoriteAndSavedOnlyAfterAdmission() async {
@@ -1145,6 +1209,8 @@ private actor ScriptedAccountPrivacyGateway: AccountPrivacyGateway {
 }
 
 private actor ScriptedCreatorAuthorizationGateway: CreatorAuthorizationGateway {
+    private(set) var authorizationRequests = 0
+    private var authorizationFailuresRemaining: Int
     private var authenticatedSubjectID: String
     private let termsVersion: String
     private let metadataVersion: String
@@ -1164,11 +1230,13 @@ private actor ScriptedCreatorAuthorizationGateway: CreatorAuthorizationGateway {
         metadataVersion: String? = nil,
         moderatorGrantRevision: UInt64? = nil,
         mfaStore: ScriptedMFAStore? = nil,
+        authorizationFailuresRemaining: Int = 0,
         acceptanceDelay: Duration = .zero,
         ignoresAcceptanceCancellation: Bool = false,
         confirmsAcceptance: Bool = true
     ) {
         authenticatedSubjectID = userID
+        self.authorizationFailuresRemaining = authorizationFailuresRemaining
         self.termsVersion = termsVersion
         self.metadataVersion = metadataVersion ?? termsVersion
         self.moderatorGrantRevision = moderatorGrantRevision
@@ -1179,6 +1247,11 @@ private actor ScriptedCreatorAuthorizationGateway: CreatorAuthorizationGateway {
     }
 
     func authorizationSnapshot() async throws -> CreatorAuthorizationSnapshot {
+        authorizationRequests += 1
+        if authorizationFailuresRemaining > 0 {
+            authorizationFailuresRemaining -= 1
+            throw CatalogRemoteError(code: "temporarily_unavailable", safeMessage: nil, retryable: true)
+        }
         let value = snapshot(subjectID: authenticatedSubjectID, acceptedVersion: accepted)
         if let mfaStore {
             let status = try await mfaStore.mfaStatus()

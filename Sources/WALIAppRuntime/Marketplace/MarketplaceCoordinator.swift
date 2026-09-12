@@ -75,6 +75,13 @@ public enum MarketplaceCreatorAccessState: Sendable, Equatable {
     case failed
 }
 
+enum MarketplaceCreatorUnavailableReason: Sendable, Equatable {
+    case signedOut
+    case loading
+    case failed
+    case notConfigured
+}
+
 @MainActor
 @Observable
 public final class MarketplaceCreatorContext {
@@ -206,6 +213,19 @@ public final class MarketplaceCoordinator {
     public var canShowCreatorTools: Bool {
         guard isMarketplaceAvailable, case .signedIn = model.accountState else { return false }
         return true
+    }
+
+    /// Explains why the route cannot present Studio without its required metadata and adapters.
+    var creatorStudioUnavailableReason: MarketplaceCreatorUnavailableReason {
+        guard case .signedIn = model.accountState else { return .signedOut }
+        switch creatorContext.state {
+        case .loading, .acceptingTerms:
+            return .loading
+        case .failed:
+            return .failed
+        case .idle, .ready:
+            return .notConfigured
+        }
     }
 
     public var canShowModeratorTools: Bool {
@@ -478,7 +498,7 @@ public final class MarketplaceCoordinator {
                 guard let self, generation == self.homeGeneration else { return }
                 self.homeMediaLease = CatalogMediaLease()
                 self.model.homeSections = self.presentationSections(home.sections)
-                self.model.homeState = home.sections.isEmpty ? .empty : .ready
+                self.model.homeState = self.model.homeSections.isEmpty ? .empty : .ready
                 Self.logger.info("Discover metadata ready; durationMs=\(Int(Date().timeIntervalSince(started) * 1_000), privacy: .public)")
                 await self.hydrateHome(home.sections, generation: generation)
             } catch is CancellationError {
@@ -2140,7 +2160,7 @@ public final class MarketplaceCoordinator {
                 cards: heroSummaries.map { Self.card($0) }
             ))
         }
-        for section in sections {
+        for section in sections where !section.items.isEmpty {
             result.append(WALICatalogSectionPresentation(
                 id: section.id,
                 title: section.title,

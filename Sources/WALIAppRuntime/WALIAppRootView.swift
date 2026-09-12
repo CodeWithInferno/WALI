@@ -373,7 +373,8 @@ public struct WALIAppRootView: View {
                 onCancelDeletionMFA: marketplace.cancelAccountDeletionMFA
             )
         case .creatorStudio:
-            if let studioModel = marketplace.creatorContext.studioModel,
+            if case .signedIn = marketplace.model.accountState,
+               let studioModel = marketplace.creatorContext.studioModel,
                let upload = marketplace.creatorContext.uploadCoordinator,
                let metadata = marketplace.creatorContext.metadata,
                let gateway = marketplace.creatorGateway {
@@ -402,11 +403,7 @@ public struct WALIAppRootView: View {
                     }
                 }
             } else {
-                ContentUnavailableView(
-                    "Creator Studio unavailable",
-                    systemImage: "person.crop.rectangle.stack",
-                    description: Text("Sign in and refresh your account to load creator access.")
-                )
+                creatorStudioUnavailable
             }
         case .reviewQueue:
             if let moderationModel = marketplace.creatorContext.moderationModel,
@@ -435,6 +432,39 @@ public struct WALIAppRootView: View {
                 }
             } else {
                 protectedModeratorUnavailable
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var creatorStudioUnavailable: some View {
+        switch marketplace.creatorStudioUnavailableReason {
+        case .signedOut:
+            ContentUnavailableView {
+                Label("Sign in to Creator Studio", systemImage: "person.crop.rectangle.stack")
+            } description: {
+                Text("Use your WALI account to access creator publishing.")
+            } actions: {
+                Button("Sign In", action: marketplace.signIn)
+            }
+        case .loading:
+            ProgressView("Loading Creator Studio…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failed:
+            ContentUnavailableView {
+                Label("Couldn’t Load Creator Studio", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text("Creator access couldn’t be loaded. Try again.")
+            } actions: {
+                Button("Try Again", action: marketplace.refreshAccountPrivacy)
+            }
+        case .notConfigured:
+            ContentUnavailableView {
+                Label("Creator Studio Isn’t Available Yet", systemImage: "person.crop.rectangle.stack")
+            } description: {
+                Text("You’re signed in, but creator publishing hasn’t been enabled.")
+            } actions: {
+                Button("Check Again", action: marketplace.refreshAccountPrivacy)
             }
         }
     }
