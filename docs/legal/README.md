@@ -30,3 +30,9 @@ and remaining native/legal gates are recorded in the
 
 These documents state intended public-beta policy, not deployment status.
 Account export is verified in staging, including restart recovery and file verification. Deletion is implemented but its full native journey remains a release gate. Rights-proof handling, production support intake, and backup/restore remain gated; consult the release evidence ledger for the current candidate.
+
+The separate [licensed catalog notice](wali-licensed-catalog.md) records the
+scope presented for the owner-authorized initial catalog. Staff use the Catalog
+License Attestation in [ADR0023](../adr/0023-staff-curated-licensed-catalog.md).
+Neither document enables public Creator enrollment or marks the drafts above
+as approved.

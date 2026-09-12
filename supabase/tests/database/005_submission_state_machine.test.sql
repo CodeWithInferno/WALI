@@ -64,6 +64,10 @@ insert into wali.submissions (
   'ready_for_submission', 1, 1
 );
 
+-- The synthetic declaration belongs to a subject who accepted its declared document.
+insert into wali.terms_acceptances (user_id, document_kind, document_version, request_id)
+values ('20000000-0000-0000-0000-000000000001', 'creator_terms', '2026-09-01', gen_random_uuid());
+
 insert into wali.rights_declarations (
   submission_id, basis, rights_holder, license_id, attested_at,
   creator_terms_version, review_status, reviewed_by, reviewed_at

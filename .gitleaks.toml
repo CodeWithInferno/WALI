@@ -30,3 +30,13 @@ condition = "AND"
 paths = ['''^Config/Marketplace\.production\.json$''']
 regexTarget = "line"
 regexes = ['''^\n?    "WALI_SUPABASE_PUBLISHABLE_KEY_SHA256": "4d9c2b130f7b4c46abfe86485d5e87ef3298763619bd37d8821a149cc876ee6e",$''']
+
+# Public deterministic Base32 test vector used only by the synthetic MFA server.
+# Scope the exception to this exact complete line, test file and detector rule.
+[[allowlists]]
+description = "Known deterministic MFA enrollment test vector"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^Tests/WALICatalogRuntimeTests/SupabaseMFASessionTests\.swift$''']
+regexTarget = "line"
+regexes = ['''^\n?        let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"$''']

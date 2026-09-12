@@ -94,7 +94,7 @@ class MarketplaceContractChecker
     wali_edge_prepare_account_identity_deletion_v1
     wali_edge_finalize_account_identity_deletion_v1
     wali_edge_accept_creator_terms_v1 wali_edge_save_submission_draft_v1
-    wali_edge_withdraw_submission_v1
+    wali_edge_withdraw_submission_v1 wali_edge_curated_catalog_command_v1
   ]).freeze
   MANIFEST_ROOT_KEYS = %w[
     schema key_id wallpaper_id release_id edition issued_at artifacts

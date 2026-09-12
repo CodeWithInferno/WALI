@@ -563,6 +563,11 @@ surfaces:
       maximum_page_items: 50
       exposed_table_policy: none
 
+  # ADR0023 adds the separate bounded curated_catalog.v1 operator endpoint.
+  # Its contract is docs/api/curated-catalog-v1.md; it does not change creator.v1,
+  # signed metadata, native install formats, or public Creator activation.
+  # Schema migration 202609120001 adds immutable admission and attestation kind
+  # while preserving old creator defaults and additive rollback read behavior.
   - id: creator_public_api
     kind: public_api
     owner_role: catalog_maintainer

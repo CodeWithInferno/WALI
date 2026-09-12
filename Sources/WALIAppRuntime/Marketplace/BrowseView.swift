@@ -156,7 +156,7 @@ struct BrowseBentoTile: View {
                 showsPreview = false
             }
         }
-        .accessibilityLabel("\(card.title), by \(card.creator), \(card.verifiedInstallCount) verified installs")
+        .accessibilityLabel("\(card.title), published by \(card.creator), \(card.verifiedInstallCount) verified installs")
     }
 
     private var hoverCaption: some View {
@@ -172,7 +172,7 @@ struct BrowseBentoTile: View {
                 Text(card.title)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                Text(card.creator)
+                Text("Published by \(card.creator)")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.86))
                     .lineLimit(1)
@@ -253,7 +253,7 @@ struct CatalogCardView: View {
                     Text(card.title)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
-                    Text("\(card.creator)  ·  \(card.category)")
+                    Text("Published by \(card.creator)  ·  \(card.category)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -279,7 +279,7 @@ struct CatalogCardView: View {
                 showsPreview = false
             }
         }
-        .accessibilityLabel("\(card.title), by \(card.creator), \(card.verifiedInstallCount) verified installs")
+        .accessibilityLabel("\(card.title), published by \(card.creator), \(card.verifiedInstallCount) verified installs")
     }
 
     @ViewBuilder
