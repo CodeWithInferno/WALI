@@ -155,7 +155,7 @@ struct MarketplaceWallpaperDetailView: View {
                             .foregroundStyle(.white.opacity(0.88))
                             .lineLimit(WALIMarketplaceDetailLayout.descriptionLineLimit)
                     }
-                    Text("\(detail.dimensions)  ·  \(detail.duration)  ·  by \(detail.creator)")
+                    Text("\(detail.dimensions)  ·  \(detail.duration)  ·  Published by \(detail.creator)")
                         .font(.callout.weight(.medium))
                         .foregroundStyle(.white.opacity(0.72))
                         .lineLimit(1)

@@ -365,7 +365,7 @@ private struct DiscoverHeroBand: View {
                         .buttonStyle(.plain)
                         .containerRelativeFrame(.horizontal)
                         .id(page.id)
-                        .accessibilityLabel("\(card.title), by \(card.creator)")
+                        .accessibilityLabel("\(card.title), published by \(card.creator)")
                     }
                 }
             }

@@ -96,6 +96,11 @@ Shared `WallpaperSummaryV1` fields:
 | `favorite_count` | nonnegative integer, server aggregate |
 | `save_count` | nonnegative integer, server aggregate |
 
+The `creator` identity is the accountable publishing account. Native labels say
+“Published by”; original authorship, rights holder, and required attribution
+remain separate listing fields. Staff-curated licensed admission is described
+in [its separate API contract](curated-catalog-v1.md).
+
 `CreatorSummaryV1` contains `id`, 3...32-character `handle`, 1...80-character
 `display_name`, optional approved HTTPS `avatar_url`, and
 `verification_status`. `TaxonomySummaryV1` contains UUID `id`, 1...80-character

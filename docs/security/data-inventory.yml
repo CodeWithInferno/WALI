@@ -18,6 +18,16 @@ approval_reference: project-owner AFK marketplace implementation directive 2026-
 # Outside-team delivery and API-only auth results, with native checks still pending,
 # are recorded in docs/release/2026-09-10-production-auth-status.md.
 
+# ADR0023: staff-curated sessions retain their actual uploading subject and
+# immutable admission_kind. Rights declarations pair their historic version
+# column with attestation_document_kind; catalog acceptance is never Creator
+# Terms acceptance. Curated owner reads/writes require admin AAL2, and public
+# creator projections exclude these private submissions. Existing retention,
+# account export, deletion, legal hold, and independent review continue to apply.
+# runtime_configuration adds a nullable catalog_license_attestation_version;
+# creator_terms_version may remain null without disabling public catalog reads.
+# No new private document store, tracking, or provider is introduced.
+
 defaults:
   encryption_in_transit: required
   encryption_at_rest: required
@@ -60,8 +70,8 @@ stores:
     backup: encrypted_database_pitr
   - id: wali.creator_profiles
     category: creator_profile
-    purpose: public_creator_identity
-    subjects: [creator]
+    purpose: public_creator_or_staff_publisher_identity
+    subjects: [creator, admin]
     read_roles: [public_safe_projection, creator_owner, moderator, admin]
     write_roles: [creator_owner_safe_fields, moderator_verification]
     classification: mixed_public_confidential
@@ -70,7 +80,7 @@ stores:
     backup: encrypted_database_pitr
   - id: wali.terms_acceptances
     category: legal_acceptance
-    purpose: prove_versioned_terms_acceptance
+    purpose: prove_versioned_terms_or_catalog_attestation_acceptance
     subjects: [account_holder]
     read_roles: [account_owner_status, admin, legal_operator]
     write_roles: [acceptance_service]
@@ -209,9 +219,9 @@ stores:
     deletion: remove_from_future_revision
     backup: encrypted_database_pitr
   - id: wali.upload_sessions
-    category: private_creator_upload
-    purpose: resumable_upload_authorization_and_binding
-    subjects: [creator]
+    category: private_catalog_upload
+    purpose: resumable_upload_authorization_and_immutable_admission_binding
+    subjects: [creator, admin]
     read_roles: [creator_owner_safe_projection, worker, service]
     write_roles: [creator_scoped_upload, upload_service]
     classification: restricted
@@ -580,7 +590,7 @@ stores:
     backup: encrypted_database_pitr
   - id: wali.runtime_configuration
     category: public_runtime_configuration
-    purpose: bind_cdn_terms_and_media_policy_revisions
+    purpose: bind_cdn_separate_admission_documents_and_media_policy_revisions
     subjects: []
     read_roles: [public_safe_projection, service]
     write_roles: [deployment_operator]

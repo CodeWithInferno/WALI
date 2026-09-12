@@ -102,6 +102,8 @@ verify_jwt = false
 verify_jwt = false
 [functions.create-upload]
 verify_jwt = false
+[functions.curated-catalog-command]
+verify_jwt = false
 [functions.creator-command]
 verify_jwt = false
 [functions.moderate-submission]
