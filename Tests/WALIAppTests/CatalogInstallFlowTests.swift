@@ -80,10 +80,15 @@ final class CatalogInstallFlowTests: XCTestCase {
         )
         coordinator.model.accountState = .signedIn(userID: "test-user")
         coordinator.loadDetail(wallpaperID: Self.wallpaperID)
-        try await Task.sleep(for: .milliseconds(30))
+        guard try await waitForState("selected detail", coordinator: coordinator, events: events, until: {
+            coordinator.model.detailState == .ready && coordinator.model.selectedDetail?.id == Self.wallpaperID
+        }) else { return }
 
         coordinator.installSelectedWallpaper()
-        try await Task.sleep(for: .milliseconds(80))
+        guard try await waitForState("completed install and metric", coordinator: coordinator, events: events, until: {
+            let recordedEvents = await events.values
+            return coordinator.model.catalogInstall?.phase == .completed && recordedEvents.contains("metric")
+        }) else { return }
 
         XCTAssertEqual(received?.wallpaperID, Self.wallpaperID)
         XCTAssertEqual(received?.releaseID, Self.releaseID)
@@ -91,6 +96,31 @@ final class CatalogInstallFlowTests: XCTestCase {
         XCTAssertEqual(coordinator.model.actionState, .succeeded(message: "Added to Library"))
         let recordedEvents = await events.values
         XCTAssertEqual(recordedEvents, ["security", "agent", "metric"])
+    }
+
+    private func waitForState(
+        _ description: String,
+        coordinator: MarketplaceCoordinator,
+        events: CatalogInstallEvents,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        until predicate: @MainActor () async -> Bool
+    ) async throws -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while clock.now < deadline {
+            if await predicate() { return true }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let recordedEvents = await events.values
+        XCTFail(
+            "Timed out waiting for \(description): detail=\(coordinator.model.detailState), "
+                + "install=\(String(describing: coordinator.model.catalogInstall?.phase)), "
+                + "action=\(coordinator.model.actionState), events=\(recordedEvents)",
+            file: file,
+            line: line
+        )
+        return false
     }
 
     private static let wallpaperID = "11111111-1111-4111-8111-111111111111"
