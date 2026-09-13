@@ -449,6 +449,7 @@ Deno.test("admin deletion executor sends the provider JSON soft-delete option be
           });
         }
         return Response.json({
+          id: userID,
           deleted_at: providerSoftDeleted ? "2026-09-01T00:00:00Z" : null,
         });
       },

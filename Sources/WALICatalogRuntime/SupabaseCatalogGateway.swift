@@ -5,6 +5,7 @@ import WALICatalog
 
 public actor SupabaseCatalogGateway:
     CatalogGateway,
+    CreatorBlockingGateway,
     CatalogReportGateway,
     AccountPrivacyGateway,
     CreatorStudioGateway,
@@ -17,6 +18,7 @@ public actor SupabaseCatalogGateway:
     private let mapper: CatalogMapper
     private let remoteURLPolicy: CatalogRemoteURLPolicy
     private let accountExportDownloader: AccountExportDownloader
+    private nonisolated let deletionReceiptStore: AccountDeletionReceiptStore?
     public init(environment: CatalogEnvironment) throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15
@@ -29,6 +31,7 @@ public actor SupabaseCatalogGateway:
             bundleIdentifier: Bundle.main.bundleIdentifier,
             supabaseURL: environment.supabaseURL
         )
+        deletionReceiptStore = try AccountDeletionReceiptStore(environment: environment, bundleIdentifier: Bundle.main.bundleIdentifier ?? "")
         let authStorage = CatalogCheckedAuthStorage(underlying: CatalogKeychainAuthStorage(service: keychainService))
         let auth = SupabaseSharedAuth.makeClient(environment: environment, storage: authStorage) {
             try await session.data(for: $0)
@@ -52,6 +55,7 @@ public actor SupabaseCatalogGateway:
     /// Deterministic adapter composition uses the same API client and mapping path without
     /// opening Keychain or creating a network-backed AuthClient in tests.
     init(environment: CatalogEnvironment, authSessionStore: AuthSessionStore, session: URLSession) throws {
+        deletionReceiptStore = nil
         self.authSessionStore = authSessionStore
         client = SupabaseSharedAuth.makeDataClient(environment: environment, authSessionStore: authSessionStore, session: session)
         let policy = try CatalogRemoteURLPolicy(supabaseURL: environment.supabaseURL, approvedCDNHosts: environment.approvedCDNHosts)
@@ -60,8 +64,51 @@ public actor SupabaseCatalogGateway:
         accountExportDownloader = AccountExportDownloader(remoteURLPolicy: policy)
     }
 
+    public nonisolated func makeAccountDeletionReceiptStore() -> AccountDeletionReceiptStore? { deletionReceiptStore }
+
     public nonisolated func makeAuthSessionStore() -> AuthSessionStore {
         authSessionStore
+    }
+
+    public func creatorBlocks(cursor: String?, selectedCreatorID: String?) async throws -> CreatorBlockPage {
+        if let selectedCreatorID { try validateUUID(selectedCreatorID) }
+        if let cursor, cursor.utf8.count > 1024 { throw CatalogRequestError.invalidRequest }
+        let parameters = CreatorBlockListParameters(cursor: cursor, selectedCreatorID: selectedCreatorID)
+        return try await safelyReading {
+            try await client.rpc("my_creator_blocks_v1", params: parameters).execute().value
+        }
+    }
+
+    public func setCreatorBlock(creatorID: String, desired: Bool, expectedRevision: UInt64, idempotencyKey: String) async throws -> CreatorBlockResult {
+        try validateUUID(creatorID); try validateRevision(expectedRevision); try validateIdempotencyKey(idempotencyKey)
+        do {
+            return try await safely {
+                try await client.rpc("set_creator_block_v1", params: CreatorBlockMutationParameters(
+                    creatorID: creatorID, desired: desired, expectedRevision: expectedRevision, idempotencyKey: idempotencyKey)).execute().value
+            }
+        } catch let error as CatalogRemoteError where error.code == "block_limit_reached" { throw CreatorBlockingError.limitReached }
+        catch let error as CatalogRemoteError where ["revision_mismatch", "stale_revision"].contains(error.code) { throw CreatorBlockingError.revisionChanged }
+    }
+
+    public func hiddenCreatorInteractions(cursor: String?) async throws -> CreatorHiddenInteractionPage {
+        if let cursor, cursor.utf8.count > 1024 { throw CatalogRequestError.invalidRequest }
+        return try await safelyReading {
+            try await client.rpc("my_hidden_interactions_v1", params: CreatorHiddenPageParameters(cursor: cursor)).execute().value
+        }
+    }
+
+    public func removeHiddenCreatorInteraction(_ value: CreatorHiddenInteraction, idempotencyKey: String) async throws {
+        try validateUUID(value.targetID); try validateRevision(value.revision); try validateIdempotencyKey(idempotencyKey)
+        switch value.kind {
+        case .favorite: _ = try await setFavorite(wallpaperID: value.targetID, desired: false, expectedRevision: value.revision, idempotencyKey: idempotencyKey)
+        case .saved: _ = try await setSaved(wallpaperID: value.targetID, desired: false, expectedRevision: value.revision, idempotencyKey: idempotencyKey)
+        case .follow:
+            let response: InteractionResultDTO = try await safely {
+                try await client.rpc("set_creator_follow_v1", params: CreatorBlockMutationParameters(
+                    creatorID: value.targetID, desired: false, expectedRevision: value.revision, idempotencyKey: idempotencyKey)).execute().value
+            }
+            guard !response.desired, response.revision >= value.revision else { throw CatalogMappingError.invalidResponse }
+        }
     }
 
     public func categories() async throws -> [CatalogTaxonomySummary] {
@@ -1003,27 +1050,40 @@ public actor SupabaseCatalogGateway:
         }
     }
 
-    public func requestAccountDeletion(
+    public func requestAccountDeletion(expectedProfileRevision: UInt64, confirmation: String, idempotencyKey: String) async throws -> AccountDeletionSnapshot {
+        try await performAccountDeletion(expectedProfileRevision: expectedProfileRevision, confirmation: confirmation, idempotencyKey: idempotencyKey, receipt: nil)
+    }
+
+    public func requestAccountDeletion(receipt: AccountDeletionReceiptAdmission, confirmation: String) async throws -> AccountDeletionSnapshot {
+        try await performAccountDeletion(expectedProfileRevision: receipt.expectedProfileRevision, confirmation: confirmation, idempotencyKey: receipt.idempotencyKey, receipt: receipt)
+    }
+
+    private func performAccountDeletion(
         expectedProfileRevision: UInt64,
         confirmation: String,
-        idempotencyKey: String
+        idempotencyKey: String,
+        receipt: AccountDeletionReceiptAdmission?
     ) async throws -> AccountDeletionSnapshot {
         try validateRevision(expectedProfileRevision)
         try validateIdempotencyKey(idempotencyKey)
         guard confirmation == "DELETE MY WALI" else { throw CatalogRequestError.invalidRequest }
-        let requestID = UUID().uuidString.lowercased()
+        let requestID = receipt?.requestID ?? UUID().uuidString.lowercased()
+        let apiVersion = receipt == nil ? "account.v1" : "account.v2"
         let request = AccountDeletionRequestDTO(
-            apiVersion: "account.v1",
+            apiVersion: apiVersion,
             requestID: requestID,
             idempotencyKey: idempotencyKey,
             operation: nil,
             deletionID: nil,
             expectedProfileRevision: expectedProfileRevision,
-            confirmation: confirmation
+            confirmation: confirmation,
+            statusCapabilityHash: receipt?.statusCapabilityHash,
+            policyVersion: receipt?.policyVersion
         )
         return try await safely {
             let sessionBefore = try requestSession()
             let expectedSubjectID = sessionBefore.user.id.uuidString.lowercased()
+            guard receipt == nil || receipt?.subjectID == expectedSubjectID else { throw CatalogEmailAuthError.superseded }
             let envelope: CatalogFunctionEnvelope<AccountDeletionResponseDTO> = try await invokeFunction(
                 "request-account-deletion",
                 options: FunctionInvokeOptions(body: request),
@@ -1031,7 +1091,7 @@ public actor SupabaseCatalogGateway:
             )
             let response = try mapper.payload(
                 envelope,
-                apiVersion: "account.v1",
+                apiVersion: apiVersion,
                 expectedRequestID: requestID
             )
             let sessionAfter = try await authSessionStore.validatedSession()
@@ -1058,7 +1118,9 @@ public actor SupabaseCatalogGateway:
             operation: "status",
             deletionID: id,
             expectedProfileRevision: nil,
-            confirmation: nil
+            confirmation: nil,
+            statusCapabilityHash: nil,
+            policyVersion: nil
         )
         return try await safely {
             let sessionBefore = try requestSession()
@@ -2694,8 +2756,11 @@ private struct AccountDeletionRequestDTO: Encodable, Sendable {
     let deletionID: String?
     let expectedProfileRevision: UInt64?
     let confirmation: String?
+    let statusCapabilityHash: String?
+    let policyVersion: String?
 
     enum CodingKeys: String, CodingKey {
+        case statusCapabilityHash = "status_capability_hash", policyVersion = "policy_version"
         case operation, confirmation
         case apiVersion = "api_version"
         case requestID = "request_id"

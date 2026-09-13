@@ -447,10 +447,12 @@ public protocol AccountPrivacyGateway: Sendable {
         confirmation: String,
         idempotencyKey: String
     ) async throws -> AccountDeletionSnapshot
+    func requestAccountDeletion(receipt: AccountDeletionReceiptAdmission, confirmation: String) async throws -> AccountDeletionSnapshot
     func accountDeletionStatus(id: String, idempotencyKey: String) async throws -> AccountDeletionSnapshot
 }
 
 public extension AccountPrivacyGateway {
+    func requestAccountDeletion(receipt: AccountDeletionReceiptAdmission, confirmation: String) async throws -> AccountDeletionSnapshot { throw CatalogRequestError.notConfigured }
     func accountOperationReferences() async throws -> AccountPrivacyOperationReferences? { nil }
 }
 

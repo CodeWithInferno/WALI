@@ -742,6 +742,123 @@ stores:
     deletion: digest_verified_unreferenced_gc
     backup: digest_verified_private_object_backup
 
+
+# ADR0019 and ADR0029 additions approved by the project owner on 2026-09-13.
+# These are source contracts, not evidence of hosted activation or completed deletion.
+  - id: wali.creator_blocks
+    category: private_preferences
+    purpose: outgoing_creator_visibility_and_revision_safe_unblock
+    subjects: [account_holder]
+    read_roles: [account_owner_outgoing_projection]
+    write_roles: [account_owner_named_rpc]
+    classification: confidential
+    retention: account_lifetime_including_inactive_revision_tombstones
+    deletion: delete_incoming_and_outgoing_with_account
+    backup: encrypted_database_pitr
+  - id: wali.creator_block_preferences
+    category: private_preferences
+    purpose: generation_bound_block_pagination_and_concurrent_mutations
+    subjects: [account_holder]
+    read_roles: [account_owner_named_rpc]
+    write_roles: [creator_block_service]
+    classification: confidential
+    retention: account_lifetime
+    deletion: delete_with_account_increment_affected_viewers_on_target_deletion
+    backup: encrypted_database_pitr
+  - id: wali.apple_authorizations
+    category: authentication_lifecycle
+    purpose: encrypted_subject_and_client_bound_apple_revocation_material
+    subjects: [account_holder]
+    read_roles: [apple_binding_and_deletion_service_only]
+    write_roles: [apple_binding_and_deletion_service_only]
+    classification: highly_restricted
+    retention: active_authorization_until_durable_revocation_or_reviewed_recovery
+    deletion: purge_ciphertext_after_durable_revocation_no_client_export
+    backup: encrypted_database_pitr_key_separate
+  - id: wali.account_deletion_finalization_jobs
+    category: account_deletion_control
+    purpose: policy_admission_lease_retry_and_irreversible_provider_checkpoints
+    subjects: [account_holder]
+    read_roles: [deletion_service_safe_status_projection]
+    write_roles: [automatic_account_deletion_service]
+    classification: highly_restricted
+    retention: unfinished_request_then_minimum_justified_audit_not_receipt_access_window
+    deletion: minimize_identity_mapping_after_cleanup_preserve_required_recovery_facts
+    backup: encrypted_database_pitr
+  - id: wali.account_deletion_status_receipts
+    category: operation_status_capability
+    purpose: hashed_one_request_signed_out_status_access
+    subjects: [account_holder]
+    read_roles: [deletion_receipt_service_only]
+    write_roles: [deletion_service_only]
+    classification: highly_restricted
+    retention: pending_request_lifetime_then_exactly_thirty_days_after_completion
+    deletion: bounded_daily_purge_after_completion_access_expiry
+    backup: encrypted_database_pitr
+  - id: wali.account_deletion_dispatch_state
+    category: scheduler_control
+    purpose: single_global_minute_admission_and_short_run_lease
+    subjects: []
+    read_roles: [automatic_account_deletion_service]
+    write_roles: [automatic_account_deletion_service]
+    classification: restricted
+    retention: one_current_singleton_no_per_tick_history
+    deletion: replace_expired_lease_state
+    backup: encrypted_database_pitr
+  - id: wali.account_deletion_object_intents
+    category: object_cleanup_control
+    purpose: exact_digest_reference_fenced_hosted_ugc_cleanup
+    subjects: [creator]
+    read_roles: [deletion_service_and_leased_cleanup_worker]
+    write_roles: [deletion_service_and_leased_cleanup_worker]
+    classification: highly_restricted
+    retention: unfinished_cleanup_then_minimum_reference_and_outcome_evidence
+    deletion: preserve_required_hold_or_independent_reference_fact_without_public_identity
+    backup: encrypted_database_pitr
+  - id: client.anonymous_creator_blocks
+    category: local_private_preferences
+    purpose: signed_out_catalog_filter_without_account_upload
+    subjects: [local_viewer]
+    read_roles: [local_foreground]
+    write_roles: [local_foreground]
+    classification: confidential
+    retention: until_local_unblock_or_container_removal
+    deletion: remove_local_preference_without_changing_installed_media
+    backup: local_os_managed_only_no_server_copy
+  - id: client.account_deletion_receipts
+    category: local_operation_status
+    purpose: edition_and_project_isolated_keychain_receipt_after_signout
+    subjects: [local_requester]
+    read_roles: [local_foreground_receipt_actor]
+    write_roles: [local_foreground_receipt_actor]
+    classification: highly_restricted
+    retention: pending_capability_until_confirmation_expiry_or_dismissal_minimal_confirmation_until_dismissed
+    deletion: remove_capability_on_completion_or_expiry_and_local_record_on_dismissal
+    backup: local_keychain_policy_no_server_plaintext_copy
+  # Fixed bindings: WALI_APPLE_STORE_KEY_ID/WALI_APPLE_STORE_PRIVATE_KEY_P8;
+  # WALI_APPLE_DEVELOPMENT_KEY_ID/WALI_APPLE_DEVELOPMENT_PRIVATE_KEY_P8;
+  # WALI_APPLE_CREDENTIAL_KEY_VERSION/WALI_APPLE_CREDENTIAL_KEY_BASE64.
+  - id: secrets.apple_authorization
+    category: provider_credentials
+    purpose: fixed_apple_client_exchange_encryption_and_revocation
+    subjects: []
+    read_roles: [apple_auth_edge_only]
+    write_roles: [approved_secret_provisioning_operator]
+    classification: highly_restricted
+    retention: configured_key_lifetime_and_bound_ciphertext_recovery
+    deletion: rotate_with_versioned_ciphertext_support_no_logs_exports_or_media_worker
+    backup: approved_secret_store_separate_from_database_ciphertext
+  - id: secrets.account_deletion_dispatch
+    category: scheduler_capability
+    purpose: fixed_endpoint_scheduler_authority_without_subject_selector
+    subjects: []
+    read_roles: [fixed_cron_invoker_and_deletion_edge]
+    write_roles: [approved_secret_provisioning_operator]
+    classification: highly_restricted
+    retention: active_scheduler_binding
+    deletion: disable_invoker_then_revoke_or_rotate_secret
+    backup: approved_secret_store_no_client_or_media_worker_copy
+
 prohibited_collection:
   - raw_ip_address
   - local_source_filename

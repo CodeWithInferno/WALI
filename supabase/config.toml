@@ -142,3 +142,12 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 
 [functions.catalog-legal]
 verify_jwt = false
+
+[functions.bind-apple-authorization]
+verify_jwt = false
+
+[functions.automatic-account-deletion]
+verify_jwt = false
+
+[functions.account-deletion-receipt]
+verify_jwt = false

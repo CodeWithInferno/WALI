@@ -7,13 +7,34 @@ import Security
 @MainActor
 public final class AppleSignInCoordinator: NSObject {
     private let sessionStore: AuthSessionStore
-    private var continuation: CheckedContinuation<(String, String), Error>?
+    private var continuation: CheckedContinuation<(String, String, String), Error>?
     private var authorizationController: ASAuthorizationController?
     private weak var presentationAnchor: NSWindow?
     private var rawNonce: String?
+    private var revocationObservation: Task<Void, Never>?
 
     public init(sessionStore: AuthSessionStore) {
         self.sessionStore = sessionStore
+        super.init()
+        revocationObservation = Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: ASAuthorizationAppleIDProvider.credentialRevokedNotification) {
+                guard !Task.isCancelled else { return }
+                await self?.checkRevokedCredential()
+            }
+        }
+    }
+
+    deinit { revocationObservation?.cancel() }
+
+    private func checkRevokedCredential() async {
+        guard let binding = await sessionStore.appleCredentialBinding() else { return }
+        let state: ASAuthorizationAppleIDProvider.CredentialState? = await withCheckedContinuation { continuation in
+            ASAuthorizationAppleIDProvider().getCredentialState(forUserID: binding.appleUserID) { state, error in
+                continuation.resume(returning: error == nil ? state : nil)
+            }
+        }
+        guard !Task.isCancelled, state == .revoked || state == .notFound else { return }
+        _ = try? await sessionStore.signOut(expectedSubjectID: binding.accountID)
     }
 
     public func signIn(presentingFrom window: NSWindow) async throws -> CatalogAuthState {
@@ -31,7 +52,7 @@ public final class AppleSignInCoordinator: NSObject {
         controller.presentationContextProvider = self
         authorizationController = controller
 
-        let credentials: (String, String) = try await withTaskCancellationHandler {
+        let credentials: (String, String, String) = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled else {
                     continuation.resume(throwing: CancellationError())
@@ -48,11 +69,12 @@ public final class AppleSignInCoordinator: NSObject {
         try Task.checkCancellation()
         return try await sessionStore.signInWithApple(
             idToken: credentials.0,
-            nonce: credentials.1
+            nonce: credentials.1,
+            authorizationCode: credentials.2
         )
     }
 
-    private func finish(_ result: Result<(String, String), Error>) {
+    private func finish(_ result: Result<(String, String, String), Error>) {
         let pending = continuation
         continuation = nil
         authorizationController = nil
@@ -90,6 +112,8 @@ extension AppleSignInCoordinator: ASAuthorizationControllerDelegate {
         guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
               let token = credential.identityToken,
               let idToken = String(data: token, encoding: .utf8),
+              let code = credential.authorizationCode,
+              let authorizationCode = String(data: code, encoding: .utf8),
               let rawNonce
         else {
             finish(.failure(CatalogRemoteError(
@@ -99,7 +123,7 @@ extension AppleSignInCoordinator: ASAuthorizationControllerDelegate {
             )))
             return
         }
-        finish(.success((idToken, rawNonce)))
+        finish(.success((idToken, rawNonce, authorizationCode)))
     }
 
     public func authorizationController(
