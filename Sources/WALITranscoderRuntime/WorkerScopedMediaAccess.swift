@@ -57,7 +57,7 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
         var scopes: [URL] = []
         var descriptors: [Int32] = []
         do {
-            let source = try resolve(value.request.sourceBookmark, expected: value.request.sourceURL, operations: operations)
+            let source = try resolve(value.request.sourceBookmark, expected: value.request.sourceURL, stage: "source", operations: operations)
             scopes.append(source)
             let input = Darwin.open(source.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
             guard input >= 0 else { throw WorkerGrantError.scopeDenied }
@@ -71,7 +71,7 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
             if writable >= 0 { Darwin.close(writable); throw WorkerGrantError.sourceWritable }
             guard errno == EACCES || errno == EPERM || errno == EROFS else { throw WorkerGrantError.scopeDenied }
 
-            let staging = try resolve(value.stagingBookmark, expected: value.request.stagingDirectoryURL, operations: operations)
+            let staging = try resolve(value.stagingBookmark, expected: value.request.stagingDirectoryURL, stage: "staging", operations: operations)
             scopes.append(staging)
             guard staging.resolvingSymlinksInPath().standardizedFileURL == staging.standardizedFileURL,
                   !source.standardizedFileURL.path.hasPrefix(staging.standardizedFileURL.path + "/") else { throw WorkerGrantError.identityMismatch }
@@ -92,7 +92,7 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
         }
     }
 
-    private static func resolve(_ data: Data, expected: URL, operations: WorkerBookmarkOperations) throws -> URL {
+    private static func resolve(_ data: Data, expected: URL, stage: String, operations: WorkerBookmarkOperations) throws -> URL {
         let resolved = try operations.resolve(data)
         // Resolve with implicit access so private-container metadata is available.
         // Transfer that temporary acquisition to one explicit attempt acquisition;
@@ -100,6 +100,17 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
         defer {
             if operations.resolutionStartsAccess { operations.stop(resolved.url) }
         }
+        #if WALI_APP_STORE
+        if resolved.stale || resolved.url.standardizedFileURL != expected.standardizedFileURL {
+            let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL.path + "/"
+            // Fixed stage and booleans only: never record paths or grant material.
+            NSLog("Store grant resolution stage=%@ stale=%d matches=%d resolved_in_worker_home=%d expected_in_worker_home=%d",
+                  stage, resolved.stale ? 1 : 0,
+                  resolved.url.standardizedFileURL == expected.standardizedFileURL ? 1 : 0,
+                  resolved.url.standardizedFileURL.path.hasPrefix(home) ? 1 : 0,
+                  expected.standardizedFileURL.path.hasPrefix(home) ? 1 : 0)
+        }
+        #endif
         guard !resolved.stale else { throw WorkerGrantError.staleGrant }
         guard resolved.url.isFileURL, resolved.url.standardizedFileURL == expected.standardizedFileURL else {
             throw WorkerGrantError.identityMismatch
