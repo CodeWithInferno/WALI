@@ -102,6 +102,10 @@ struct AccountView: View {
                             Text(accountIsSignedIn ? "Signing out…" : "Signing in…")
                                 .foregroundStyle(.secondary)
                         }
+                    } else if case let .succeeded(message) = authenticationState {
+                        Label(message, systemImage: "info.circle")
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("WALI.Account.AuthenticationNotice")
                     } else if case let .failed(message) = authenticationState {
                         Label(message, systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.secondary)

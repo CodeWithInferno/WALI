@@ -2,6 +2,10 @@
 -- Rollback-only local database fixtures. Synthetic object metadata and signature
 -- bytes test database invariants; they are not real media/cryptographic evidence.
 begin;
+-- Synthetic role selection for this rollback-only test; session_user stays postgres.
+grant wali_worker to postgres with set true;
+-- Synthetic effective legal version for this rollback-only fixture.
+update wali.runtime_configuration set creator_terms_version='2026-09-12' where singleton;
 select no_plan();
 select has_column('wali','submissions','media_kind','submission kind is durable');
 select has_function('wali','worker_complete_still_attempt_v2',array['uuid','integer','text','jsonb'],'still completion has explicit V2');

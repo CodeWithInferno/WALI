@@ -1,64 +1,24 @@
--- Synthetic issuer and login only; all DDL, bindings and Vault material roll back.
+-- Real restricted-login issuance is covered by the local-only Python harness.
+-- These nonsuperuser administrator/API denial assertions remain rollback-only.
 begin;
-select plan(21);
--- Match hosted migration ownership while retaining superuser-only fixture setup.
-alter table wali.worker_storage_auth_bindings owner to postgres;
-alter function wali.renew_storage_worker_token() owner to postgres;
+-- Synthetic role selection for this rollback-only test; session_user stays postgres.
+grant wali_worker to postgres with set true;
+select plan(9);
 select has_function('wali','renew_storage_worker_token',array[]::text[],'private renewal function exists');
 select ok(not has_function_privilege('anon','wali.renew_storage_worker_token()','execute') and not has_function_privilege('authenticated','wali.renew_storage_worker_token()','execute') and not has_function_privilege('service_role','wali.renew_storage_worker_token()','execute'),'API roles cannot issue worker credentials');
 select ok(has_function_privilege('wali_worker','wali.renew_storage_worker_token()','execute'),'only restricted worker group receives issuance');
 select ok(not has_table_privilege('wali_worker','wali.worker_storage_auth_bindings','select') and not has_table_privilege('service_role','wali.worker_storage_auth_bindings','select'),'bindings cannot be read by worker or service role');
 select throws_ok($$select wali.renew_storage_worker_token()$$,'P0001','WALI_STORAGE_CREDENTIAL_UNAVAILABLE','administrator cannot impersonate worker by default');
-create role wali_renewal_fixture login noinherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls;
-grant wali_worker to wali_renewal_fixture;
-create temporary table renewal_fixture (token text,expires_at timestamptz,worker_id text);
-create temporary table renewal_errors(name text primary key,code text);
-grant insert on renewal_errors to wali_worker,wali_renewal_fixture;
+create temporary table renewal_denial(code text);
+grant insert on renewal_denial to wali_worker;
 create function pg_temp.renewal_error() returns text language plpgsql as $$begin perform wali.renew_storage_worker_token(); return 'unexpected success'; exception when others then return sqlstate||':'||sqlerrm; end;$$;
-grant insert on renewal_fixture to wali_worker;
-create temporary table renewal_secret as select vault.create_secret('synthetic-fixture-only-not-a-provider-key-0123456789','wali-renewal-fixture') as id;
-insert into wali.worker_storage_auth_bindings(login_role_oid,login_role_name,worker_id,storage_origin,issuer_secret_id,enabled)
-select r.oid,r.rolname,'renewal-fixture','https://fixture.supabase.co',s.id,true from pg_roles r cross join renewal_secret s where r.rolname='wali_renewal_fixture';
-set session authorization wali_renewal_fixture;
-insert into renewal_errors values('no-role',pg_temp.renewal_error());
-set role wali_worker;
-insert into renewal_fixture select * from wali.renew_storage_worker_token();
-reset role;
-reset session authorization;
-select is((select worker_id from renewal_fixture),'renewal-fixture','issued worker is bound to real restricted login');
-select ok((select expires_at between statement_timestamp()+interval '890 seconds' and statement_timestamp()+interval '900 seconds' from renewal_fixture),'issued lifetime is fixed to fifteen minutes');
-create temporary table renewal_claims as select convert_from(decode(translate(split_part(token,'.',2),'-_','+/')||repeat('=',(4-length(split_part(token,'.',2))%4)%4),'base64'),'utf8')::jsonb as claims from renewal_fixture;
-select is((select array_agg(k order by k) from renewal_claims,jsonb_object_keys(claims) k),array['aud','exp','iat','iss','role','worker_id']::text[],'issuer exposes only fixed narrow claims');
-select is((select claims->>'role' from renewal_claims),'wali_storage_worker','no service or database role is signed');
-select is((select claims->>'aud' from renewal_claims),'authenticated','audience matches Storage');
-select is((select claims->>'iss' from renewal_claims),'https://fixture.supabase.co/auth/v1','issuer matches exact bound origin');
-select is((select (claims->>'exp')::bigint-(claims->>'iat')::bigint from renewal_claims),900::bigint,'caller cannot extend token lifetime');
-select is((select split_part(token,'.',3) from renewal_fixture),(select translate(rtrim(encode(extensions.hmac(split_part(token,'.',1)||'.'||split_part(token,'.',2),'synthetic-fixture-only-not-a-provider-key-0123456789','sha256'),'base64'),'='),'+/','-_') from renewal_fixture),'JWT has a valid signature over exact claims using synthetic key');
-update wali.worker_storage_auth_bindings set enabled=false where worker_id='renewal-fixture';
-set session authorization wali_renewal_fixture; set role wali_worker;
-insert into renewal_errors values('disabled',pg_temp.renewal_error());
-reset role; reset session authorization;
-update wali.worker_storage_auth_bindings set enabled=true,login_role_oid=0 where worker_id='renewal-fixture';
-set session authorization wali_renewal_fixture; set role wali_worker;
-insert into renewal_errors values('stale',pg_temp.renewal_error());
-reset role; reset session authorization;
-update wali.worker_storage_auth_bindings set login_role_oid=(select oid from pg_roles where rolname='wali_renewal_fixture') where worker_id='renewal-fixture';
-alter role wali_renewal_fixture inherit;
-set session authorization wali_renewal_fixture; set role wali_worker;
-insert into renewal_errors values('privilege',pg_temp.renewal_error());
-reset role; reset session authorization;
-alter role wali_renewal_fixture noinherit;
 set role wali_worker;
 select set_config('request.jwt.claims','{"role":"wali_worker","worker_id":"renewal-fixture"}',true);
-insert into renewal_errors values('jwt',pg_temp.renewal_error());
+insert into renewal_denial values(pg_temp.renewal_error());
 reset role;
-select ok((select code like '42501:%' from renewal_errors where name='no-role'),'NOINHERIT login cannot issue before selecting worker role');
-select is((select code from renewal_errors where name='disabled'),'P0001:WALI_STORAGE_CREDENTIAL_UNAVAILABLE','disabled binding stops new issuance');
-select is((select code from renewal_errors where name='stale'),'P0001:WALI_STORAGE_CREDENTIAL_UNAVAILABLE','stale role OID fails closed');
-select is((select code from renewal_errors where name='privilege'),'P0001:WALI_STORAGE_CREDENTIAL_UNAVAILABLE','broadened login privilege fails closed');
-select is((select code from renewal_errors where name='jwt'),'P0001:WALI_STORAGE_CREDENTIAL_UNAVAILABLE','JWT claims cannot replace real login identity');
+select is((select code from renewal_denial),'P0001:WALI_STORAGE_CREDENTIAL_UNAVAILABLE','JWT claims cannot replace real login identity');
 select ok(not exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like '%storage_worker_token%'),'no public RPC is exposed');
-select throws_ok($$update wali.worker_storage_auth_bindings set storage_origin='https://fixture.supabase.co/foreign'$$,'23514',null,'binding accepts an exact HTTPS origin only');
-select is((select count(*) from wali.worker_storage_auth_bindings),1::bigint,'migration added no real binding');
+select throws_ok($$insert into wali.worker_storage_auth_bindings(login_role_oid,login_role_name,worker_id,storage_origin,issuer_secret_id) values(0,'wali_invalid_origin_fixture','invalid-origin-fixture','https://fixture.supabase.co/foreign','00000000-0000-0000-0000-000000000000')$$,'23514',null,'binding accepts an exact HTTPS origin only');
+select is((select count(*) from wali.worker_storage_auth_bindings),0::bigint,'migration added no real binding');
 select * from finish();
 rollback;

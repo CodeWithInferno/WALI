@@ -609,12 +609,121 @@ final class MarketplaceCoordinatorTests: XCTestCase {
 
         coordinator.requestAccountDeletion(confirmation: "DELETE MY WALI")
         try await Task.sleep(for: .milliseconds(30))
-        guard case let .pending(status, identityStatus, held) = coordinator.model.accountDeletionState else {
-            return XCTFail("Expected an in-progress deletion")
+        await assertEmailEventually { coordinator.model.accountState == .signedOut }
+        XCTAssertEqual(coordinator.model.authenticationState, .succeeded(message:
+            "Deletion requested. Your account is signed out; deletion is still pending."))
+    }
+
+    func testAcceptedDeletionSignsOutWithoutPollingRevokedSession() async throws {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let auth = ScriptedAuthStore()
+        let privacy = ScriptedAccountPrivacyGateway(userID: userID)
+        let coordinator = MarketplaceCoordinator(accountGateway: privacy, authStore: auth,
+            mfaStore: ScriptedMFAStore(userID: userID))
+        coordinator.start()
+        defer { coordinator.stop() }
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        await assertEmailEventually { coordinator.model.accountProfile?.userID == userID }
+
+        coordinator.requestAccountDeletion(confirmation: "DELETE MY WALI")
+        await assertEmailEventually {
+            coordinator.model.authenticationState == .succeeded(message:
+                "Deletion requested. Your account is signed out; deletion is still pending.")
         }
-        XCTAssertEqual(status, "Removing marketplace data")
-        XCTAssertEqual(identityStatus, "Sessions revoked")
-        XCTAssertFalse(held)
+        let signOutCalls = await auth.signOutCallCount
+        XCTAssertEqual(signOutCalls, 1)
+
+        XCTAssertEqual(coordinator.model.accountState, .signedOut)
+        XCTAssertNil(coordinator.model.accountProfile)
+        XCTAssertEqual(coordinator.model.accountDeletionState, .idle)
+        XCTAssertEqual(coordinator.model.authenticationState, .succeeded(message:
+            "Deletion requested. Your account is signed out; deletion is still pending."))
+        coordinator.refreshAccountDeletion()
+        let statusCalls = await privacy.deletionStatusCount
+        XCTAssertEqual(statusCalls, 0)
+    }
+
+    func testLateDeletionResponseCannotSignOutAnotherAccount() async throws {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let otherID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        let auth = ScriptedAuthStore()
+        let privacy = ScriptedAccountPrivacyGateway(userID: userID)
+        await privacy.pauseDeletionResponse()
+        let coordinator = MarketplaceCoordinator(accountGateway: privacy, authStore: auth,
+            mfaStore: ScriptedMFAStore(userID: userID))
+        coordinator.start()
+        defer { coordinator.stop() }
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        await assertEmailEventually { coordinator.model.accountProfile?.userID == userID }
+        coordinator.requestAccountDeletion(confirmation: "DELETE MY WALI")
+        await assertEmailEventually { await privacy.isDeletionResponseHeld }
+        await privacy.setProfileSubject(otherID)
+        await auth.emit(CatalogAuthState(userID: otherID, expiresAt: .now.addingTimeInterval(60)))
+        await assertEmailEventually { coordinator.model.accountProfile?.userID == otherID }
+        await privacy.resumeDeletionResponse()
+        await assertEmailEventually { await privacy.deletionResponseCount == 1 }
+        let signOutCalls = await auth.signOutCallCount
+        XCTAssertEqual(signOutCalls, 0)
+        XCTAssertEqual(coordinator.model.accountState, .signedIn(userID: otherID))
+        XCTAssertEqual(coordinator.model.accountDeletionState, .idle)
+    }
+
+    func testLateDeletionSignOutCompletionCannotClearNewAccount() async throws {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let otherID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        let auth = ScriptedAuthStore()
+        await auth.pauseSignOutCompletion()
+        let privacy = ScriptedAccountPrivacyGateway(userID: userID)
+        let coordinator = MarketplaceCoordinator(accountGateway: privacy, authStore: auth,
+            mfaStore: ScriptedMFAStore(userID: userID))
+        coordinator.start()
+        defer { coordinator.stop() }
+        await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+        await assertEmailEventually { coordinator.model.accountProfile?.userID == userID }
+        coordinator.requestAccountDeletion(confirmation: "DELETE MY WALI")
+        await assertEmailEventually { await auth.isSignOutHeld }
+        await assertEmailEventually { coordinator.model.accountState == .signedOut }
+        await privacy.setProfileSubject(otherID)
+        await auth.emit(CatalogAuthState(userID: otherID, expiresAt: .now.addingTimeInterval(60)))
+        await assertEmailEventually { coordinator.model.accountProfile?.userID == otherID }
+        await auth.resumeSignOutCompletion()
+        await assertEmailEventually { await auth.signOutReturnCount == 1 }
+        XCTAssertEqual(coordinator.model.accountState, .signedIn(userID: otherID))
+        XCTAssertEqual(coordinator.model.authenticationState, .idle)
+        let current = await auth.currentState()
+        XCTAssertEqual(current?.userID, otherID)
+    }
+
+    func testRevokedDeletionStatusAlwaysClearsSessionWithoutChangingOutcome() async throws {
+        let userID = "11111111-1111-4111-8111-111111111111"
+        let outcomes: [(AccountDeletionStatus, String)] = [
+            (.failed, "Deletion did not complete. Your account is signed out."),
+            (.cancelled, "Deletion was cancelled. Your account is signed out."),
+            (.held, "Deletion is on hold. Your account is signed out."),
+            (.completed, "Account deletion completed. Your account is signed out.")
+        ]
+        for (status, notice) in outcomes {
+            let auth = ScriptedAuthStore()
+            let privacy = ScriptedAccountPrivacyGateway(userID: userID)
+            await privacy.setDeletionStatusScenario(status)
+            let coordinator = MarketplaceCoordinator(accountGateway: privacy, authStore: auth,
+                mfaStore: ScriptedMFAStore(userID: userID))
+            coordinator.start()
+            await auth.emit(CatalogAuthState(userID: userID, expiresAt: .now.addingTimeInterval(60)))
+            await assertEmailEventually { coordinator.model.accountProfile?.userID == userID }
+            coordinator.requestAccountDeletion(confirmation: "DELETE MY WALI")
+            await assertEmailEventually {
+                if case .pending = coordinator.model.accountDeletionState { return true }
+                return false
+            }
+            coordinator.refreshAccountDeletion()
+            await assertEmailEventually { coordinator.model.authenticationState == .succeeded(message: notice) }
+            XCTAssertEqual(coordinator.model.accountState, .signedOut)
+            XCTAssertNil(coordinator.model.accountProfile)
+            let statusCalls = await privacy.deletionStatusCount
+            XCTAssertEqual(statusCalls, 1)
+            coordinator.stop()
+        }
     }
 
     func testDeletionEnrollsAndVerifiesTOTPBeforeSubmitting() async throws {
@@ -638,9 +747,11 @@ final class MarketplaceCoordinatorTests: XCTestCase {
 
         coordinator.verifyAccountDeletionMFA(code: "123456")
         try await Task.sleep(for: .milliseconds(40))
-        guard case .pending = coordinator.model.accountDeletionState else {
-            return XCTFail("Expected deletion only after fresh MFA")
-        }
+        await assertEmailEventually { coordinator.model.accountState == .signedOut }
+        let requestCount = await privacy.deletionRequestCount
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(coordinator.model.authenticationState, .succeeded(message:
+            "Deletion requested. Your account is signed out; deletion is still pending."))
     }
 
     func testCreatorUnavailableRequestCanRetryWithoutRequestingSignInOrAcceptingTerms() async {
@@ -1154,6 +1265,16 @@ private actor ScriptedMFAStore: AccountMFASessionProviding {
 
 private actor ScriptedAuthStore: CatalogAuthSessionProviding {
     private(set) var signOutCallCount = 0
+    private var state: CatalogAuthState?
+    private var holdSignOutCompletion = false
+    private var signOutContinuation: CheckedContinuation<Void, Never>?
+    private(set) var signOutReturnCount = 0
+    var isSignOutHeld: Bool { signOutContinuation != nil }
+    func pauseSignOutCompletion() { holdSignOutCompletion = true }
+    func resumeSignOutCompletion() {
+        signOutContinuation?.resume()
+        signOutContinuation = nil
+    }
     private let stream: AsyncStream<CatalogAuthState?>
     private let continuation: AsyncStream<CatalogAuthState?>.Continuation
 
@@ -1163,16 +1284,26 @@ private actor ScriptedAuthStore: CatalogAuthSessionProviding {
         continuation = pair.continuation
     }
 
-    func currentState() async -> CatalogAuthState? { nil }
+    func currentState() async -> CatalogAuthState? { state }
 
     func stateChanges() async -> AsyncStream<CatalogAuthState?> { stream }
 
     func signOut() async throws {
         signOutCallCount += 1
+        state = nil
         continuation.yield(nil)
+        if holdSignOutCompletion { await withCheckedContinuation { signOutContinuation = $0 } }
+        signOutReturnCount += 1
+    }
+
+    func signOut(expectedSubjectID: String) async throws -> Bool {
+        guard state == nil || state?.userID == expectedSubjectID else { return false }
+        try await signOut()
+        return true
     }
 
     func emit(_ state: CatalogAuthState?) {
+        self.state = state
         continuation.yield(state)
     }
 }
@@ -1335,15 +1466,35 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
 
 private actor ScriptedAccountPrivacyGateway: AccountPrivacyGateway {
     private let userID: String
+    private var profileSubjectID: String
     private(set) var deletionRequestCount = 0
+    private(set) var deletionStatusCount = 0
+    private(set) var deletionResponseCount = 0
+    private var holdDeletionResponse = false
+    private var initialIdentityStatus: AccountIdentityDeletionStatus = .sessionsRevoked
+    private var deletionStatusResult: AccountDeletionStatus = .processing
+    func setDeletionStatusScenario(_ status: AccountDeletionStatus) {
+        initialIdentityStatus = .sessionRevocationPending
+        deletionStatusResult = status
+    }
+    private var deletionContinuation: CheckedContinuation<Void, Never>?
+    var isDeletionResponseHeld: Bool { deletionContinuation != nil }
+    func pauseDeletionResponse() { holdDeletionResponse = true }
+    func resumeDeletionResponse() {
+        deletionContinuation?.resume()
+        deletionContinuation = nil
+    }
 
     init(userID: String) {
         self.userID = userID
+        profileSubjectID = userID
     }
+
+    func setProfileSubject(_ subjectID: String) { profileSubjectID = subjectID }
 
     func accountProfile() async throws -> MarketplaceAccountProfile {
         try MarketplaceAccountProfile(
-            id: userID,
+            id: profileSubjectID,
             handle: "wallpaper-maker",
             displayName: "Wallpaper Maker",
             status: "active",
@@ -1382,11 +1533,13 @@ private actor ScriptedAccountPrivacyGateway: AccountPrivacyGateway {
         guard expectedProfileRevision == 4, confirmation == "DELETE MY WALI" else {
             throw CatalogRequestError.invalidRequest
         }
+        if holdDeletionResponse { await withCheckedContinuation { deletionContinuation = $0 } }
+        deletionResponseCount += 1
         return try AccountDeletionSnapshot(
             id: "33333333-3333-4333-8333-333333333333",
             subjectID: userID,
             status: .processing,
-            identityStatus: .sessionsRevoked,
+            identityStatus: initialIdentityStatus,
             revision: 1,
             requestedAt: .now,
             completedAt: nil,
@@ -1395,10 +1548,14 @@ private actor ScriptedAccountPrivacyGateway: AccountPrivacyGateway {
     }
 
     func accountDeletionStatus(id: String, idempotencyKey: String) async throws -> AccountDeletionSnapshot {
-        try await requestAccountDeletion(
-            expectedProfileRevision: 4,
-            confirmation: "DELETE MY WALI",
-            idempotencyKey: idempotencyKey
+        deletionStatusCount += 1
+        return try AccountDeletionSnapshot(
+            id: "33333333-3333-4333-8333-333333333333", subjectID: userID,
+            status: deletionStatusResult,
+            identityStatus: deletionStatusResult == .completed ? .completed : .sessionsRevoked,
+            revision: 2, requestedAt: .now,
+            completedAt: deletionStatusResult == .completed ? .now : nil,
+            held: deletionStatusResult == .held
         )
     }
 }

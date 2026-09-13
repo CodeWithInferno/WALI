@@ -383,6 +383,12 @@ final class EmailAuthProbe: CatalogEmailAuthenticating, CatalogAuthSessionProvid
         }
     }
 
+    func signOut(expectedSubjectID: String) async throws -> Bool {
+        guard state == nil || state?.userID == expectedSubjectID else { return false }
+        try await signOut()
+        return true
+    }
+
     func signOut() async throws {
         signOutCalls += 1
         state = nil

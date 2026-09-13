@@ -187,6 +187,33 @@ actor CatalogAuthAuthority: CatalogAuthSessionProviding, CatalogEmailAuthenticat
         let old = pending
         pending = nil
         await acquireTransition()
+        try await finishSignOut(discarding: old)
+    }
+
+    func signOut(expectedSubjectID: String) async throws -> Bool {
+        await acquireTransition()
+        guard !Task.isCancelled else {
+            releaseTransition()
+            throw CancellationError()
+        }
+        let currentSubjectID = await shared.currentSubjectID()
+        guard !Task.isCancelled else {
+            releaseTransition()
+            throw CancellationError()
+        }
+        guard currentSubjectID == nil || currentSubjectID == expectedSubjectID else {
+            releaseTransition()
+            return false
+        }
+        // Even an absent SDK projection must pass the storage adapter's
+        // removal verification. Preserve a new pending login if already signed out.
+        let old = currentSubjectID == nil ? nil : pending
+        if currentSubjectID != nil { pending = nil }
+        try await finishSignOut(discarding: old)
+        return true
+    }
+
+    private func finishSignOut(discarding old: Pending?) async throws {
         do {
             let shared = shared
             try await Task { try await shared.signOut() }.value

@@ -661,12 +661,17 @@ func (s *SQLAttemptStore) BeginExport(ctx context.Context, job ExportJob, lease 
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return ExportBegin{}, errors.New("database returned trailing export lease data")
 	}
-	expectedPath := "exports/" + job.UserID + "/" + job.ExportID + "/account.json"
-	if begin.Path != expectedPath {
-		return ExportBegin{}, errors.New("database returned an unexpected export path")
-	}
 	switch begin.Disposition {
-	case "started", "active", "completed", "stale":
+	case "started":
+		expectedPath := "exports/" + job.UserID + "/" + job.ExportID + "/account.json"
+		if begin.Path != expectedPath {
+			return ExportBegin{}, errors.New("database returned an unexpected export path")
+		}
+		return begin, nil
+	case "active", "completed", "stale":
+		if begin.Path != "" {
+			return ExportBegin{}, errors.New("database returned a path without an acquired export lease")
+		}
 		return begin, nil
 	default:
 		return ExportBegin{}, errors.New("database returned an unknown export disposition")

@@ -308,6 +308,9 @@ public final class MarketplaceCoordinator {
     private var accountDeletionRecoveryID: String?
     private var accountExportRequestKey: String?
     private var accountDeletionRequestKey: String?
+    private var pendingDeletionSignOut: (id: UUID, subjectID: String)?
+    private static let acceptedDeletionNotice =
+        "Deletion requested. Your account is signed out; deletion is still pending."
     private var accountMFAFactorID: String?
     private var accountMFAEnrollmentFactorID: String?
     private var pendingAccountDeletionConfirmation: String?
@@ -479,6 +482,7 @@ public final class MarketplaceCoordinator {
 
     public func stop() {
         acceptsAuthenticationResults = false
+        pendingDeletionSignOut = nil
         detachEmailFlow()
         Self.logger.info("Marketplace lifecycle stopped")
         taxonomyTask?.cancel()
@@ -926,6 +930,7 @@ public final class MarketplaceCoordinator {
             return
         }
         guard acceptsAuthenticationResults, model.authenticationState != .working else { return }
+        pendingDeletionSignOut = nil
         if authenticationMethod == .emailOTP {
             guard emailAuth != nil else {
                 model.authenticationState = .failed(message: "Email sign-in is unavailable. Please try again later.")
@@ -1626,6 +1631,7 @@ public final class MarketplaceCoordinator {
     }
 
     public func refreshAccountDeletion() {
+        if let snapshot = accountDeletionSnapshot, snapshot.identityStatus != .sessionRevocationPending { return }
         guard let id = accountDeletionSnapshot?.id ?? accountDeletionRecoveryID else { return }
         pollAccountDeletion(id: id)
     }
@@ -1879,6 +1885,14 @@ public final class MarketplaceCoordinator {
                 refreshCatalogSurfaces()
             } else { model.accountState = .signedOut }
             return
+        }
+        if let deletion = pendingDeletionSignOut,
+           previousUserID == nil || state.userID != deletion.subjectID {
+            pendingDeletionSignOut = nil
+            model.authenticationState = .idle
+        }
+        if case .succeeded = model.authenticationState {
+            model.authenticationState = .idle
         }
         let changedSubject = previousUserID != nil && previousUserID != state.userID
         let reloadSavedForNewSubject = changedSubject && discovery.savedState != .idle
@@ -2208,6 +2222,10 @@ public final class MarketplaceCoordinator {
     }
 
     private func beginAccountDeletionPollingIfNeeded(_ snapshot: AccountDeletionSnapshot) {
+        if snapshot.identityStatus != .sessionRevocationPending {
+            signOutAfterAcceptedDeletion(snapshot)
+            return
+        }
         guard snapshot.status != .completed,
               snapshot.status != .failed,
               snapshot.status != .cancelled,
@@ -2229,6 +2247,10 @@ public final class MarketplaceCoordinator {
                     current = next
                     accountDeletionSnapshot = next
                     applyAccountDeletion(next)
+                    if next.identityStatus != .sessionRevocationPending {
+                        beginAccountDeletionPollingIfNeeded(next)
+                        return
+                    }
                     if next.status == .completed || next.status == .failed
                         || next.status == .cancelled || next.status == .held {
                         return
@@ -2241,6 +2263,55 @@ public final class MarketplaceCoordinator {
                     return
                 }
             }
+        }
+    }
+
+    private func signOutAfterAcceptedDeletion(_ snapshot: AccountDeletionSnapshot) {
+        guard accountSubjectMatchesCurrentProfile(snapshot.subjectID), let authStore else { return }
+        accountDeletionPollTask?.cancel()
+        guard pendingDeletionSignOut == nil else { return }
+        let operationID = UUID()
+        pendingDeletionSignOut = (operationID, snapshot.subjectID)
+        detachEmailFlow()
+        model.authenticationState = .working
+        authenticationTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let signedOut = try await authStore.signOut(expectedSubjectID: snapshot.subjectID)
+                try Task.checkCancellation()
+                guard pendingDeletionSignOut?.id == operationID else { return }
+                let current = await authStore.currentState()
+                try Task.checkCancellation()
+                guard pendingDeletionSignOut?.id == operationID else { return }
+                pendingDeletionSignOut = nil
+                guard signedOut, current == nil else {
+                    model.authenticationState = .idle
+                    return
+                }
+                clearSubjectBoundState()
+                model.accountState = .signedOut
+                refreshCatalogSurfaces()
+                model.authenticationState = .succeeded(message: Self.signedOutDeletionNotice(snapshot.status))
+            } catch is CancellationError {
+                guard pendingDeletionSignOut?.id == operationID else { return }
+                pendingDeletionSignOut = nil
+                model.authenticationState = .idle
+            } catch {
+                guard pendingDeletionSignOut?.id == operationID else { return }
+                pendingDeletionSignOut = nil
+                model.authenticationState = .failed(message:
+                    "Deletion status: \(Self.accountDeletionLabel(snapshot.status)). Sign out could not be confirmed; reopen WALI to check your session.")
+            }
+        }
+    }
+
+    private static func signedOutDeletionNotice(_ status: AccountDeletionStatus) -> String {
+        switch status {
+        case .completed: "Account deletion completed. Your account is signed out."
+        case .failed: "Deletion did not complete. Your account is signed out."
+        case .cancelled: "Deletion was cancelled. Your account is signed out."
+        case .held: "Deletion is on hold. Your account is signed out."
+        case .pending, .processing, .awaitingAuthCleanup: acceptedDeletionNotice
         }
     }
 

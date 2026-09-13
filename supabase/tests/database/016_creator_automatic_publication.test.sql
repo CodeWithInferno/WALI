@@ -1,6 +1,8 @@
 -- Rollback-only local database fixtures. Synthetic object metadata and signature
 -- bytes test database invariants; they are not real media/cryptographic evidence.
 begin;
+-- Synthetic effective legal version for this rollback-only fixture.
+update wali.runtime_configuration set creator_terms_version='2026-09-12' where singleton;
 select no_plan();
 select has_table('wali','automatic_publication_jobs','automatic publication is durable');
 select has_table('wali','automatic_publication_decisions','system attribution is explicit');

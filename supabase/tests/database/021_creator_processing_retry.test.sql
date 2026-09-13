@@ -1,5 +1,7 @@
 -- Synthetic failed-upload retry; all source, identity and queue state rolls back.
 begin;
+-- Synthetic effective legal version for this rollback-only fixture.
+update wali.runtime_configuration set creator_terms_version='2026-09-12' where singleton;
 select plan(30);
 select set_config('request.jwt.claim.role','service_role',true);
 select set_config('request.jwt.claims','{"role":"service_role"}',true);

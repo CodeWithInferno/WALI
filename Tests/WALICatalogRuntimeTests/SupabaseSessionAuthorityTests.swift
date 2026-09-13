@@ -93,6 +93,59 @@ final class SupabaseSessionAuthorityTests: XCTestCase {
         await fixture.auth.stopAutoRefresh()
     }
 
+    func testScopedDeletionSignOutClearsRealSDKStorageAfterRevokedSessionResponse() async throws {
+        for status in [401, 403, 404] {
+            let base = CatalogMemoryAuthStorage()
+            let original = SDKSessionFixture.session(subject: SDKSessionFixture.firstID, suffix: "revoked")
+            try base.store(key: CatalogCheckedAuthStorage.sessionKey, value: JSONEncoder().encode(original))
+            let storage = CatalogCheckedAuthStorage(underlying: base)
+            let environment = try SDKSessionFixture.environment()
+            let auth = SupabaseSharedAuth.makeClient(environment: environment, storage: storage) { request in
+                XCTAssertEqual(request.url?.path, "/auth/v1/logout")
+                XCTAssertEqual(request.httpMethod, "POST")
+                let data = Data(#"{"code":"session_not_found","msg":"Session does not exist"}"#.utf8)
+                return (data, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"])!)
+            }
+            let store = AuthSessionStore(auth: auth, storage: storage, environment: environment)
+            let signedOut = try await store.signOut(expectedSubjectID: original.user.id.uuidString.lowercased())
+            XCTAssertTrue(signedOut)
+            XCTAssertNil(auth.currentSession)
+            XCTAssertNil(try base.retrieve(key: CatalogCheckedAuthStorage.sessionKey))
+            await auth.stopAutoRefresh()
+        }
+    }
+
+    func testScopedDeletionSignOutUsesExpiredSessionOwnerBeforeClearingStorage() async throws {
+        for matchesSubject in [true, false] {
+            let base = CatalogMemoryAuthStorage()
+            var expired = SDKSessionFixture.session(subject: SDKSessionFixture.firstID, suffix: "expired-signout")
+            let storage = CatalogCheckedAuthStorage(underlying: base)
+            let environment = try SDKSessionFixture.environment()
+            let auth = SupabaseSharedAuth.makeClient(environment: environment, storage: storage) { request in
+                XCTAssertTrue(matchesSubject, "A different expired account must not be signed out")
+                XCTAssertEqual(request.url?.path, "/auth/v1/logout")
+                return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 403,
+                    httpVersion: nil, headerFields: ["Content-Type": "application/json"])!)
+            }
+            await auth.stopAutoRefresh()
+            expired.expiresAt = 1
+            let originalBytes = try JSONEncoder().encode(expired)
+            try base.store(key: CatalogCheckedAuthStorage.sessionKey, value: originalBytes)
+            let store = AuthSessionStore(auth: auth, storage: storage, environment: environment)
+            let expected = matchesSubject ? SDKSessionFixture.firstID : SDKSessionFixture.secondID
+            let signedOut = try await store.signOut(expectedSubjectID: expected.uuidString.lowercased())
+            XCTAssertEqual(signedOut, matchesSubject)
+            if matchesSubject {
+                XCTAssertNil(auth.currentSession)
+                XCTAssertNil(try base.retrieve(key: CatalogCheckedAuthStorage.sessionKey))
+            } else {
+                XCTAssertEqual(auth.currentSession?.user.id, expired.user.id)
+                XCTAssertEqual(try base.retrieve(key: CatalogCheckedAuthStorage.sessionKey), originalBytes)
+            }
+        }
+    }
+
     func testResponseAuthorizationExpiresBeforeLateSDKWrite() throws {
         let base = CatalogMemoryAuthStorage()
         let old = SDKSessionFixture.session(subject: SDKSessionFixture.firstID, suffix: "old")
