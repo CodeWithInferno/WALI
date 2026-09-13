@@ -13,6 +13,26 @@ module WALIStoreSubmissionSupport
     raise "Remove ambient Deliverfile configuration before using the verified Store lanes" if configuration_files.any? { |path| File.exist?(path) }
   end
 
+  def archive_export_options(build_settings, team:, identity:)
+    raise "Expected resolved AppStore build settings" unless build_settings.is_a?(Array)
+    profiles = %w[WALI WALIAgent WALITranscoder].to_h do |target|
+      # Xcode's all-targets query can repeat the same foreground record.
+      records = build_settings.select { |entry| entry.is_a?(Hash) && entry["target"] == target }.uniq
+      raise "Missing or ambiguous Store export target #{target}" unless records.length == 1
+      settings = records.first.fetch("buildSettings")
+      identifier = "com.wali.store.#{target}"
+      raise "Unexpected Store export identity for #{target}" unless settings["PRODUCT_BUNDLE_IDENTIFIER"] == identifier
+      raise "Store export team differs for #{target}" unless settings["DEVELOPMENT_TEAM"] == team
+      raise "Store export must retain manual signing for #{target}" unless settings["CODE_SIGN_STYLE"] == "Manual"
+      raise "Store export certificate differs for #{target}" unless settings["CODE_SIGN_IDENTITY"] == identity
+      profile = settings["PROVISIONING_PROFILE_SPECIFIER"]
+      raise "Missing or unresolved Store export profile for #{target}" unless profile.is_a?(String) && profile == profile.strip && profile.length.between?(1, 256) && !profile.match?(/[[:cntrl:]]|\$[({]/)
+      [identifier, profile]
+    end
+    {"method" => "app-store", "signingStyle" => "manual", "teamID" => team,
+     "signingCertificate" => identity, "provisioningProfiles" => profiles}
+  end
+
   def delivery_options(upload:)
     {verify_only: false, edit_live: false, use_live_version: false,
      skip_binary_upload: !upload, skip_metadata: !upload, skip_screenshots: !upload,
