@@ -458,7 +458,7 @@ platform :mac do
     notes = File.expand_path(options.fetch(:notes))
     UI.user_error!("Provide reviewed release notes") unless File.file?(notes) && !File.read(notes).strip.empty?
     tag = options.fetch(:tag)
-    WALIReleaseSupport.verify_prerelease_tag!(tag, version: receipt.fetch("version"))
+    WALIReleaseSupport.verify_release_tag!(tag, version: receipt.fetch("version"))
     # Reject verbose HTTP diagnostics above; custom handlers also avoid the
     # default failure path that includes authentication headers.
     fail_api = {"*" => proc { |result| UI.user_error!("GitHub request failed with HTTP #{result[:status]}") }}

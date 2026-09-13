@@ -4,6 +4,45 @@ import XCTest
 @testable import WALITranscoderRuntime
 
 final class WALITranscoderTests: XCTestCase {
+    func testReplyPreservesStillImageGuidanceThroughSecureArchive() throws {
+        let error = MediaPipelineError.unsupportedStillImage
+        let original = error as NSError
+        let reply = WALITranscoderServiceRunner.replyError(error)
+        let data = try NSKeyedArchiver.archivedData(withRootObject: reply, requiringSecureCoding: true)
+        let restored = try XCTUnwrap(NSKeyedUnarchiver.unarchivedObject(ofClass: NSError.self, from: data))
+
+        XCTAssertEqual(restored.domain, original.domain)
+        XCTAssertEqual(restored.code, original.code)
+        XCTAssertEqual(restored.userInfo[NSLocalizedDescriptionKey] as? String, error.errorDescription)
+        XCTAssertEqual(restored.localizedDescription, error.errorDescription)
+    }
+
+    func testReplyPreservesCancellationIdentityThroughSecureArchive() throws {
+        let error = CancellationError()
+        let original = error as NSError
+        let reply = WALITranscoderServiceRunner.replyError(error)
+        let data = try NSKeyedArchiver.archivedData(withRootObject: reply, requiringSecureCoding: true)
+        let restored = try XCTUnwrap(NSKeyedUnarchiver.unarchivedObject(ofClass: NSError.self, from: data))
+
+        XCTAssertEqual(restored.domain, original.domain)
+        XCTAssertEqual(restored.code, original.code)
+        XCTAssertEqual(restored.userInfo as NSDictionary, original.userInfo as NSDictionary)
+    }
+
+    func testReplyPreservesExistingSystemErrorDescriptionAndDetails() throws {
+        let original = NSError(domain: NSCocoaErrorDomain, code: NSUserCancelledError, userInfo: [
+            NSLocalizedDescriptionKey: "The import was cancelled.",
+            NSFilePathErrorKey: "/temporary-fixture/source.png",
+        ])
+        let reply = WALITranscoderServiceRunner.replyError(original)
+        let data = try NSKeyedArchiver.archivedData(withRootObject: reply, requiringSecureCoding: true)
+        let restored = try XCTUnwrap(NSKeyedUnarchiver.unarchivedObject(ofClass: NSError.self, from: data))
+
+        XCTAssertEqual(restored.domain, original.domain)
+        XCTAssertEqual(restored.code, original.code)
+        XCTAssertEqual(restored.userInfo as NSDictionary, original.userInfo as NSDictionary)
+    }
+
     func testRuntimeModuleIsAvailableWithoutAnXPCServiceHost() {
         XCTAssertEqual(
             String(describing: WALITranscoderServiceRunner.self),
@@ -52,9 +91,9 @@ final class WALITranscoderTests: XCTestCase {
                 url: outputURL
             )
             XCTAssertEqual(characteristics.bitDepth, 10, "Expected Main10 output at \(outputURL.lastPathComponent)")
-            XCTAssertEqual(claim.inspection?.bitDepth, 10)
+            XCTAssertEqual(claim.videoInspection?.bitDepth, 10)
             XCTAssertEqual(characteristics.hevcProfileIDC, 2)
-            XCTAssertEqual(claim.inspection?.hevcProfileIDC, 2)
+            XCTAssertEqual(claim.videoInspection?.hevcProfileIDC, 2)
             XCTAssertEqual(
                 characteristics.colorPrimaries,
                 kCVImageBufferColorPrimaries_ITU_R_709_2 as String
@@ -67,7 +106,7 @@ final class WALITranscoderTests: XCTestCase {
                 characteristics.yCbCrMatrix,
                 kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String
             )
-            XCTAssertFalse(claim.inspection?.isHDR ?? true)
+            XCTAssertFalse(claim.videoInspection?.isHDR ?? true)
             XCTAssertFalse(
                 characteristics.hasFrameReordering,
                 "Expected no B-frame reordering at \(outputURL.lastPathComponent)"

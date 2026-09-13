@@ -64,6 +64,91 @@ public actor SupabaseCatalogGateway:
         authSessionStore
     }
 
+    public func categories() async throws -> [CatalogTaxonomySummary] {
+        try await safelyReading {
+            let rows: [TaxonomySummaryDTO] = try await client.from("catalog_categories_v1")
+                .select("id,name,slug").order("sort_order").order("id").limit(101).execute().value
+            guard rows.count <= 100, Set(rows.map(\.id)).count == rows.count else {
+                throw CatalogMappingError.invalidResponse
+            }
+            return try rows.map { try mapper.taxonomy($0) }
+        }
+    }
+
+    public func tags() async throws -> [CatalogTaxonomySummary] {
+        try await safelyReading {
+            let rows: [TaxonomySummaryDTO] = try await client.from("catalog_tags_v1")
+                .select("id,name,slug").order("name").order("id").limit(501).execute().value
+            guard rows.count <= 500, Set(rows.map(\.id)).count == rows.count else {
+                throw CatalogMappingError.invalidResponse
+            }
+            return try rows.map { try mapper.taxonomy($0) }
+        }
+    }
+
+    public func savedWallpapers(cursor: String?) async throws -> CatalogPage {
+        if let cursor { guard cursor.utf8.count <= 2048 else { throw CatalogRequestError.invalidRequest } }
+        struct Parameters: Encodable {
+            let cursor: String?
+            let limit = 24
+            enum CodingKeys: String, CodingKey { case cursor, limit }
+            func encode(to encoder: any Encoder) throws {
+                var values = encoder.container(keyedBy: CodingKeys.self)
+                if let cursor { try values.encode(cursor, forKey: .cursor) }
+                else { try values.encodeNil(forKey: .cursor) }
+                try values.encode(limit, forKey: .limit)
+            }
+        }
+        return try await safelyReading {
+            let page: CatalogPageDTO = try await readCatalog(
+                "my_saved_wallpapers_v2", legacyFunction: "my_saved_wallpapers_v1",
+                params: Parameters(cursor: cursor), legacyType: LegacyCatalogPageDTO.self,
+                mapLegacy: { $0.current }
+            )
+            return try mapper.page(page)
+        }
+    }
+
+    public func catalogPreferences() async throws -> CatalogPreferences {
+        try await safelyReading {
+            let value: CatalogPreferencesDTO = try await client.rpc("catalog_preferences_v1").execute().value
+            return try value.validated()
+        }
+    }
+
+    public func setCatalogPreferences(categoryIDs: [String], ratingCeiling: String,
+                                     personalizationOptOut: Bool, expectedRevision: UInt64,
+                                     idempotencyKey: String) async throws -> CatalogPreferences {
+        guard categoryIDs.count <= 12, Set(categoryIDs).count == categoryIDs.count,
+              ["everyone", "teen", "mature"].contains(ratingCeiling), expectedRevision > 0,
+              expectedRevision <= 9_007_199_254_740_991 else { throw CatalogRequestError.invalidRequest }
+        try categoryIDs.forEach(validateUUID)
+        try validateIdempotencyKey(idempotencyKey)
+        struct Parameters: Encodable {
+            let categoryIDs: [String]
+            let ratingCeiling: String
+            let personalizationOptOut: Bool
+            let expectedRevision: UInt64
+            let idempotencyKey: String
+            enum CodingKeys: String, CodingKey {
+                case categoryIDs = "category_ids", ratingCeiling = "rating_ceiling"
+                case personalizationOptOut = "personalization_opt_out", expectedRevision = "expected_revision"
+                case idempotencyKey = "idempotency_key"
+            }
+        }
+        let parameters = Parameters(categoryIDs: categoryIDs.sorted(), ratingCeiling: ratingCeiling,
+                                    personalizationOptOut: personalizationOptOut,
+                                    expectedRevision: expectedRevision, idempotencyKey: idempotencyKey)
+        return try await safely {
+            let value: CatalogPreferencesDTO = try await client.rpc("set_catalog_preferences_v1", params: parameters)
+                .execute().value
+            let result = try value.validated()
+            guard result.categoryIDs == categoryIDs.sorted(), result.ratingCeiling == ratingCeiling,
+                  result.personalizationOptOut == personalizationOptOut else { throw CatalogMappingError.invalidResponse }
+            return result
+        }
+    }
+
     public func home(locale: String, ratingCeiling: String) async throws -> CatalogHome {
         guard !locale.isEmpty,
               locale.utf8.count <= 35,
@@ -80,13 +165,11 @@ public actor SupabaseCatalogGateway:
             }
         }
         return try await safelyReading {
-            let dto: CatalogHomeDTO = try await client
-                .rpc(
-                    "catalog_home_v1",
-                    params: Parameters(locale: locale, ratingCeiling: ratingCeiling)
-                )
-                .execute()
-                .value
+            let dto: CatalogHomeDTO = try await readCatalog(
+                "catalog_home_v2", legacyFunction: "catalog_home_v1",
+                params: Parameters(locale: locale, ratingCeiling: ratingCeiling),
+                legacyType: LegacyCatalogHomeDTO.self, mapLegacy: { $0.current }
+            )
             return try mapper.home(dto)
         }
     }
@@ -121,25 +204,21 @@ public actor SupabaseCatalogGateway:
             }
         }
         return try await safelyReading {
-            let dto: CatalogPageDTO = try await client
-                .rpc(
-                    "catalog_browse_v1",
-                    params: Parameters(
-                        category: request.category,
-                        tags: request.tags,
-                        sort: request.sort.rawValue,
-                        cursor: request.cursor,
-                        limit: request.limit
-                    )
-                )
-                .execute()
-                .value
+            let dto: CatalogPageDTO = try await readCatalog(
+                "catalog_browse_v2", legacyFunction: "catalog_browse_v1",
+                params: Parameters(
+                    category: request.category, tags: request.tags, sort: request.sort.rawValue,
+                    cursor: request.cursor, limit: request.limit
+                ),
+                legacyType: LegacyCatalogPageDTO.self, mapLegacy: { $0.current }
+            )
             return try mapper.page(dto)
         }
     }
 
     public func search(_ request: CatalogSearchRequest) async throws -> CatalogSearchPage {
         struct Filters: Encodable {
+            let sort: String?
             let categorySlug: String?
             let tagSlugs: [String]
             let contentRatingCeiling: String
@@ -147,6 +226,7 @@ public actor SupabaseCatalogGateway:
             let maximumDurationMilliseconds: UInt64?
 
             enum CodingKeys: String, CodingKey {
+                case sort
                 case categorySlug = "category_slug"
                 case tagSlugs = "tag_slugs"
                 case contentRatingCeiling = "content_rating_ceiling"
@@ -177,24 +257,20 @@ public actor SupabaseCatalogGateway:
             }
         }
         return try await safelyReading {
-            let dto: CatalogSearchPageDTO = try await client
-                .rpc(
-                    "catalog_search_v1",
-                    params: Parameters(
-                        query: request.query,
-                        filters: Filters(
-                            categorySlug: request.category,
-                            tagSlugs: request.tags,
-                            contentRatingCeiling: request.ratingCeiling,
-                            minimumDurationMilliseconds: request.minimumDurationMilliseconds,
-                            maximumDurationMilliseconds: request.maximumDurationMilliseconds
-                        ),
-                        cursor: request.cursor,
-                        limit: request.limit
-                    )
-                )
-                .execute()
-                .value
+            let dto: CatalogSearchPageDTO = try await readCatalog(
+                "catalog_search_v2", legacyFunction: "catalog_search_v1",
+                params: Parameters(
+                    query: request.query,
+                    filters: Filters(
+                        sort: request.sort?.rawValue, categorySlug: request.category, tagSlugs: request.tags,
+                        contentRatingCeiling: request.ratingCeiling,
+                        minimumDurationMilliseconds: request.minimumDurationMilliseconds,
+                        maximumDurationMilliseconds: request.maximumDurationMilliseconds
+                    ),
+                    cursor: request.cursor, limit: request.limit
+                ),
+                legacyType: LegacyCatalogSearchPageDTO.self, mapLegacy: { $0.current }
+            )
             return try mapper.searchPage(dto)
         }
     }
@@ -206,10 +282,11 @@ public actor SupabaseCatalogGateway:
             enum CodingKeys: String, CodingKey { case wallpaperID = "wallpaper_id" }
         }
         return try await safelyReading {
-            let dto: WallpaperDetailDTO = try await client
-                .rpc("catalog_wallpaper_detail_v1", params: Parameters(wallpaperID: wallpaperID))
-                .execute()
-                .value
+            let dto: WallpaperDetailDTO = try await readCatalog(
+                "catalog_wallpaper_detail_v2", legacyFunction: "catalog_wallpaper_detail_v1",
+                params: Parameters(wallpaperID: wallpaperID), legacyType: LegacyWallpaperDetailDTO.self,
+                mapLegacy: { $0.current }
+            )
             return try mapper.detail(dto)
         }
     }
@@ -249,6 +326,7 @@ public actor SupabaseCatalogGateway:
     public func requestInstall(
         wallpaperID: String,
         releaseID: String,
+        mediaKind: CatalogMediaKind,
         expectedWallpaperRevision: UInt64,
         idempotencyKey: String
     ) async throws -> CatalogInstallGrant {
@@ -257,8 +335,10 @@ public actor SupabaseCatalogGateway:
         try validateRevision(expectedWallpaperRevision)
         try validateIdempotencyKey(idempotencyKey)
         let requestID = UUID().uuidString.lowercased()
+        // Select before issuing the mutation; an error never triggers another version.
+        let apiVersion = mediaKind == .video ? "catalog.v1" : "catalog.v2"
         let request = InstallRequestDTO(
-            apiVersion: "catalog.v1",
+            apiVersion: apiVersion,
             requestID: requestID,
             idempotencyKey: idempotencyKey,
             wallpaperID: wallpaperID,
@@ -272,9 +352,13 @@ public actor SupabaseCatalogGateway:
             )
             let payload = try mapper.payload(
                 envelope,
-                apiVersion: "catalog.v1",
+                apiVersion: apiVersion,
                 expectedRequestID: requestID
             )
+            guard (mediaKind == .video && (payload.mediaKind == nil || payload.mediaKind == .video))
+                    || (mediaKind == .still && payload.mediaKind == .still) else {
+                throw CatalogMappingError.invalidResponse
+            }
             guard payload.keyID.utf8.count <= 64,
                   payload.installReceipt.utf8.count <= 512,
                   payload.manifestBody.utf8.count <= 87_384,
@@ -294,7 +378,8 @@ public actor SupabaseCatalogGateway:
                 signatureBase64URL: payload.signature,
                 keyID: payload.keyID,
                 receipt: payload.installReceipt,
-                expiresAt: expiresAt
+                expiresAt: expiresAt,
+                mediaKind: mediaKind
             )
         }
     }
@@ -406,6 +491,10 @@ public actor SupabaseCatalogGateway:
         }
     }
 
+    public func supportedUploadMediaTypes() async throws -> Set<CreatorUploadMediaType> {
+        try await creatorMetadata().supportedUploadMediaTypes
+    }
+
     public func creatorMetadata() async throws -> CreatorMetadata {
         try await safelyReading {
             let dto: CreatorMetadataDTO = try await client
@@ -428,14 +517,16 @@ public actor SupabaseCatalogGateway:
                         requiresSourceURL: value.requirements.requiresSourceURL,
                         requiresAttribution: value.requirements.requiresAttribution,
                         requiresProof: value.requirements.requiresProof
-                    )
+                    ),
+                    termsURL: try validatedOptionalHTTPSURL(value.termsURL)
                 )
             }
             return try CreatorMetadata(
                 categories: categories,
                 tags: tags,
                 licenses: licenses,
-                currentCreatorTermsVersion: dto.currentCreatorTermsVersion
+                currentCreatorTermsVersion: dto.currentCreatorTermsVersion,
+                supportedUploadMediaTypes: try CreatorUploadMediaType.resolveAdvertised(dto.supportedUploadMediaTypes)
             )
         }
     }
@@ -622,6 +713,24 @@ public actor SupabaseCatalogGateway:
         let requestID = UUID().uuidString.lowercased()
         let body = CreatorCompleteUploadRequestDTO(requestID: requestID, request: request)
         return try await invokeCreatorMutation(function: "complete-upload", body: body, requestID: requestID)
+    }
+
+    public func retryProcessing(_ request: CreatorRetryProcessingRequest) async throws -> CreatorMutationResult {
+        let requestID = UUID().uuidString.lowercased()
+        let body = CreatorCommandRequestDTO(
+            apiVersion: "creator.v1", requestID: requestID, idempotencyKey: request.idempotencyKey,
+            action: "retry_processing", payload: .retryProcessing(request)
+        )
+        return try await invokeCreatorMutation(function: "creator-command", body: body, requestID: requestID)
+    }
+
+    public func retryPublication(_ request: CreatorRetryPublicationRequest) async throws -> CreatorMutationResult {
+        let requestID = UUID().uuidString.lowercased()
+        let body = CreatorCommandRequestDTO(
+            apiVersion: "creator.v1", requestID: requestID, idempotencyKey: request.idempotencyKey,
+            action: "retry_publication", payload: .retryPublication(request)
+        )
+        return try await invokeCreatorMutation(function: "creator-command", body: body, requestID: requestID)
     }
 
     public func saveDraft(_ request: CreatorSaveDraftRequest) async throws -> CreatorMutationResult {
@@ -1251,7 +1360,8 @@ public actor SupabaseCatalogGateway:
                 width: facts.width,
                 height: facts.height,
                 frameRate: facts.frameRate,
-                durationMilliseconds: facts.durationMilliseconds
+                durationMilliseconds: facts.durationMilliseconds,
+                mediaKind: facts.mediaKind ?? .video
             )
         }
         let variants = try value.generatedVariants.map { item -> CreatorGeneratedVariant in
@@ -1301,7 +1411,7 @@ public actor SupabaseCatalogGateway:
 
     private func moderationArtifact(_ artifact: CreatorCanonicalArtifactDTO) throws -> CreatorCanonicalArtifact {
         guard let role = CreatorArtifactRole(rawValue: artifact.role),
-              [.poster, .preview, .videoDefault].contains(role),
+              [.poster, .preview, .videoDefault, .imageDefault].contains(role),
               let url = URL(string: artifact.url),
               remoteURLPolicy.allowsSignedModeratorArtifact(url)
         else { throw CatalogMappingError.invalidResponse }
@@ -1446,6 +1556,25 @@ public actor SupabaseCatalogGateway:
             throw CatalogRemoteError(code: "authentication_required", safeMessage: nil, retryable: false)
         }
         return session
+    }
+
+    /// Called only inside safelyReading, retaining its original authentication snapshot.
+    /// A missing V2 function permits one V1 read with identical arguments. No capability
+    /// cache is kept, and transport, authorization and decoding failures never downgrade.
+    private func readCatalog<Value: Decodable & Sendable, Legacy: Decodable & Sendable>(
+        _ function: String,
+        legacyFunction: String,
+        params: some Encodable,
+        legacyType: Legacy.Type,
+        mapLegacy: (Legacy) -> Value
+    ) async throws -> Value {
+        do {
+            return try await client.rpc(function, params: params).execute().value
+        } catch let error as PostgrestError where error.code == "PGRST202" {
+            try Task.checkCancellation()
+            let legacy: Legacy = try await client.rpc(legacyFunction, params: params).execute().value
+            return mapLegacy(legacy)
+        }
     }
 
     private func safelyReading<Value: Sendable>(
@@ -1604,9 +1733,11 @@ private struct InstallGrantDTO: Decodable, Sendable {
     let keyID: String
     let installReceipt: String
     let expiresAt: String
+    let mediaKind: CatalogMediaKind?
 
     enum CodingKeys: String, CodingKey {
         case signature
+        case mediaKind = "media_kind"
         case manifestBody = "manifest_body"
         case metadataBody = "metadata_body"
         case keyID = "key_id"
@@ -1772,6 +1903,7 @@ private struct CreatorAuthorizationDTO: Decodable, Sendable {
 }
 
 private struct CreatorMetadataDTO: Decodable, Sendable {
+    let supportedUploadMediaTypes: [String]?
     let categories: [CreatorTaxonomyOptionDTO]
     let tags: [CreatorTaxonomyOptionDTO]
     let licenses: [CreatorLicenseOptionDTO]
@@ -1779,6 +1911,7 @@ private struct CreatorMetadataDTO: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case categories, tags, licenses
+        case supportedUploadMediaTypes = "supported_upload_media_types"
         case currentCreatorTermsVersion = "current_creator_terms_version"
     }
 }
@@ -1812,6 +1945,12 @@ private struct CreatorLicenseOptionDTO: Decodable, Sendable {
     let name: String
     let code: String
     let requirements: CreatorRightsRequirementsDTO
+    let termsURL: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, code, requirements
+        case termsURL = "terms_url"
+    }
 }
 
 private struct CreatorRightsRequirementsDTO: Codable, Sendable {
@@ -1943,11 +2082,13 @@ private struct CreatorMediaFactsDTO: Decodable, Sendable {
     let codec: String
     let width: Int
     let height: Int
-    let frameRate: Double
-    let durationMilliseconds: UInt64
+    let mediaKind: CatalogMediaKind?
+    let frameRate: Double?
+    let durationMilliseconds: UInt64?
 
     enum CodingKeys: String, CodingKey {
         case container, codec, width, height
+        case mediaKind = "media_kind"
         case frameRate = "frame_rate"
         case durationMilliseconds = "duration_ms"
     }
@@ -2062,20 +2203,60 @@ private struct CreatorCompleteUploadRequestDTO: Encodable, Sendable {
     let idempotencyKey: String
     let uploadSessionID: String
     let expectedSessionRevision: UInt64
+    let draft: CreatorAdmissionDraftDTO
 
     init(requestID: String, request: CreatorCompleteUploadRequest) {
         self.requestID = requestID
         idempotencyKey = request.idempotencyKey
         uploadSessionID = request.uploadSessionID.uuidString.lowercased()
         expectedSessionRevision = request.expectedSessionRevision
+        draft = CreatorAdmissionDraftDTO(draft: request.draft, creatorTermsVersion: request.creatorTermsVersion)
     }
 
     enum CodingKeys: String, CodingKey {
+        case draft
         case apiVersion = "api_version"
         case requestID = "request_id"
         case idempotencyKey = "idempotency_key"
         case uploadSessionID = "upload_session_id"
         case expectedSessionRevision = "expected_session_revision"
+    }
+}
+
+private struct CreatorAdmissionDraftDTO: Encodable, Sendable {
+    let draft: CreatorDraft
+    let creatorTermsVersion: String
+
+    enum CodingKeys: String, CodingKey {
+        case title, description
+        case primaryCategoryID = "primary_category_id"
+        case suggestedTagIDs = "suggested_tag_ids"
+        case contentWarning = "content_warning"
+        case rightsBasis = "rights_basis"
+        case rightsHolder = "rights_holder"
+        case licenseID = "license_id"
+        case sourceURL = "source_url"
+        case attributionText = "attribution_text"
+        case proofObjectIDs = "proof_object_ids"
+        case attestsRights = "attests_rights"
+        case creatorTermsVersion = "creator_terms_version"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(draft.title, forKey: .title)
+        try container.encode(draft.description, forKey: .description)
+        try container.encode(draft.primaryCategoryID.uuidString.lowercased(), forKey: .primaryCategoryID)
+        try container.encode(draft.suggestedTagIDs.map { $0.uuidString.lowercased() }, forKey: .suggestedTagIDs)
+        try container.encode(draft.contentWarning, forKey: .contentWarning)
+        try container.encode(draft.rights.basis.rawValue, forKey: .rightsBasis)
+        try container.encode(draft.rights.rightsHolder, forKey: .rightsHolder)
+        try container.encode(draft.rights.licenseID.uuidString.lowercased(), forKey: .licenseID)
+        try container.encode(draft.rights.sourceURL?.absoluteString, forKey: .sourceURL)
+        try container.encode(draft.rights.attributionText, forKey: .attributionText)
+        try container.encode(draft.rights.proofObjectIDs.map { $0.uuidString.lowercased() }, forKey: .proofObjectIDs)
+        try container.encode(draft.rights.attestsRights, forKey: .attestsRights)
+        try container.encode(creatorTermsVersion, forKey: .creatorTermsVersion)
     }
 }
 
@@ -2127,6 +2308,8 @@ private enum CreatorCommandPayloadDTO: Encodable, Sendable {
     case acceptTerms(expectedSubjectID: String, version: String)
     case saveDraft(CreatorSaveDraftRequest)
     case withdraw(CreatorWithdrawRequest)
+    case retryProcessing(CreatorRetryProcessingRequest)
+    case retryPublication(CreatorRetryPublicationRequest)
 
     enum CodingKeys: String, CodingKey {
         case title, description
@@ -2153,6 +2336,12 @@ private enum CreatorCommandPayloadDTO: Encodable, Sendable {
             try container.encode(expectedSubjectID, forKey: .expectedSubjectID)
             try container.encode(version, forKey: .creatorTermsVersion)
         case let .withdraw(request):
+            try container.encode(request.submissionID.uuidString.lowercased(), forKey: .submissionID)
+            try container.encode(request.expectedRevision, forKey: .expectedRevision)
+        case let .retryProcessing(request):
+            try container.encode(request.submissionID.uuidString.lowercased(), forKey: .submissionID)
+            try container.encode(request.expectedRevision, forKey: .expectedRevision)
+        case let .retryPublication(request):
             try container.encode(request.submissionID.uuidString.lowercased(), forKey: .submissionID)
             try container.encode(request.expectedRevision, forKey: .expectedRevision)
         case let .saveDraft(request):
@@ -2651,5 +2840,107 @@ private extension Data {
             .replacingOccurrences(of: "_", with: "/")
         encoded.append(String(repeating: "=", count: (4 - encoded.count % 4) % 4))
         self.init(base64Encoded: encoded)
+    }
+}
+
+
+// These adapters are used only after an explicit V1 fallback. V2 decoding remains
+// strict about media_kind and typed media; legacy flat facts still pass CatalogMapper.
+private struct LegacyWallpaperSummaryDTO: Decodable, Sendable {
+    let current: WallpaperSummaryDTO
+
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: WallpaperSummaryDTO.CodingKeys.self)
+        guard !c.contains(.mediaKind) else { throw CatalogMappingError.invalidResponse }
+        current = WallpaperSummaryDTO(
+            id: try c.decode(String.self, forKey: .id), slug: try c.decode(String.self, forKey: .slug),
+            title: try c.decode(String.self, forKey: .title),
+            creator: try c.decode(CreatorSummaryDTO.self, forKey: .creator),
+            contentRating: try c.decode(String.self, forKey: .contentRating),
+            primaryCategory: try c.decode(TaxonomySummaryDTO.self, forKey: .primaryCategory),
+            approvedTags: try c.decode([TaxonomySummaryDTO].self, forKey: .approvedTags),
+            poster: try c.decode(ArtifactSummaryDTO.self, forKey: .poster),
+            preview: try c.decode(ArtifactSummaryDTO.self, forKey: .preview),
+            currentReleaseID: try c.decode(String.self, forKey: .currentReleaseID),
+            revision: try c.decode(UInt64.self, forKey: .revision),
+            publishedAt: try c.decode(String.self, forKey: .publishedAt),
+            verifiedInstallCount: try c.decode(UInt64.self, forKey: .verifiedInstallCount),
+            favoriteCount: try c.decode(UInt64.self, forKey: .favoriteCount),
+            saveCount: try c.decode(UInt64.self, forKey: .saveCount)
+        )
+    }
+}
+
+private struct LegacyCatalogPageDTO: Decodable, Sendable {
+    let items: [LegacyWallpaperSummaryDTO]
+    let nextCursor: String?
+    enum CodingKeys: String, CodingKey { case items, nextCursor = "next_cursor" }
+    var current: CatalogPageDTO { .init(items: items.map(\.current), nextCursor: nextCursor) }
+}
+
+private struct LegacyCatalogHomeDTO: Decodable, Sendable {
+    struct Section: Decodable, Sendable {
+        let id: String
+        let title: String
+        let kind: String
+        let cursor: String?
+        let items: [LegacyWallpaperSummaryDTO]
+        var current: HomeSectionDTO {
+            .init(id: id, title: title, kind: kind, cursor: cursor, items: items.map(\.current))
+        }
+    }
+    let sections: [Section]
+    var current: CatalogHomeDTO { .init(sections: sections.map(\.current)) }
+}
+
+private struct LegacyCatalogSearchPageDTO: Decodable, Sendable {
+    let items: [LegacyWallpaperSummaryDTO]
+    let nextCursor: String?
+    let rankingExplanation: RankingExplanationDTO
+    enum CodingKeys: String, CodingKey {
+        case items, nextCursor = "next_cursor", rankingExplanation = "ranking_explanation"
+    }
+    var current: CatalogSearchPageDTO {
+        .init(items: items.map(\.current), nextCursor: nextCursor, rankingExplanation: rankingExplanation)
+    }
+}
+
+private struct LegacyWallpaperDetailDTO: Decodable, Sendable {
+    let wallpaper: LegacyWallpaperSummaryDTO
+    let description: String
+    let edition: UInt64
+    let rightsHolder: String
+    let attributionText: String?
+    let sourceURL: URL?
+    let license: LicenseDTO
+    let durationMilliseconds: UInt64
+    let width: UInt32
+    let height: UInt32
+    let frameRateNumerator: UInt32
+    let frameRateDenominator: UInt32
+    let videoDefault: ArtifactSummaryDTO
+    let related: [LegacyWallpaperSummaryDTO]
+    let isFavorite: Bool
+    let favoriteRevision: UInt64
+    let isSaved: Bool
+    let savedRevision: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case wallpaper, description, edition, license, width, height, related
+        case rightsHolder = "rights_holder", attributionText = "attribution_text", sourceURL = "source_url"
+        case durationMilliseconds = "duration_ms", frameRateNumerator = "frame_rate_numerator"
+        case frameRateDenominator = "frame_rate_denominator", videoDefault = "video_default"
+        case isFavorite = "is_favorite", favoriteRevision = "favorite_revision"
+        case isSaved = "is_saved", savedRevision = "saved_revision"
+    }
+
+    var current: WallpaperDetailDTO {
+        .init(wallpaper: wallpaper.current, description: description, edition: edition,
+              rightsHolder: rightsHolder, attributionText: attributionText, sourceURL: sourceURL, license: license,
+              media: .init(kind: "video", width: width, height: height, artifact: videoDefault,
+                           durationMilliseconds: durationMilliseconds, frameRateNumerator: frameRateNumerator,
+                           frameRateDenominator: frameRateDenominator),
+              related: related.map(\.current), isFavorite: isFavorite, favoriteRevision: favoriteRevision,
+              isSaved: isSaved, savedRevision: savedRevision)
     }
 }

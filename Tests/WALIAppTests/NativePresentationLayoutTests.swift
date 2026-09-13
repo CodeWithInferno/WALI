@@ -1,9 +1,19 @@
 import SwiftUI
 import WALIUI
+import WALIWire
 import XCTest
 @testable import WALIAppRuntime
 
 final class NativePresentationLayoutTests: XCTestCase {
+    @MainActor
+    func testForegroundPauseLabelDoesNotBlameLowPowerWhenPolicyContinues() {
+        let snapshot = AgentSnapshot(revision: .init(rawValue: 1), playback: .suspended,
+            preferences: .init(lowPowerBehavior: .continuePlaying),
+            resourceUsage: .init(isLowPowerModeEnabled: true))
+        XCTAssertEqual(snapshot.presentationValue().renderer.state,
+            .automaticallyPaused(reason: "System activity"))
+    }
+
     func testPosterAspectRatioIsPortraitTwoByThree() {
         XCTAssertEqual(WALIPosterLayout.aspectRatio, 2.0 / 3.0, accuracy: 0.0001)
         XCTAssertEqual(WALIPosterLayout.heroAspectRatio, 16.0 / 9.0, accuracy: 0.0001)

@@ -5,6 +5,14 @@ import XCTest
 @testable import WALIAgentRuntime
 
 final class StoreScopedStorageTests: XCTestCase {
+    private func videoURLs(_ item: AgentLibraryItem) throws -> (master: URL, preview: URL) {
+        guard case let .video(masterURL, previewURL, _) = item.mediaContent else {
+            XCTFail("The known video fixture changed media family.")
+            throw StorageError.unsupportedMedia
+        }
+        return (masterURL, previewURL)
+    }
+
     func testShutdownPersistsInterruptionRejectsLateWorkAndPreservesSource() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -52,10 +60,10 @@ final class StoreScopedStorageTests: XCTestCase {
         let cache = try StorePresentationCache(paths: paths, groupRoot: group, budgetBytes: 12)
         let first = try cache.project(snapshot)
         let projected = try XCTUnwrap(first.items.first)
-        XCTAssertEqual(projected.masterURL, projected.previewURL)
+        XCTAssertEqual(try videoURLs(projected).master, try videoURLs(projected).preview)
         XCTAssertTrue(projected.posterURL.path.hasPrefix(group.path + "/"))
         XCTAssertEqual(first.resourceUsage.storageUsedBytes, 12)
-        XCTAssertEqual(try Data(contentsOf: projected.previewURL), Data(repeating: 2, count: 8))
+        XCTAssertEqual(try Data(contentsOf: videoURLs(projected).preview), Data(repeating: 2, count: 8))
         try FileManager.default.removeItem(at: projected.posterURL)
         try FileManager.default.createSymbolicLink(at: projected.posterURL, withDestinationURL: master)
         _ = try cache.project(snapshot)
@@ -85,14 +93,14 @@ final class StoreScopedStorageTests: XCTestCase {
         let snapshot = AgentSnapshot(revision: .init(rawValue: 0), items: items)
         let cache = try StorePresentationCache(paths: paths, groupRoot: group, budgetBytes: 12)
         let initial = try cache.project(snapshot)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: initial.items[0].previewURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try videoURLs(initial.items[0]).preview.path))
         let selected = try cache.prepare([items[0].id], snapshot: snapshot)
-        XCTAssertEqual(try Data(contentsOf: selected.items[0].previewURL), Data(repeating: 0, count: 4))
+        XCTAssertEqual(try Data(contentsOf: videoURLs(selected.items[0]).preview), Data(repeating: 0, count: 4))
         XCTAssertLessThanOrEqual(selected.resourceUsage.storageUsedBytes, 12)
         XCTAssertThrowsError(try cache.prepare([UUID()], snapshot: snapshot))
         XCTAssertThrowsError(try cache.prepare(Array(repeating: items[0].id, count: 33), snapshot: snapshot))
         XCTAssertThrowsError(try cache.prepare([items[0].id], snapshot: AgentSnapshot(revision: .init(rawValue: 1))))
-        XCTAssertTrue(selected.items.allSatisfy { $0.masterURL.path.hasPrefix(group.path + "/") })
+        XCTAssertTrue(try selected.items.allSatisfy { try videoURLs($0).master.path.hasPrefix(group.path + "/") })
     }
 
     #if WALI_APP_STORE

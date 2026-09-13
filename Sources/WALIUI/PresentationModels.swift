@@ -195,10 +195,19 @@ public struct WALIRendererPresentation: Equatable, Sendable {
 public enum WALIRendererState: Equatable, Sendable {
     case stopped
     case playing
+    case displaying
     case automaticallyPaused(reason: String)
     case userPaused
     case converting(progress: Double?)
     case error(message: String)
+
+    public static func automaticPauseReason(isLowPowerModeEnabled: Bool,
+                                            pausesForLowPowerMode: Bool,
+                                            thermalState: String) -> String {
+        if thermalState == "serious" || thermalState == "critical" { return "Thermal pressure" }
+        if isLowPowerModeEnabled && pausesForLowPowerMode { return "Low Power Mode" }
+        return "System activity"
+    }
 
     public var isPaused: Bool {
         switch self {

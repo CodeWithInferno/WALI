@@ -78,8 +78,12 @@ public final class StorePresentationCache: @unchecked Sendable {
         demandedIDs = Array((itemIDs + demandedIDs.filter { !requested.contains($0) }).prefix(32))
         let result = try projectLocked(snapshot)
         for item in result.items where requested.contains(item.id) {
-            guard FileManager.default.fileExists(atPath: item.previewURL.path),
-                  FileManager.default.fileExists(atPath: item.posterURL.path) else {
+            let required: [URL]
+            switch item.mediaContent {
+            case let .video(_, previewURL, _): required = [previewURL, item.posterURL]
+            case .still: required = [item.posterURL]
+            }
+            guard required.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) else {
                 throw StorageError.ioFailure("The presentation cache cannot fit this preview within the available storage budget.")
             }
         }
@@ -108,8 +112,11 @@ public final class StorePresentationCache: @unchecked Sendable {
         var entries: [Entry] = []
         // Bound both metadata work and cache population for large libraries.
         for (index, item) in ordered.prefix(512).enumerated() {
-            for (kind, source, perFileLimit) in [("poster.heic", item.posterURL, UInt64(4 * 1_024 * 1_024)),
-                                                ("preview.mov", item.previewURL, budgetBytes)] {
+            var mediaFiles = [("poster.heic", item.posterURL, UInt64(4 * 1_024 * 1_024))]
+            if case let .video(_, previewURL, _) = item.mediaContent {
+                mediaFiles.append(("preview.mov", previewURL, budgetBytes))
+            }
+            for (kind, source, perFileLimit) in mediaFiles {
                 if kind == "preview.mov" && ranks[item.id] == nil && !active.contains(item.id) && index >= 8 { continue }
                 guard let bytes = try? sourceBytes(source), bytes > 0, bytes <= perFileLimit, bytes <= remaining else { continue }
                 entries.append(Entry(name: item.id.uuidString.lowercased() + "-" + kind, source: source, bytes: bytes))
@@ -142,11 +149,16 @@ public final class StorePresentationCache: @unchecked Sendable {
         let projected = snapshot.items.map { item in
             let name = item.id.uuidString.lowercased()
             let preview = directory.appendingPathComponent(name + "-preview.mov")
+            let poster = directory.appendingPathComponent(name + "-poster.heic")
+            let media: AgentWallpaperMediaContent
+            switch item.mediaContent {
+            case let .video(_, _, duration): media = .video(masterURL: preview, previewURL: preview, duration: duration)
+            case .still: media = .still(imageURL: poster)
+            }
             return AgentLibraryItem(id: item.id, name: item.name, createdAt: item.createdAt,
-                duration: item.duration, pixelWidth: item.pixelWidth, pixelHeight: item.pixelHeight,
-                masterURL: preview, previewURL: preview,
-                posterURL: directory.appendingPathComponent(name + "-poster.heic"),
-                contentDigest: item.contentDigest, byteCount: item.byteCount, isFavorite: item.isFavorite)
+                mediaContent: media, pixelWidth: item.pixelWidth, pixelHeight: item.pixelHeight,
+                posterURL: poster, contentDigest: item.contentDigest,
+                byteCount: item.byteCount, isFavorite: item.isFavorite)
         }
         let usage = snapshot.resourceUsage
         let sum = usage.storageUsedBytes.addingReportingOverflow(cachedBytes)

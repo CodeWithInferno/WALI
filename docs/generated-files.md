@@ -83,3 +83,13 @@ Local benchmark output, diagnostics, videos, screenshots, and scratch planning
 logs are not source unless a plan explicitly names a sanitized artifact to
 check in. Durable plans belong under `docs/plans/`; curated research belongs
 under `docs/research/`.
+
+## Versioned catalog legal documents
+
+`docs/legal/creator-content-license.md` and `docs/legal/wallpaper-use-license.md`
+produce `supabase/functions/catalog-legal/documents.generated.ts` with
+`python3 scripts/generate-catalog-legal.py`. The checked-in bundle permits a
+credential-free read-only Edge endpoint to serve the exact effective version
+without depending on an unpublished GitHub branch. Run the generator with
+`--check` to verify source equality. Published document versions are immutable;
+a material correction requires a new version and explicit activation.

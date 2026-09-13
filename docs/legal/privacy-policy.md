@@ -1,7 +1,7 @@
 # WALI Privacy Policy
 
 **Version:** 2026-09-01
-**Status:** Draft for counsel review; not yet effective for public UGC
+**Status:** Draft for counsel review; not yet effective
 **Draft revision:** 2026-09-10; production publication requires a new effective
 version and the applicable acceptance updates.
 
@@ -66,11 +66,17 @@ otherwise they are delisted and removed under the applicable policy.
 
 Uploads are treated as hostile, processed without network access, and never
 sent directly to the wallpaper renderer. Users may use local wallpapers without
-creating a marketplace account. The native Account screen implements export
-and deletion request/status UX in the development build. Public enablement
-remains gated on hosted processing, private export retrieval, fresh MFA for
-deletion, session revocation, Auth identity cleanup, production support intake,
-and an exercised end-to-end deployment.
+creating a marketplace account. Production Creator Studio accepts ordinary
+signed-in video submissions after
+acceptance of the effective Creator Content License and an upload-specific
+rights declaration. Eligible media publishes automatically after processing and
+verification; this does not claim human review or establish legal rights.
+
+The native Account screen implements export and deletion request/status UX.
+That is separate from the enabled Creator flow: complete account-operation
+readiness still requires hosted processing, private export retrieval, fresh MFA
+for deletion, session revocation, Auth identity cleanup, production support
+intake, and an exercised end-to-end deployment.
 
 WALI is operated by Pratham Patel. Support and privacy requests may be directed
 to hello@tryclean.ai. This document remains a draft pending the required review

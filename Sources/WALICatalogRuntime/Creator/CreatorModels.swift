@@ -6,6 +6,7 @@ public enum CreatorContractError: String, Error, Sendable, Equatable {
     case rightsIncomplete = "rights_incomplete"
     case creatorTermsStale = "creator_terms_stale"
     case nonCanonicalArtifact = "non_canonical_artifact"
+    case unsupportedUploadFormat = "unsupported_upload_format"
     case invalidRemoteResponse = "invalid_remote_response"
 }
 
@@ -100,6 +101,10 @@ public enum CreatorSubmissionState: String, Codable, CaseIterable, Sendable, Has
     case rejected
     case published
     case withdrawn
+
+    public var awaitsAutomaticPublication: Bool {
+        self == .uploaded || self == .processing || self == .readyForSubmission || self == .approved
+    }
 }
 
 public enum CreatorRightsBasis: String, Codable, CaseIterable, Sendable, Hashable {
@@ -194,6 +199,18 @@ public struct CreatorDraft: Sendable, Hashable {
         self.contentWarning = contentWarning
         self.rights = rights
     }
+
+    public func validateForUpload() throws {
+        guard [.original, .licensed, .publicDomain].contains(rights.basis),
+              rights.proofObjectIDs.isEmpty,
+              rights.basis == .original || rights.sourceURL != nil,
+              title.utf16.count <= 120, description.utf16.count <= 2_000,
+              rights.rightsHolder.utf16.count <= 160,
+              contentWarning.map({ $0.utf16.count <= 500 }) ?? true,
+              rights.attributionText.map({ $0.utf16.count <= 500 }) ?? true else {
+            throw CreatorContractError.invalidRequest
+        }
+    }
 }
 
 public struct CreatorTaxonomyOption: Identifiable, Sendable, Hashable {
@@ -213,16 +230,39 @@ public struct CreatorLicenseOption: Identifiable, Sendable, Hashable {
     public let name: String
     public let code: String
     public let requirements: CreatorRightsRequirements
+    public let termsURL: URL?
 
-    public init(id: UUID, name: String, code: String, requirements: CreatorRightsRequirements) {
+    public init(id: UUID, name: String, code: String, requirements: CreatorRightsRequirements, termsURL: URL? = nil) {
         self.id = id
         self.name = name
         self.code = code
         self.requirements = requirements
+        self.termsURL = termsURL
+    }
+}
+
+public enum CreatorUploadMediaType: String, CaseIterable, Sendable, Hashable {
+    case mp4 = "video/mp4"
+    case quickTime = "video/quicktime"
+    case jpeg = "image/jpeg"
+    case png = "image/png"
+
+    public static let legacyVideo: Set<Self> = [.mp4, .quickTime]
+
+    static func resolveAdvertised(_ values: [String]?) throws -> Set<Self> {
+        guard let values else { return legacyVideo }
+        guard values.count <= 8, Set(values).count == values.count,
+              values.allSatisfy({ value in
+                  (1...64).contains(value.utf8.count)
+                    && value.utf8.allSatisfy { (0x21...0x7e).contains($0) }
+              }) else { throw CreatorContractError.invalidRemoteResponse }
+        // Explicit empty/unknown-only support never falls back to more formats.
+        return Set(values.compactMap(Self.init(rawValue:)))
     }
 }
 
 public struct CreatorMetadata: Sendable, Hashable {
+    public let supportedUploadMediaTypes: Set<CreatorUploadMediaType>
     public let categories: [CreatorTaxonomyOption]
     public let tags: [CreatorTaxonomyOption]
     public let licenses: [CreatorLicenseOption]
@@ -232,7 +272,8 @@ public struct CreatorMetadata: Sendable, Hashable {
         categories: [CreatorTaxonomyOption],
         tags: [CreatorTaxonomyOption],
         licenses: [CreatorLicenseOption],
-        currentCreatorTermsVersion: String
+        currentCreatorTermsVersion: String,
+        supportedUploadMediaTypes: Set<CreatorUploadMediaType> = CreatorUploadMediaType.legacyVideo
     ) throws {
         guard !categories.isEmpty,
               !licenses.isEmpty,
@@ -248,6 +289,7 @@ public struct CreatorMetadata: Sendable, Hashable {
         self.tags = tags
         self.licenses = licenses
         self.currentCreatorTermsVersion = currentCreatorTermsVersion
+        self.supportedUploadMediaTypes = supportedUploadMediaTypes
     }
 }
 
@@ -256,25 +298,28 @@ public struct CreatorMediaFacts: Sendable, Hashable {
     public let codec: String
     public let width: Int
     public let height: Int
-    public let frameRate: Double
-    public let durationMilliseconds: UInt64
+    public let mediaKind: CatalogMediaKind
+    public let frameRate: Double?
+    public let durationMilliseconds: UInt64?
 
     public init(
         container: String,
         codec: String,
         width: Int,
         height: Int,
-        frameRate: Double,
-        durationMilliseconds: UInt64
+        frameRate: Double?,
+        durationMilliseconds: UInt64?,
+        mediaKind: CatalogMediaKind = .video
     ) throws {
         guard CreatorValidation.isBoundedToken(container, maximum: 64),
               CreatorValidation.isBoundedToken(codec, maximum: 64),
               (1...16_384).contains(width),
               (1...16_384).contains(height),
-              frameRate.isFinite,
-              frameRate > 0,
-              frameRate <= 240,
-              (1...600_000).contains(durationMilliseconds)
+              mediaKind == .video
+                ? frameRate.map({ $0.isFinite && $0 > 0 && $0 <= 240 }) == true
+                    && durationMilliseconds.map({ (1...600_000).contains($0) }) == true
+                : frameRate == nil && durationMilliseconds == nil && width <= 7_680 && height <= 7_680
+                    && UInt64(width) * UInt64(height) <= 33_177_600
         else {
             throw CreatorContractError.invalidRemoteResponse
         }
@@ -282,6 +327,7 @@ public struct CreatorMediaFacts: Sendable, Hashable {
         self.codec = codec
         self.width = width
         self.height = height
+        self.mediaKind = mediaKind
         self.frameRate = frameRate
         self.durationMilliseconds = durationMilliseconds
     }
@@ -291,6 +337,7 @@ public enum CreatorArtifactRole: String, Codable, Sendable, Hashable {
     case poster
     case preview
     case videoDefault = "video_default"
+    case imageDefault = "image_default"
 }
 
 public struct CreatorCanonicalArtifact: Identifiable, Sendable, Hashable {
@@ -329,6 +376,9 @@ public struct CreatorCanonicalArtifact: Identifiable, Sendable, Hashable {
             ["image/jpeg", "image/png"].contains(mediaType) && durationMilliseconds == 0
         case .preview, .videoDefault:
             mediaType == "video/mp4" && (1...600_000).contains(durationMilliseconds)
+        case .imageDefault:
+            mediaType == "image/png" && durationMilliseconds == 0 && byteCount <= 134_217_728
+                && width <= 7_680 && height <= 7_680 && UInt64(width) * UInt64(height) <= 33_177_600
         }
         guard validMedia else { throw CreatorContractError.nonCanonicalArtifact }
         id = "\(role.rawValue):\(sha256)"
@@ -522,7 +572,8 @@ public struct CreatorUploadGrantRequest: Sendable, Hashable {
     ) throws {
         let filename = URL(fileURLWithPath: originalFilename).lastPathComponent
         guard (1...1_073_741_824).contains(declaredByteCount),
-              ["video/mp4", "video/quicktime"].contains(containerHint),
+              ["video/mp4", "video/quicktime", "image/jpeg", "image/png"].contains(containerHint),
+              !containerHint.hasPrefix("image/") || declaredByteCount <= 134_217_728,
               filename == originalFilename,
               CreatorValidation.isPlainText(filename, range: 1...255),
               CreatorValidation.isIdempotencyKey(idempotencyKey),
@@ -583,16 +634,53 @@ public struct CreatorCompleteUploadRequest: Sendable, Hashable {
     public let uploadSessionID: UUID
     public let expectedSessionRevision: UInt64
     public let idempotencyKey: String
+    public let draft: CreatorDraft
+    public let creatorTermsVersion: String
 
-    public init(uploadSessionID: UUID, expectedSessionRevision: UInt64, idempotencyKey: String) throws {
+    public init(
+        uploadSessionID: UUID, expectedSessionRevision: UInt64, draft: CreatorDraft,
+        creatorTermsVersion: String, idempotencyKey: String
+    ) throws {
+        try draft.validateForUpload()
         guard expectedSessionRevision > 0,
               CreatorValidation.isRevision(expectedSessionRevision),
+              CreatorValidation.isBoundedToken(creatorTermsVersion, maximum: 64),
               CreatorValidation.isIdempotencyKey(idempotencyKey)
         else {
             throw CreatorContractError.invalidRequest
         }
         self.uploadSessionID = uploadSessionID
         self.expectedSessionRevision = expectedSessionRevision
+        self.idempotencyKey = idempotencyKey
+        self.draft = draft
+        self.creatorTermsVersion = creatorTermsVersion
+    }
+}
+
+public struct CreatorRetryProcessingRequest: Sendable, Hashable {
+    public let submissionID: UUID
+    public let expectedRevision: UInt64
+    public let idempotencyKey: String
+
+    public init(submissionID: UUID, expectedRevision: UInt64, idempotencyKey: String) throws {
+        guard expectedRevision > 0, CreatorValidation.isRevision(expectedRevision),
+              CreatorValidation.isIdempotencyKey(idempotencyKey) else { throw CreatorContractError.invalidRequest }
+        self.submissionID = submissionID
+        self.expectedRevision = expectedRevision
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public struct CreatorRetryPublicationRequest: Sendable, Hashable {
+    public let submissionID: UUID
+    public let expectedRevision: UInt64
+    public let idempotencyKey: String
+
+    public init(submissionID: UUID, expectedRevision: UInt64, idempotencyKey: String) throws {
+        guard expectedRevision > 0, CreatorValidation.isRevision(expectedRevision),
+              CreatorValidation.isIdempotencyKey(idempotencyKey) else { throw CreatorContractError.invalidRequest }
+        self.submissionID = submissionID
+        self.expectedRevision = expectedRevision
         self.idempotencyKey = idempotencyKey
     }
 }

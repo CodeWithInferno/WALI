@@ -17,7 +17,8 @@ struct CreatorTermsReviewView: View {
             Divider()
             actions
         }
-        .frame(minWidth: 620, idealWidth: 680, minHeight: 560, idealHeight: 640)
+        .frame(minWidth: 560, idealWidth: 680, minHeight: 480, idealHeight: 640)
+        .background(Color(nsColor: .windowBackgroundColor))
         .interactiveDismissDisabled(accessState == .acceptingTerms)
     }
 
@@ -26,6 +27,7 @@ struct CreatorTermsReviewView: View {
             Text(document.title)
                 .font(.title2)
                 .fontWeight(.semibold)
+                .accessibilityAddTraits(.isHeader)
             HStack(spacing: 8) {
                 Text("Version \(document.version)")
                 Text("•")
@@ -47,9 +49,10 @@ struct CreatorTermsReviewView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
                 ForEach(document.sections) { section in
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 12) {
                         Text(section.title)
                             .font(.headline)
+                            .accessibilityAddTraits(.isHeader)
                         ForEach(Array(section.paragraphs.enumerated()), id: \.offset) { _, paragraph in
                             Text(paragraph)
                                 .font(.body)
@@ -91,13 +94,13 @@ struct CreatorTermsReviewView: View {
                 Button {
                     onAccept()
                 } label: {
-                    if accessState == .acceptingTerms {
-                        ProgressView()
-                            .controlSize(.small)
-                            .accessibilityLabel("Accepting Creator Terms")
-                    } else {
-                        Text("Accept and Enable Studio")
+                    HStack(spacing: 8) {
+                        if accessState == .acceptingTerms {
+                            ProgressView().controlSize(.small).accessibilityHidden(true)
+                        }
+                        Text(accessState == .acceptingTerms ? "Enabling Studio…" : "Accept and Enable Studio")
                     }
+                    .frame(minWidth: 170)
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)

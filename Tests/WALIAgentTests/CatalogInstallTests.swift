@@ -1,6 +1,8 @@
 import Darwin
 import CryptoKit
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 import WALICatalog
 import WALIEngine
 import WALIModel
@@ -12,6 +14,192 @@ final class CatalogInstallTests: XCTestCase {
     private enum ProbeError: Error {
         case reachedTranscoder
         case unrecognizedContainerExtension
+    }
+
+    func testSignedStillSourceUsesPNGAdoptionAndTypedStillRequest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = try LibraryPaths(root: root.appendingPathComponent("Library"))
+        let store = RuntimeStore(paths: paths)
+        try await store.open()
+        let quarantine = root.appendingPathComponent("CatalogQuarantine")
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        let reference = UUID()
+        let fixture = try CatalogTestFixture(reference: reference, mediaKind: .still)
+        let source = quarantine.appendingPathComponent("\(reference.uuidString.lowercased()).wali-quarantine.png")
+        try fixture.source.write(to: source, options: .withoutOverwriting)
+        let coordinator = CatalogInstallCoordinator(runtimeStore: store, trustStore: fixture.trustStore,
+            revocationStore: CatalogRevocationStore(trustStore: fixture.trustStore), quarantineRoot: quarantine,
+            transcode: { request in
+                XCTAssertEqual(request.mediaKind, .still)
+                XCTAssertEqual(request.sourceURL.lastPathComponent, "catalog-source.png")
+                XCTAssertEqual(request.sourceByteLimit, UInt64(fixture.source.count))
+                XCTAssertEqual(try Data(contentsOf: request.sourceURL), fixture.source)
+                XCTAssertNotEqual(request.sourceURL, source)
+                throw ProbeError.reachedTranscoder
+            })
+        do {
+            _ = try await coordinator.install(fixture.request, idempotencyKey: UUID(),
+                acceptedRevision: EngineRevision(rawValue: 0))
+            XCTFail("Expected the probe to stop before creating claims")
+        } catch ProbeError.reachedTranscoder {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+    }
+
+    func testStillInstallVerifiesRealArtifactsAndReopensAsImageWithCatalogCredit() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = try LibraryPaths(root: root.appendingPathComponent("Library"))
+        let store = RuntimeStore(paths: paths)
+        try await store.open()
+        let quarantine = root.appendingPathComponent("CatalogQuarantine")
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        let reference = UUID()
+        let source = quarantine.appendingPathComponent("\(reference.uuidString.lowercased()).wali-quarantine.png")
+        try Self.writeImage(to: source, type: .png)
+        let fixture = try CatalogTestFixture(source: Data(contentsOf: source), reference: reference,
+            mediaKind: .still, width: 32, height: 16)
+        let coordinator = CatalogInstallCoordinator(runtimeStore: store, trustStore: fixture.trustStore,
+            revocationStore: CatalogRevocationStore(trustStore: fixture.trustStore), quarantineRoot: quarantine,
+            transcode: { request in
+                let master = request.stagingDirectoryURL.appendingPathComponent("master.png")
+                let poster = request.stagingDirectoryURL.appendingPathComponent("poster.heic")
+                try Self.writeImage(to: master, type: .png)
+                try Self.writeImage(to: poster, type: .heic)
+                let claims = try [(TranscoderArtifactKind.masterImage, master), (.posterImage, poster)].map { kind, url in
+                    let bytes = try Data(contentsOf: url)
+                    return TranscoderArtifactClaim(kind: kind, stagedURL: url,
+                        digest: CatalogTestFixture.sha256(bytes), byteCount: UInt64(bytes.count),
+                        media: Self.stillClaim(bytes: UInt64(bytes.count), width: 32, height: 16))
+                }
+                return TranscoderOutput(jobID: request.jobID, attemptGeneration: request.attemptGeneration,
+                    displayName: "Worker name is not catalog metadata", completedAt: Date(),
+                    sourceDigest: CatalogTestFixture.sha256(fixture.source),
+                    sourceMedia: Self.stillClaim(bytes: UInt64(fixture.source.count), width: 32, height: 16),
+                    artifacts: claims)
+            })
+        let installed = try await coordinator.install(fixture.request, idempotencyKey: UUID(),
+            acceptedRevision: EngineRevision(rawValue: 0))
+        guard case let .still(imageURL) = installed.item.mediaContent else { return XCTFail("Still became video") }
+        XCTAssertEqual(installed.item.name, "Catalog Test")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: imageURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        let reopened = RuntimeStore(paths: paths)
+        try await reopened.open()
+        let snapshot = try await reopened.snapshot()
+        let record = try XCTUnwrap(snapshot.library.first)
+        XCTAssertEqual(snapshot.library.count, 1)
+        XCTAssertEqual(record.mediaKind, .still)
+        XCTAssertEqual(record.item.catalogOrigin?.attributionText, "Artwork by WALI Artist")
+        XCTAssertNil(record.durationSeconds)
+        XCTAssertEqual(Set(record.artifacts.map(\.role)), [.masterImage, .posterImage])
+        XCTAssertEqual(try LibraryRecordFactory.makeEngineItem(from: record).mediaContent, installed.item.mediaContent)
+        let duplicate = try await coordinator.install(fixture.request, idempotencyKey: UUID(),
+            acceptedRevision: EngineRevision(rawValue: 0))
+        XCTAssertEqual(duplicate.item.id, installed.item.id)
+        XCTAssertNil(duplicate.completedImport)
+    }
+
+    func testStillCatalogRejectsUnboundWorkerIdentityKindDigestAndDimensions() async throws {
+        for mismatch in 0..<6 {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let paths = try LibraryPaths(root: root.appendingPathComponent("Library"))
+            let store = RuntimeStore(paths: paths)
+            try await store.open()
+            let quarantine = root.appendingPathComponent("CatalogQuarantine")
+            try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+            let reference = UUID()
+            let fixture = try CatalogTestFixture(reference: reference, mediaKind: .still)
+            let source = quarantine.appendingPathComponent("\(reference.uuidString.lowercased()).wali-quarantine.png")
+            try fixture.source.write(to: source)
+            let coordinator = CatalogInstallCoordinator(runtimeStore: store, trustStore: fixture.trustStore,
+                revocationStore: CatalogRevocationStore(trustStore: fixture.trustStore), quarantineRoot: quarantine,
+                transcode: { request in
+                    let kind: WallpaperMediaKind = mismatch == 2 ? .video : .still
+                    let media: TranscoderMediaClaim = kind == .still
+                        ? Self.stillClaim(bytes: UInt64(fixture.source.count) + (mismatch == 4 ? 1 : 0),
+                            width: mismatch == 5 ? 2 : 1, height: 1)
+                        : .init(byteCount: UInt64(fixture.source.count), pixelWidth: 1, pixelHeight: 1,
+                            duration: 1, nominalFrameRate: 30, hasAudio: false, isHDR: false, videoCodec: "hevc")
+                    let claims = TranscoderArtifactKind.required(for: kind).map { role in
+                        TranscoderArtifactClaim(kind: role,
+                            stagedURL: request.stagingDirectoryURL.appendingPathComponent(role.rawValue),
+                            digest: String(repeating: "a", count: 64), byteCount: media.byteCount,
+                            media: kind == .video && role == .posterImage ? nil : media)
+                    }
+                    return TranscoderOutput(jobID: mismatch == 0 ? UUID() : request.jobID,
+                        attemptGeneration: request.attemptGeneration + (mismatch == 1 ? 1 : 0),
+                        displayName: "Untrusted", completedAt: Date(),
+                        sourceDigest: mismatch == 3 ? String(repeating: "b", count: 64) : CatalogTestFixture.sha256(fixture.source),
+                        sourceMedia: media, artifacts: claims)
+                })
+            do {
+                _ = try await coordinator.install(fixture.request, idempotencyKey: UUID(), acceptedRevision: .init(rawValue: 0))
+                XCTFail("Accepted mismatch \(mismatch)")
+            } catch { XCTAssertEqual(error as? CatalogInstallError, .sourceClaimMismatch, "Mismatch \(mismatch)") }
+            let snapshot = try await store.snapshot()
+            XCTAssertTrue(snapshot.library.isEmpty)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: source.path))
+        }
+    }
+
+    func testStillAdoptionEnforcesBoundBeforeOpeningAndRecoveryRecognizesPNG() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = try LibraryPaths(root: root.appendingPathComponent("Library"))
+        let store = RuntimeStore(paths: paths)
+        try await store.open()
+        let quarantine = root.appendingPathComponent("CatalogQuarantine")
+        try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+        let source = quarantine.appendingPathComponent("source.png")
+        let bytes = Data("owned bytes".utf8)
+        try bytes.write(to: source)
+        let digest = try ContentDigest(algorithm: .sha256, value: CatalogTestFixture.sha256(bytes))
+        do {
+            _ = try await store.adoptCatalogQuarantine(source, under: quarantine, expectedDigest: digest,
+                expectedByteCount: 128 * 1_024 * 1_024 + 1, mediaKind: .still)
+            XCTFail("Accepted an oversized image")
+        } catch { XCTAssertEqual(error as? StorageError, .invalidCandidate) }
+        let owned = try await store.adoptCatalogQuarantine(source, under: quarantine,
+            expectedDigest: digest, expectedByteCount: UInt64(bytes.count), mediaKind: .still)
+        _ = try await store.beginImport(sourceURL: owned, sourceBookmark: Data([1]),
+            idempotencyKey: .init(UUID().uuidString.lowercased()), expectedEngineRevision: .init(rawValue: 0))
+        let reopened = RuntimeStore(paths: paths)
+        try await reopened.open()
+        let recovered = try await reopened.recoverCatalogImportsRequiringFreshVerification()
+        XCTAssertEqual(recovered, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: owned.path))
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+    }
+
+    private static func stillClaim(bytes: UInt64, width: UInt32, height: UInt32) -> TranscoderMediaClaim {
+        .still(.init(byteCount: bytes, pixelWidth: width, pixelHeight: height,
+            frameCount: 1, bitsPerComponent: 8, colorSpace: "srgb", hasAlpha: false))
+    }
+
+    private static func writeImage(to url: URL, type: UTType) throws {
+        let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try XCTUnwrap(CGContext(data: nil, width: 32, height: 16,
+            bitsPerComponent: 8, bytesPerRow: 128, space: space,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(try XCTUnwrap(CGColor(colorSpace: space, components: [0.2,0.5,0.8,1])))
+        context.fill(CGRect(x: 0, y: 0, width: 32, height: 16))
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL,
+            type.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(context.makeImage()), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        if type == .png {
+            let bytes = try Data(contentsOf: url)
+            var canonical = Data(bytes.prefix(8)); var offset = 8
+            while offset < bytes.count {
+                let length = bytes[offset..<(offset + 4)].reduce(0) { ($0 << 8) | Int($1) }
+                let kind = String(data: bytes[(offset + 4)..<(offset + 8)], encoding: .ascii)
+                if kind != "eXIf" { canonical.append(bytes[offset..<(offset + length + 12)]) }
+                offset += length + 12
+            }
+            try canonical.write(to: url)
+        }
     }
 
     func testValidSignedSourceReachesSandboxedTranscoderAndQuarantineIsRemoved() async throws {
@@ -350,7 +538,7 @@ private func XCTAssertThrowsErrorAsync(
 
 
 struct CatalogTestFixture {
-    let privateKey: Curve25519.Signing.PrivateKey
+    let signingIdentity: Curve25519.Signing.PrivateKey
     let trustStore: CatalogTrustStore
     let source: Data
     let manifest: Data
@@ -358,9 +546,10 @@ struct CatalogTestFixture {
     let signature: String
     let request: AgentCatalogInstallRequest
 
-    init(source: Data = Data("catalog-source".utf8), reference: UUID = UUID()) throws {
+    init(source: Data = Data("catalog-source".utf8), reference: UUID = UUID(),
+         mediaKind: WallpaperMediaKind = .video, width: UInt32 = 1, height: UInt32 = 1) throws {
         let privateKey = Curve25519.Signing.PrivateKey()
-        self.privateKey = privateKey
+        self.signingIdentity = privateKey
         let keyID = try CatalogKeyID("catalog-test")
         trustStore = try CatalogTrustStore(
             trustedKeys: [try TrustedCatalogSigningKey(
@@ -378,7 +567,8 @@ struct CatalogTestFixture {
         manifest = Data(Self.manifestJSON(
             sourceDigest: sourceDigest,
             sourceByteCount: source.count,
-            metadataDigest: Self.sha256(metadata)
+            metadataDigest: Self.sha256(metadata), mediaKind: mediaKind,
+            width: width, height: height
         ).utf8)
         signature = Self.base64URL(try privateKey.signature(for: manifest))
         request = AgentCatalogInstallRequest(
@@ -401,7 +591,7 @@ struct CatalogTestFixture {
         return AgentCatalogRevocationUpdate(
             revision: 1,
             canonicalBody: body,
-            signatureBase64URL: Self.base64URL(try privateKey.signature(for: body)),
+            signatureBase64URL: Self.base64URL(try signingIdentity.signature(for: body)),
             keyID: "catalog-test"
         )
     }
@@ -411,12 +601,12 @@ struct CatalogTestFixture {
         status: String = "active"
     ) throws -> AgentCatalogTrustTransitionUpdate {
         let body = Data(
-            #"{"schema":"wali.catalog.trust-transition.v1","revision":\#(revision),"issued_at":"2026-09-01T16:00:00Z","keys":[{"key_id":"catalog-test","public_key":"\#(Self.base64URL(privateKey.publicKey.rawRepresentation))","valid_from":"1970-01-01T00:00:00Z","valid_until":"2100-01-01T00:00:00Z","status":"\#(status)"}]}"#.utf8
+            #"{"schema":"wali.catalog.trust-transition.v1","revision":\#(revision),"issued_at":"2026-09-01T16:00:00Z","keys":[{"key_id":"catalog-test","public_key":"\#(Self.base64URL(signingIdentity.publicKey.rawRepresentation))","valid_from":"1970-01-01T00:00:00Z","valid_until":"2100-01-01T00:00:00Z","status":"\#(status)"}]}"#.utf8
         )
         return AgentCatalogTrustTransitionUpdate(
             revision: revision,
             canonicalBody: body,
-            signatureBase64URL: Self.base64URL(try privateKey.signature(for: body)),
+            signatureBase64URL: Self.base64URL(try signingIdentity.signature(for: body)),
             keyID: "catalog-test"
         )
     }
@@ -426,16 +616,26 @@ struct CatalogTestFixture {
     private static func manifestJSON(
         sourceDigest: String,
         sourceByteCount: Int,
-        metadataDigest: String
+        metadataDigest: String,
+        mediaKind: WallpaperMediaKind,
+        width: UInt32, height: UInt32
     ) -> String {
-        "{\"schema\":{\"epoch\":1,\"revision\":0},\"key_id\":\"catalog-test\","
+        let prefix = mediaKind == .still
+            ? "{\"schema\":{\"epoch\":2,\"revision\":0},\"media_kind\":\"still\",\"key_id\":\"catalog-test\","
+            : "{\"schema\":{\"epoch\":1,\"revision\":0},\"key_id\":\"catalog-test\","
+        let masters = mediaKind == .still
+            ? artifact(role: "image_default", digest: sourceDigest, bytes: sourceByteCount, type: "image/png", duration: 0, width: width, height: height)
+            : artifact(role: "preview", digest: String(repeating: "c", count: 64), bytes: 1, type: "video/mp4", duration: 1_000)
+                + "," + artifact(role: "video_default", digest: sourceDigest, bytes: sourceByteCount, type: "video/mp4", duration: 1_000)
+        return prefix
             + "\"wallpaper_id\":\"11111111-1111-4111-8111-111111111111\","
             + "\"release_id\":\"22222222-2222-4222-8222-222222222222\",\"edition\":1,"
             + "\"issued_at\":\"2026-09-01T16:00:00Z\",\"artifacts\":["
-            + artifact(role: "thumbnail", digest: String(repeating: "a", count: 64), bytes: 1, type: "image/png", duration: 0)
+            + artifact(role: "thumbnail", digest: String(repeating: "a", count: 64), bytes: 1,
+                type: mediaKind == .still ? "image/jpeg" : "image/png", duration: 0,
+                width: mediaKind == .still ? 512 : 1, height: mediaKind == .still ? 512 : 1)
             + "," + artifact(role: "poster", digest: String(repeating: "b", count: 64), bytes: 1, type: "image/jpeg", duration: 0)
-            + "," + artifact(role: "preview", digest: String(repeating: "c", count: 64), bytes: 1, type: "video/mp4", duration: 1_000)
-            + "," + artifact(role: "video_default", digest: sourceDigest, bytes: sourceByteCount, type: "video/mp4", duration: 1_000)
+            + "," + masters
             + "],\"metadata_digest\":\"\(metadataDigest)\"}"
     }
 
@@ -444,12 +644,13 @@ struct CatalogTestFixture {
         digest: String,
         bytes: Int,
         type: String,
-        duration: Int
+        duration: Int,
+        width: UInt32 = 1, height: UInt32 = 1
     ) -> String {
         let suffix = role.replacingOccurrences(of: "_", with: "-")
         return "{\"role\":\"\(role)\",\"url\":\"https://catalog.wali.example/\(suffix)\","
             + "\"sha256\":\"\(digest)\",\"byte_count\":\(bytes),\"media_type\":\"\(type)\","
-            + "\"width\":1,\"height\":1,\"duration_ms\":\(duration)}"
+            + "\"width\":\(width),\"height\":\(height),\"duration_ms\":\(duration)}"
     }
 
     static func sha256(_ data: Data) -> String {
@@ -470,7 +671,7 @@ final class CatalogRevocationTests: XCTestCase {
         let retiredStore = try CatalogTrustStore(
             trustedKeys: [try TrustedCatalogSigningKey(
                 id: CatalogKeyID("catalog-test"),
-                publicKey: fixture.privateKey.publicKey.rawRepresentation,
+                publicKey: fixture.signingIdentity.publicKey.rawRepresentation,
                 validFrom: Date(timeIntervalSince1970: 0),
                 validUntil: Date(timeIntervalSince1970: 4_102_444_800),
                 status: .retired
@@ -525,7 +726,7 @@ final class CatalogRevocationTests: XCTestCase {
             revision: update.revision,
             canonicalBody: changedBody,
             signatureBase64URL: CatalogTestFixture.base64URL(
-                try fixture.privateKey.signature(for: changedBody)
+                try fixture.signingIdentity.signature(for: changedBody)
             ),
             keyID: update.keyID
         )
@@ -548,7 +749,7 @@ final class CatalogRevocationTests: XCTestCase {
         let file = root.appendingPathComponent("catalog-trust-transition.json")
         let anchors = [try TrustedCatalogSigningKey(
             id: CatalogKeyID("catalog-test"),
-            publicKey: fixture.privateKey.publicKey.rawRepresentation,
+            publicKey: fixture.signingIdentity.publicKey.rawRepresentation,
             validFrom: Date(timeIntervalSince1970: 0),
             validUntil: Date(timeIntervalSince1970: 4_102_444_800),
             status: .active

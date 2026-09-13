@@ -157,3 +157,22 @@ def test_frame_set_digest_is_content_addressed() -> None:
     value = valid_request()
     expected = hashlib.sha256("".join(item["digest"] for item in value["frames"]).encode()).hexdigest()
     assert len(expected) == 64
+
+
+def test_still_request_requires_version_two_kind_and_one_frame(tmp_path: Path) -> None:
+    value = valid_request()
+    value.update(schema_version=2, media_kind="still", frames=[frame(1)])
+    path = tmp_path / "request.json"
+    write_json(path, value)
+    parsed = load_request(path)
+    assert parsed.schema_version == 2 and parsed.media_kind == "still"
+    assert len(parsed.frames) == 1
+    assert parsed.frame_set_digest == hashlib.sha256(frame(1)["digest"].encode()).hexdigest()
+    for changed in ({"schema_version": 1}, {"media_kind": "video"}, {"frames": [frame(1), frame(2)]}, {"schema_version": True}):
+        write_json(path, value | changed)
+        with pytest.raises(ContractError):
+            load_request(path)
+    del value["media_kind"]
+    write_json(path, value)
+    with pytest.raises(ContractError):
+        load_request(path)

@@ -46,13 +46,7 @@ struct CatalogMapper: Sendable {
         }
         guard value.edition > 0,
               value.edition <= 2_147_483_647,
-              (1...600_000).contains(value.durationMilliseconds),
-              (1...7_680).contains(value.width),
-              (1...4_320).contains(value.height),
-              value.frameRateNumerator > 0,
-              value.frameRateDenominator > 0,
-              Double(value.frameRateNumerator) / Double(value.frameRateDenominator) <= 240,
-              value.videoDefault.role == "video_default",
+              value.media.kind == value.wallpaper.mediaKind,
               validRevision(value.favoriteRevision),
               validRevision(value.savedRevision),
               value.related.count <= 24,
@@ -83,12 +77,7 @@ struct CatalogMapper: Sendable {
                 redistributionAllowed: value.license.redistributionAllowed,
                 termsRevision: value.license.termsRevision
             ),
-            durationMilliseconds: value.durationMilliseconds,
-            width: value.width,
-            height: value.height,
-            frameRateNumerator: value.frameRateNumerator,
-            frameRateDenominator: value.frameRateDenominator,
-            videoDefault: try artifact(value.videoDefault),
+            media: try media(value.media),
             related: try value.related.map(summary),
             isFavorite: value.isFavorite,
             favoriteRevision: value.favoriteRevision,
@@ -157,7 +146,8 @@ struct CatalogMapper: Sendable {
               value.approvedTags.count <= 20,
               value.approvedTags.map(\.slug) == value.approvedTags.map(\.slug).sorted(),
               value.poster.role == "poster",
-              value.preview.role == "preview"
+              (value.mediaKind == "video" && value.preview?.role == "preview")
+                || (value.mediaKind == "still" && value.preview == nil)
         else {
             throw CatalogMappingError.invalidResponse
         }
@@ -171,14 +161,42 @@ struct CatalogMapper: Sendable {
             primaryCategory: try taxonomy(value.primaryCategory),
             approvedTags: try value.approvedTags.map(taxonomy),
             poster: try artifact(value.poster),
-            preview: try artifact(value.preview),
+            preview: try value.preview.map(artifact),
             currentReleaseID: value.currentReleaseID,
             revision: value.revision,
             publishedAt: try exactTimestamp(value.publishedAt),
             verifiedInstallCount: value.verifiedInstallCount,
             favoriteCount: value.favoriteCount,
-            saveCount: value.saveCount
+            saveCount: value.saveCount,
+            mediaKind: value.mediaKind == "still" ? .still : .video
         )
+    }
+
+    private func media(_ value: CatalogMediaDTO) throws -> CatalogWallpaperMedia {
+        let artifact = try artifact(value.artifact)
+        guard value.width == artifact.width, value.height == artifact.height else {
+            throw CatalogMappingError.invalidResponse
+        }
+        switch value.kind {
+        case "still":
+            guard artifact.role == .imageDefault, value.durationMilliseconds == nil,
+                  value.frameRateNumerator == nil, value.frameRateDenominator == nil else {
+                throw CatalogMappingError.invalidResponse
+            }
+            return .still(artifact: artifact)
+        case "video":
+            guard artifact.role == .videoDefault,
+                  let duration = value.durationMilliseconds, (1...600_000).contains(duration),
+                  duration == artifact.durationMilliseconds,
+                  let numerator = value.frameRateNumerator, numerator > 0,
+                  let denominator = value.frameRateDenominator, denominator > 0,
+                  Double(numerator) / Double(denominator) <= 240 else {
+                throw CatalogMappingError.invalidResponse
+            }
+            return .video(artifact: artifact, durationMilliseconds: duration,
+                          frameRateNumerator: numerator, frameRateDenominator: denominator)
+        default: throw CatalogMappingError.invalidResponse
+        }
     }
 
     private func creator(_ value: CreatorSummaryDTO) throws -> CatalogCreatorSummary {
@@ -204,7 +222,7 @@ struct CatalogMapper: Sendable {
         )
     }
 
-    private func taxonomy(_ value: TaxonomySummaryDTO) throws -> CatalogTaxonomySummary {
+    func taxonomy(_ value: TaxonomySummaryDTO) throws -> CatalogTaxonomySummary {
         guard isUUID(value.id), isSlug(value.slug, maximum: 80) else {
             throw CatalogMappingError.invalidResponse
         }

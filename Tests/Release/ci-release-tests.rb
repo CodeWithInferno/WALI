@@ -202,15 +202,30 @@ class CIReleaseTests < Minitest::Test
       FileUtils.mkdir_p(File.join(root, "docs/release/notes"))
       File.write(File.join(root, "Config/Base.xcconfig"), "MARKETING_VERSION = 0.1.0\nCURRENT_PROJECT_VERSION = 1\n")
       File.write(File.join(root, "docs/release/notes/v0.1.0-beta.1.md"), "Reviewed release notes\n")
+      File.write(File.join(root, "docs/release/notes/v0.1.0.md"), "Reviewed stable release notes\n")
       env = {"GITHUB_ACTIONS" => "true", "RUNNER_ENVIRONMENT" => "github-hosted", "GITHUB_REPOSITORY" => S::REPOSITORY, "GITHUB_EVENT_NAME" => "workflow_dispatch", "GITHUB_REF" => "refs/heads/main", "GITHUB_RUN_ATTEMPT" => "1", "GITHUB_RUN_ID" => "123", "GITHUB_SHA" => COMMIT, "GITHUB_WORKSPACE" => root, "WALI_RELEASE_TAG" => "v0.1.0-beta.1"}
       WALIReleaseSupport.stub(:source_commit, COMMIT) do
         S.stub(:committed_notes?, true) do
         assert_equal "0.1.0", S.context(env, root: root).fetch("version")
+        stable = S.context(env.merge("WALI_RELEASE_TAG" => "v0.1.0"), root: root)
+        assert_equal "v0.1.0", stable.fetch("tag")
+        assert_equal "0.1.0", stable.fetch("version")
+        assert_equal "1", stable.fetch("build")
+        assert_equal COMMIT, stable.fetch("source_commit")
+        assert_equal File.join(File.realpath(root), "docs/release/notes/v0.1.0.md"), stable.fetch("notes")
+        ["v0.1.0-", "v0.1.0+build.1", "v0.1.0\n", "v0.1.0-beta/1", "v0.1.0-#{'a' * 94}"].each do |tag|
+          assert_raises(RuntimeError) { S.context(env.merge("WALI_RELEASE_TAG" => tag), root: root) }
+        end
+        File.write(File.join(root, "docs/release/notes/v0.2.0.md"), "Different version\n")
+        assert_raises(RuntimeError) { S.context(env.merge("WALI_RELEASE_TAG" => "v0.2.0"), root: root) }
         {"RUNNER_ENVIRONMENT" => "self-hosted", "GITHUB_REPOSITORY" => "fork/WALI", "GITHUB_REF" => "refs/heads/unreviewed", "GITHUB_EVENT_NAME" => "pull_request", "GITHUB_RUN_ATTEMPT" => "2", "GITHUB_SHA" => "f" * 40, "WALI_RELEASE_TAG" => "v0.1.0;touch /tmp/injected", "ACTIONS_STEP_DEBUG" => "true", "RUNNER_DEBUG" => "1"}.each do |key, value|
           assert_raises(RuntimeError) { S.context(env.merge(key => value), root: root) }
+          assert_raises(RuntimeError) { S.context(env.merge("WALI_RELEASE_TAG" => "v0.1.0").merge(key => value), root: root) }
         end
-        end
+        File.unlink(File.join(root, "docs/release/notes/v0.1.0.md"))
         assert_raises(RuntimeError) { S.context(env.merge("WALI_RELEASE_TAG" => "v0.1.0"), root: root) }
+        end
+        assert_raises(RuntimeError) { S.context(env, root: root) }
         File.unlink(File.join(root, "docs/release/notes/v0.1.0-beta.1.md"))
         assert_raises(RuntimeError) { S.context(env, root: root) }
       end

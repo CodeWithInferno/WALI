@@ -152,6 +152,45 @@ final class ManifestDownloadTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: output), bytes)
     }
 
+    func testPrivateCreatorCacheAcceptsCanonicalStillWithoutChangingPublicRoles() async throws {
+        let bytes = Data("verified canonical PNG bytes".utf8)
+        let source = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let cacheRoot = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try bytes.write(to: source)
+        defer {
+            try? FileManager.default.removeItem(at: source)
+            try? FileManager.default.removeItem(at: cacheRoot)
+        }
+        let remoteURL = try XCTUnwrap(URL(string: "https://catalog.wali.example/image-default.png"))
+        let response = try XCTUnwrap(HTTPURLResponse(
+            url: remoteURL,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Length": "\(bytes.count)"]
+        ))
+        let artifact = try CreatorCanonicalArtifact(
+            role: .imageDefault,
+            url: remoteURL,
+            sha256: SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined(),
+            byteCount: UInt64(bytes.count),
+            mediaType: "image/png",
+            width: 1,
+            height: 1,
+            durationMilliseconds: 0,
+            remoteURLPolicy: CatalogRemoteURLPolicy(supabaseURL: URL(string: "https://project.supabase.co")!, approvedCDNHosts: ["catalog.wali.example"])
+        )
+        let downloader = try CatalogDownloader(
+            transport: FakeDownloadTransport(file: source, response: response),
+            approvedHosts: ["catalog.wali.example"]
+        )
+        let cache = try CatalogPresentationMediaCache(root: cacheRoot, downloader: downloader)
+
+        let output = try await cache.localURL(for: artifact)
+
+        XCTAssertTrue(output.isFileURL)
+        XCTAssertEqual(try Data(contentsOf: output), bytes)
+    }
+
     func testPresentationMediaCacheRejectsOptionalLadderPlaybackRole() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

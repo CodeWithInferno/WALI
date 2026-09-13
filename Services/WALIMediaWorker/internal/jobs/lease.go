@@ -34,6 +34,7 @@ var (
 
 type ProcessSubmission struct {
 	SchemaVersion         uint16                     `json:"schema_version"`
+	MediaKind             string                     `json:"media_kind,omitempty"`
 	AttemptID             string                     `json:"attempt_id"`
 	SubmissionID          string                     `json:"submission_id"`
 	Generation            uint32                     `json:"generation"`
@@ -60,6 +61,8 @@ const (
 )
 
 type Completion struct {
+	SchemaVersion  uint16               `json:"schema_version,omitempty"`
+	MediaKind      string               `json:"media_kind,omitempty"`
 	SourceDigest   string               `json:"source_digest"`
 	Artifacts      []CompletionArtifact `json:"artifacts"`
 	Classification classifier.Result    `json:"classification"`
@@ -172,6 +175,7 @@ type PromotionArtifact struct {
 }
 
 type PromotionJob struct {
+	MediaKind     string              `json:"media_kind,omitempty"`
 	SchemaVersion uint16              `json:"schema_version"`
 	PromotionID   string              `json:"promotion_id"`
 	ReleaseID     string              `json:"release_id"`
@@ -228,6 +232,13 @@ func DecodeProcessSubmission(reader io.Reader, maxBytes int64) (ProcessSubmissio
 	var trailing json.RawMessage
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return ProcessSubmission{}, errors.New("job JSON contains trailing data")
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return ProcessSubmission{}, err
+	}
+	if _, present := fields["media_kind"]; present && job.SchemaVersion == 1 {
+		return ProcessSubmission{}, errors.New("legacy job cannot contain media_kind")
 	}
 	if err := validateJob(job); err != nil {
 		return ProcessSubmission{}, err
@@ -338,6 +349,13 @@ func DecodePromotionJob(reader io.Reader, maxBytes int64) (PromotionJob, error) 
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return PromotionJob{}, errors.New("promotion job contains trailing data")
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return PromotionJob{}, err
+	}
+	if _, present := fields["media_kind"]; present && job.SchemaVersion == 1 {
+		return PromotionJob{}, errors.New("legacy job cannot contain media_kind")
+	}
 	if err := validatePromotionJob(job); err != nil {
 		return PromotionJob{}, err
 	}
@@ -345,41 +363,58 @@ func DecodePromotionJob(reader io.Reader, maxBytes int64) (PromotionJob, error) 
 }
 
 func validatePromotionJob(job PromotionJob) error {
-	if job.SchemaVersion != 1 || !jobIDPattern.MatchString(job.PromotionID) || !jobIDPattern.MatchString(job.ReleaseID) {
+	if ((job.SchemaVersion != 1 || job.MediaKind != "") && (job.SchemaVersion != 2 || job.MediaKind != "still")) || !jobIDPattern.MatchString(job.PromotionID) || !jobIDPattern.MatchString(job.ReleaseID) {
 		return errors.New("promotion identity is invalid")
 	}
-	if len(job.Artifacts) != 4 {
+	required := []string{"thumbnail", "poster", "preview", "video_default"}
+	if job.MediaKind == "still" {
+		required = []string{"thumbnail", "poster", "image_default"}
+	}
+	if len(job.Artifacts) != len(required) {
 		return errors.New("promotion must contain the exact four canonical artifacts")
 	}
 	seen := map[string]bool{}
 	for _, artifact := range job.Artifacts {
-		if seen[artifact.Role] || !containsRole([]string{"thumbnail", "poster", "preview", "video_default"}, artifact.Role) {
+		if seen[artifact.Role] || !containsRole(required, artifact.Role) {
 			return errors.New("promotion artifact role is invalid")
 		}
 		seen[artifact.Role] = true
-		if !jobDigestPattern.MatchString(artifact.Digest) || artifact.ByteCount <= 0 || artifact.ByteCount > 2<<30 {
+		if !jobDigestPattern.MatchString(artifact.Digest) || artifact.ByteCount <= 0 || artifact.ByteCount > 2<<30 || (job.MediaKind == "still" && artifact.ByteCount > 128<<20) {
 			return errors.New("promotion artifact integrity fields are invalid")
 		}
 		if artifact.SourceBucket != "processing-private" || artifact.DestinationBucket != "catalog-public" ||
 			artifact.SourcePath != artifact.DestinationPath || path.Clean(artifact.SourcePath) != artifact.SourcePath {
 			return errors.New("promotion storage boundary is invalid")
 		}
-		expected, err := storage.ImmutablePath(artifact.Digest, artifact.Role, artifact.SourcePath)
+		canonicalRole := artifact.Role
+		// The DB deduplicates artifacts by digest. Equal poster/thumbnail JPEGs may
+		// legitimately share either fixed canonical path; the Begin result still
+		// has to match this exact DB-issued job. Video rules are unchanged.
+		if job.MediaKind == "still" && artifact.MediaType == "image/jpeg" && (artifact.Role == "poster" || artifact.Role == "thumbnail") {
+			switch path.Base(artifact.SourcePath) {
+			case "poster.jpg":
+				canonicalRole = "poster"
+			case "thumbnail.jpg":
+				canonicalRole = "thumbnail"
+			}
+		}
+		expected, err := storage.ImmutablePath(artifact.Digest, canonicalRole, artifact.SourcePath)
 		if err != nil || expected != artifact.SourcePath {
 			return errors.New("promotion immutable path is invalid")
 		}
 		extension := path.Ext(artifact.SourcePath)
-		if !validArtifactMediaType(extension, artifact.MediaType) {
+		if !validArtifactMediaType(extension, artifact.MediaType) || (job.MediaKind == "still" &&
+			((artifact.Role == "image_default" && artifact.MediaType != "image/png") || (artifact.Role != "image_default" && artifact.MediaType != "image/jpeg"))) {
 			return errors.New("promotion artifact media type is invalid")
 		}
 	}
-	return validateRoles(func() []string {
+	return validateRolesForKind(func() []string {
 		roles := make([]string, 0, len(job.Artifacts))
 		for _, artifact := range job.Artifacts {
 			roles = append(roles, artifact.Role)
 		}
 		return roles
-	}())
+	}(), job.MediaKind)
 }
 
 func containsRole(roles []string, role string) bool {
@@ -405,8 +440,8 @@ func validArtifactMediaType(extension, mediaType string) bool {
 }
 
 func validateJob(job ProcessSubmission) error {
-	if job.SchemaVersion != ProcessSubmissionSchemaVersion {
-		return fmt.Errorf("unsupported schema_version %d", job.SchemaVersion)
+	if (job.SchemaVersion != 1 || job.MediaKind != "") && (job.SchemaVersion != 2 || job.MediaKind != "still") {
+		return fmt.Errorf("unsupported processing schema or media kind")
 	}
 	if !jobIDPattern.MatchString(job.AttemptID) || !jobIDPattern.MatchString(job.SubmissionID) {
 		return errors.New("attempt_id and submission_id must be bounded identifiers")
@@ -418,7 +453,7 @@ func validateJob(job ProcessSubmission) error {
 		path.Clean(job.Input.Path) != job.Input.Path {
 		return errors.New("input must use a service-issued uploads-private path")
 	}
-	if job.Input.ByteCount <= 0 || job.Input.ByteCount > 1<<30 {
+	if job.Input.ByteCount <= 0 || job.Input.ByteCount > 1<<30 || (job.MediaKind == "still" && job.Input.ByteCount > 128<<20) {
 		return errors.New("input byte_count is out of bounds")
 	}
 	if job.Input.StorageVersion == "" || len(job.Input.StorageVersion) > 128 ||
@@ -431,7 +466,7 @@ func validateJob(job ProcessSubmission) error {
 	if job.DeadlineAt.IsZero() {
 		return errors.New("deadline_at is required")
 	}
-	if err := validateRoles(job.ExpectedArtifactRoles); err != nil {
+	if err := validateRolesForKind(job.ExpectedArtifactRoles, job.MediaKind); err != nil {
 		return err
 	}
 	if len(job.Extensions) > 16 {
@@ -453,11 +488,15 @@ func validateJob(job ProcessSubmission) error {
 	return nil
 }
 
-func validateRoles(roles []string) error {
-	if len(roles) != 4 {
+func validateRoles(roles []string) error { return validateRolesForKind(roles, "") }
+func validateRolesForKind(roles []string, kind string) error {
+	required := []string{"thumbnail", "poster", "preview", "video_default"}
+	if kind == "still" {
+		required = []string{"thumbnail", "poster", "image_default"}
+	}
+	if len(roles) != len(required) {
 		return errors.New("expected_artifact_roles must contain exactly the four roles in the active media policy")
 	}
-	required := []string{"thumbnail", "poster", "preview", "video_default"}
 	seen := make(map[string]bool, len(roles))
 	for _, role := range roles {
 		if seen[role] {
@@ -486,8 +525,11 @@ func NewSQLAttemptStore(database *sql.DB) (*SQLAttemptStore, error) {
 
 func (s *SQLAttemptStore) Begin(ctx context.Context, job ProcessSubmission, lease Lease) (BeginDisposition, error) {
 	var disposition string
-	err := s.database.QueryRowContext(ctx,
-		`select wali.worker_begin_attempt($1, $2, $3, $4, $5)`,
+	query := `select wali.worker_begin_attempt($1, $2, $3, $4, $5)`
+	if job.MediaKind == "still" {
+		query = `select wali.worker_begin_still_attempt_v2($1, $2, $3, $4, $5)`
+	}
+	err := s.database.QueryRowContext(ctx, query,
 		job.AttemptID, job.SubmissionID, job.Generation, lease.Owner, lease.ExpiresAt,
 	).Scan(&disposition)
 	if err != nil {
@@ -522,7 +564,11 @@ func (s *SQLAttemptStore) AuthorizeStagedArtifact(ctx context.Context, job Proce
 		return false, err
 	}
 	var authorized bool
-	err = s.database.QueryRowContext(ctx, `select wali.worker_authorize_staged_artifact($1, $2, $3, $4::jsonb)`,
+	query := `select wali.worker_authorize_staged_artifact($1, $2, $3, $4::jsonb)`
+	if job.MediaKind == "still" {
+		query = `select wali.worker_authorize_still_artifact_v2($1, $2, $3, $4::jsonb)`
+	}
+	err = s.database.QueryRowContext(ctx, query,
 		job.AttemptID, job.Generation, lease.Owner, payload).Scan(&authorized)
 	return authorized, err
 }
@@ -536,8 +582,11 @@ func (s *SQLAttemptStore) Complete(ctx context.Context, job ProcessSubmission, l
 		return false, errors.New("completion exceeds the bounded database contract")
 	}
 	var current bool
-	err = s.database.QueryRowContext(ctx,
-		`select wali.worker_complete_attempt($1, $2, $3, $4::jsonb)`,
+	query := `select wali.worker_complete_attempt($1, $2, $3, $4::jsonb)`
+	if job.MediaKind == "still" {
+		query = `select wali.worker_complete_still_attempt_v2($1, $2, $3, $4::jsonb)`
+	}
+	err = s.database.QueryRowContext(ctx, query,
 		job.AttemptID, job.Generation, lease.Owner, summary,
 	).Scan(&current)
 	return current, err

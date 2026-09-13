@@ -1,6 +1,6 @@
 # Creator API v1
 
-Status: accepted contract under ADRs 0011, 0014, and 0015. Common envelopes,
+Status: accepted contract under ADRs 0011, 0014, 0015, and 0025. Common envelopes,
 IDs, text normalization, request bounds, idempotency, revision handling, and
 stable errors are defined by `catalog-v1.md`.
 
@@ -9,14 +9,16 @@ submission, processing, and moderation primitives are composed. Creator
 metadata requires a configured current Creator Terms version. Missing service
 configuration is an unavailable creator service, not a failed sign-in; the
 native app preserves this distinction from signed-out, loading, and request
-failure states. Public creator uploads remain gated by the activation
-requirements in `docs/legal/README.md` and production processing readiness.
-Only `original` and `public_domain` rights bases without proof objects are
-accepted. The proof workflow below is reserved and unavailable.
+failure states. Under ADR 0025, verified-email accounts can enroll at ordinary AAL1 and
+publish their own eligible uploads through the durable automatic workflow.
+`original`, `licensed`, and `public_domain` attestations are supported without
+private proof objects. This does not claim to verify legal rights or content
+safety. Production requires the deployed worker, signing configuration, and
+scheduler described in [automatic publication](automatic-publication-v1.md).
 
 ## Authorization and state
 
-Every operation requires an authenticated active account, a current unrevoked
+Every operation requires an authenticated active account with verified email, a current unrevoked
 `creator` role grant, accepted current Creator Terms, and server-side quota
 authorization. An Apple/JWT claim may affect UI presentation but cannot replace
 the database checks.
@@ -27,7 +29,7 @@ the database checks.
 request shape:
 
 ```json
-{"api_version":"creator.v1","request_id":"uuid","idempotency_key":"16-to-64-chars","action":"accept_terms","payload":{"expected_subject_id":"uuid","creator_terms_version":"2026-09-01"}}
+{"api_version":"creator.v1","request_id":"uuid","idempotency_key":"16-to-64-chars","action":"accept_terms","payload":{"expected_subject_id":"uuid","creator_terms_version":"2026-09-12"}}
 ```
 
 `expected_subject_id` is mandatory and is the canonical UUID of the account
@@ -50,25 +52,20 @@ coordinated rollout. Keep creator enrollment and production uploads disabled
 during rollout; apply the database migration, deploy and verify the Edge
 Function, then distribute the matching app before enabling the feature.
 
-Submission transitions are:
+New uploads progress automatically:
 
 ```text
-draft -> uploading -> uploaded -> processing -> ready_for_submission
-                                     |                  |
-                                     v                  v
-                              processing_failed      submitted -> under_review
-                                                            |       |       |
-                                                            v       v       v
-                                             changes_requested approved rejected
-                                                                  |
-                                                                  v
-                                                               published
+uploaded -> processing -> ready_for_submission -> approved -> published
+                  |                                  |
+                  v                                  v
+           processing_failed                 safe retryable error
 ```
 
-`draft` and `changes_requested` may be withdrawn. A creator edit after submit
-creates a new revision and cannot mutate the moderator's reviewed snapshot.
-Replacing media increments `generation`; stale processing completions and stale
-moderation decisions cannot advance the submission.
+The worker must independently verify the current generation before publication
+is queued. `approved` means a recorded system policy decision is waiting for
+immutable promotion/signing; it does not claim a human review. Existing human
+moderation, corrections, withdrawal, reporting and delisting remain available.
+Revision/generation checks prevent stale processing or metadata from publishing.
 
 ## Creator-provided fields
 
@@ -80,11 +77,11 @@ moderation decisions cannot advance the submission.
 | `primary_category_id` | one active controlled category UUID |
 | `suggested_tag_ids` | 0...20 unique active controlled tag UUIDs |
 | `content_warning` | optional NFC plain text, at most 500 characters |
-| `rights_basis` | `original` or `public_domain`; `licensed` and `other` fail closed until proof-object scanning is enabled |
+| `rights_basis` | `original`, `licensed`, or `public_domain`; `other` remains unavailable |
 | `rights_holder` | NFC plain text, 1...160 characters |
 | `license_id` | one active license UUID consistent with the rights basis |
 | `source_url` | conditional HTTPS URL, at most 2,048 characters |
-| `attribution_text` | conditional NFC plain text, at most 1,000 characters |
+| `attribution_text` | conditional NFC plain text, at most 500 characters |
 | rights proof | reserved; rejected until the proof workflow is enabled |
 
 The client never provides a public slug, artifact URL/path/digest, detected
@@ -128,7 +125,8 @@ artifact path. Target is either `{"kind":"new"}` or
 for a creator-owned logical wallpaper.
 
 The function enforces a maximum of two concurrent processing submissions and
-the configured daily quota. It creates an opaque upload session/path and
+24 new durable upload reservations per creator per UTC day; idempotent retries
+do not consume another reservation. It creates an opaque upload session/path and
 returns session ID, 24-hour expiry, TUS endpoint, required resumable headers,
 and a scoped upload token/grant. The path is server generated and not a durable
 public identifier. No service key is returned.
@@ -138,11 +136,20 @@ Additional errors: `creator_role_required`, `creator_terms_required`,
 
 ## `complete-upload`
 
-Request body:
+Request body, at most 32,768 bytes:
 
 ```json
-{"api_version":"creator.v1","request_id":"uuid","idempotency_key":"16-to-64-chars","upload_session_id":"uuid","expected_session_revision":1}
+{"api_version":"creator.v1","request_id":"uuid","idempotency_key":"16-to-64-chars","upload_session_id":"uuid","expected_session_revision":1,"draft":{"title":"My wallpaper","description":"A description.","primary_category_id":"uuid","suggested_tag_ids":[],"content_warning":null,"rights_basis":"original","rights_holder":"Creator name","license_id":"uuid","source_url":null,"attribution_text":"Creator name","proof_object_ids":[],"attests_rights":true,"creator_terms_version":"2026-09-12"}}
 ```
+
+All `draft` keys are required, with explicit null for optional fields. Licensed
+and public-domain work require an HTTPS source. License requirements determine
+required credit. `proof_object_ids` must be empty; attestation must be true.
+`creator_metadata_v1` returns available rights bases and each license's
+`terms_url` for review before attestation. The actual title, category, license,
+rights holder and credit are bound in the same transaction before enqueue.
+Old completion requests missing the draft are rejected; update the native
+client and Edge function together.
 
 The server checks Storage object ownership, exact path, final size, stable
 object state, expiry, and one-time binding. It does not trust client-provided
@@ -164,8 +171,8 @@ listed above. It is allowed in `draft`, `ready_for_submission`, and
 `changes_requested`. Saving requested metadata corrections increments revision,
 resets the rights declaration to pending review, and returns to
 `ready_for_submission` only when the current generation has a completed attempt
-and all four verified artifacts still exist. The creator can then submit the
-new revision for another review. Media replacement requires a new upload
+and all four verified artifacts still exist. The creator can request automatic publication of the corrected revision.
+A prepared decision cannot publish metadata from an earlier snapshot. Media replacement requires a new upload
 session/generation. It never mutates a published release.
 
 Response contains the normalized stored proposal, new revision, generation,
@@ -192,14 +199,14 @@ details, and exploit-sensitive parser output remain private.
 Request body:
 
 ```json
-{"api_version":"creator.v1","request_id":"uuid","idempotency_key":"16-to-64-chars","submission_id":"uuid","expected_revision":4,"expected_generation":2,"creator_terms_version":"2026-09-01"}
+{"api_version":"creator.v1","request_id":"uuid","idempotency_key":"16-to-64-chars","submission_id":"uuid","expected_revision":4,"expected_generation":2,"creator_terms_version":"2026-09-12"}
 ```
 
-The current generation must be `ready_for_submission` with complete canonical
-artifacts, a valid current rights declaration, accepted terms, normalized
-metadata, and no unresolved blocking finding. One transaction freezes the
-review snapshot and enters `submitted`; asynchronous queue claiming enters
-`under_review`. Repeated identical submission returns the same snapshot.
+For a corrected legacy draft, the current generation must have complete
+canonical artifacts, a valid current rights declaration, accepted terms, and
+normalized metadata. The ordinary Creator command returns
+`ready_for_submission` and durably requests automatic publication; no manual
+review action is needed for a newly completed upload.
 
 Additional errors: `submission_not_ready`, `processing_generation_stale`,
 `rights_incomplete`, `rights_terms_stale`, `metadata_incomplete`,
@@ -208,8 +215,7 @@ Additional errors: `submission_not_ready`, `processing_generation_stale`,
 ## Rights proof upload (deferred)
 
 No proof grant, scanner, reviewer fetch, or product UI is enabled in the current
-implementation. Creator commands reject `licensed`, `other`, and every nonempty
-proof-object list with `rights_workflow_unavailable`; clients must not attempt a
+implementation. Creator commands reject `other` and every nonempty proof-object list; clients must not attempt a
 direct `moderation-private` upload.
 
 The reserved contract permits only one-purpose grants for raster PNG/JPEG or
@@ -240,3 +246,45 @@ independently generated paths. Neither raw paths nor future proof paths may
 appear in public API, logs, manifests, download metadata, or titles. Raw media
 is deleted 30 days after a terminal decision; abandoned sessions expire
 earlier. Active legal holds override ordinary deletion and are audited.
+
+## Publication retry
+
+A publication transport failure retains `approved` with a safe error code.
+The server retries automatically with a bounded lease/backoff. After retries
+are exhausted, the owner can issue `creator-command` action
+`retry_publication`, payload `{"submission_id":"uuid","expected_revision":n}`.
+It returns `{submission_id, revision, generation, state}`. It does not bypass
+account, rights, generation, immutable artifact or signing checks. Media-policy
+failure remains `processing_failed` and requires corrected source media.
+
+## Retry failed processing
+
+An ordinary verified-email Creator can send `creator-command` action
+`retry_processing` with exactly `{"submission_id":"uuid","expected_revision":n}`.
+The server accepts only the current owner's `processing_failed` automatic
+submission with a terminal prior attempt, current Creator Terms acceptance,
+unchanged valid rights/license metadata, and the same retained upload object
+version and byte count. A source already queued for deletion or outside its raw
+retention period is unavailable. A retry never accepts replacement source paths,
+credits, rights, claims, or deadlines from the caller.
+
+The response is `{"submission_id":"uuid","revision":n,"generation":n,"state":"processing"}`;
+idempotent replays may add the existing `"replayed":true` marker. Newly issued
+video generations receive a 90-minute budget frozen at their first queue lease.
+Previously issued 20-minute budgets and already-frozen deadlines remain unchanged;
+still generations retain the 20-minute budget. The existing two-processing limit
+still applies, and at most five total generations are allowed. No new upload
+session or daily upload reservation is consumed, and source retention is not extended.
+
+`processing_retry_limit_reached` is a nonretryable 409. Existing
+`processing_capacity_unavailable`, `stale_revision`, `creator_terms_required`,
+`rights_incomplete`, and `upload_changed` errors retain their meanings. Successful
+processing follows the existing automatic verification/publication pipeline.
+
+### Creator upload formats
+
+Clients recognize the optional `supported_upload_media_types` array from `creator_metadata_v1`. If absent or null, supported upload containers are `video/mp4` and `video/quicktime`. A present array contains at most eight distinct printable ASCII strings, each 1...64 bytes. Clients intersect these values with their implemented container support. An explicit empty or unknown-only array enables no uploads; malformed values fail the lookup.
+
+Native Creator refreshes this metadata before opening its file picker and again before requesting a new upload grant. Failed reads never retain a previous positive image capability; in-flight results are bound to the current subject and terms. Existing server grant/admission checks remain authoritative. The field is not catalog install negotiation and does not enable hosted still processing. Local Library image import is independent.
+
+The current pre-still server may omit this field. A later server advertisement of JPEG/PNG must derive from the existing still-intake enablement after the accepted rollout; this native change introduces no new activation flag or server mutation.

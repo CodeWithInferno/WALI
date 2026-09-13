@@ -1,5 +1,7 @@
 import AVFoundation
 import CoreVideo
+import ImageIO
+import UniformTypeIdentifiers
 import Darwin
 import WALIEngine
 import XCTest
@@ -9,6 +11,30 @@ import WALILockScreenWire
 @testable import WALIAgentRuntime
 
 final class ContentStorageTrustBoundaryTests: XCTestCase {
+    func testAgentAcceptsExistingFourKVideoPoster() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".heic")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeAgentPoster(to: url, width: 3_840, height: 2_160)
+        let media = try await ContentStorage.verifyMedia(at: url, kind: .heicImage)
+        XCTAssertEqual(media.pixelSize.width, 3_840)
+        XCTAssertEqual(media.pixelSize.height, 2_160)
+        XCTAssertNil(media.durationSeconds)
+    }
+
+    func testOversizedVideoPosterIsRejectedBeforeRasterDecode() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".heic")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try writeAgentPoster(to: url, width: 8_192, height: 4_096)
+        var decodeAttempted = false
+        XCTAssertThrowsError(try ContentStorage.verifyHEICImage(at: url) { _ in
+            decodeAttempted = true
+            return nil
+        }) { error in
+            XCTAssertEqual(error as? StorageError, .unsupportedMedia)
+        }
+        XCTAssertFalse(decodeAttempted, "Pixel bounds must reject the header before ImageIO raster allocation")
+    }
+
     func testAgentRejectsUntrustedMalformedMain10Metadata() {
         let valid = makeAgentMain10Configuration()
         XCTAssertTrue(ContentStorage.isAerialMain10(
@@ -295,4 +321,17 @@ private func makeAgentMain10Configuration() -> Data {
     configuration[28] = 1
     configuration[29] = 2
     return configuration
+}
+
+private func writeAgentPoster(to url: URL, width: Int, height: Int) throws {
+    let colorSpace = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+    let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height,
+        bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+    context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.6, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    let image = try XCTUnwrap(context.makeImage())
+    let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(url as CFURL, UTType.heic.identifier as CFString, 1, nil))
+    CGImageDestinationAddImage(destination, image, nil)
+    XCTAssertTrue(CGImageDestinationFinalize(destination))
 }

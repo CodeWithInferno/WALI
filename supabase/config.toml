@@ -94,6 +94,9 @@ inspector_port = 8083
 # Gateway JWT verification is deliberately disabled because every mutation
 # handler validates the bearer token against GoTrue before parsing claims.
 # The catalog security-state endpoint is intentionally signed-out/public.
+[functions.automatic-publication]
+# Dedicated high-entropy scheduler credential, validated before any database call.
+verify_jwt = false
 [functions.admin-role-grant]
 verify_jwt = false
 [functions.catalog-security-state]
@@ -136,3 +139,6 @@ s3_host = "env(S3_HOST)"
 s3_region = "env(S3_REGION)"
 s3_access_key = "env(S3_ACCESS_KEY)"
 s3_secret_key = "env(S3_SECRET_KEY)"
+
+[functions.catalog-legal]
+verify_jwt = false

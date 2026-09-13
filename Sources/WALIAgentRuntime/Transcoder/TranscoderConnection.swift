@@ -1,5 +1,30 @@
+import Darwin
 import Foundation
 import WALIWire
+
+enum LocalImportTranscoderRequestFactory {
+    static func make(jobID: UUID, attemptGeneration: UInt64, sourceBookmark: Data,
+                     sourceURL: URL, stagingDirectoryURL: URL) throws -> TranscoderRequest {
+        let input = open(sourceURL.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard input >= 0 else { throw WALIAgentRuntimeError.invalidImportState }
+        defer { close(input) }
+        var info = stat()
+        guard fstat(input, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else {
+            throw WALIAgentRuntimeError.invalidImportState
+        }
+        var header = [UInt8](repeating: 0, count: 8)
+        let count = header.withUnsafeMutableBytes { read(input, $0.baseAddress, $0.count) }
+        guard count >= 0 else { throw WALIAgentRuntimeError.invalidImportState }
+        // This bounded signature probe only selects the expected worker path.
+        // The private worker still validates the entire source and rejects a
+        // changed, malformed or unsupported file independently.
+        let png = count == 8 && header == [137,80,78,71,13,10,26,10]
+        let jpeg = count >= 3 && header.prefix(3).elementsEqual([255,216,255])
+        return TranscoderRequest(jobID: jobID, attemptGeneration: attemptGeneration,
+            sourceBookmark: sourceBookmark, sourceURL: sourceURL,
+            stagingDirectoryURL: stagingDirectoryURL, mediaKind: png || jpeg ? .still : .video)
+    }
+}
 
 public enum TranscoderConnectionError: LocalizedError {
     case invalidProxy
@@ -25,6 +50,7 @@ public extension TranscoderArtifactClaim {
         case .masterVideo: .masterVideo
         case .previewVideo: .previewVideo
         case .posterImage: .posterImage
+        case .masterImage: .masterImage
         }
     }
 
@@ -32,6 +58,7 @@ public extension TranscoderArtifactClaim {
         switch kind {
         case .masterVideo, .previewVideo: .hevcVideo
         case .posterImage: .heicImage
+        case .masterImage: .pngImage
         }
     }
 }
@@ -130,7 +157,8 @@ public actor TranscoderConnection {
         #endif
         let output = try TranscoderWireCodec.decodeOutput(from: responseData)
         guard output.jobID == request.jobID,
-              output.attemptGeneration == request.attemptGeneration else {
+              output.attemptGeneration == request.attemptGeneration,
+              output.mediaKind == request.mediaKind else {
             throw TranscoderConnectionError.responseMismatch
         }
         emitter.emit(TranscoderProgress(

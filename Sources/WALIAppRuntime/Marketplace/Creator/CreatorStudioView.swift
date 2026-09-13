@@ -11,11 +11,14 @@ public struct CreatorStudioView: View {
     private let accessState: MarketplaceCreatorAccessState
     private let lastFailureCode: String?
     private let onAcceptTerms: () -> Void
+    private let onPublished: () -> Void
     private let editor: (CreatorSubmission) -> AnyView
 
     @State private var isImporting = false
+    @State private var isPreparingUpload = false
     @State private var isReviewingTerms = false
     @State private var uploadProblem: String?
+    @State private var pendingSource: PendingSource?
     @Environment(\.scenePhase) private var scenePhase
 
     public init(
@@ -27,6 +30,7 @@ public struct CreatorStudioView: View {
         accessState: MarketplaceCreatorAccessState,
         lastFailureCode: String? = nil,
         onAcceptTerms: @escaping () -> Void,
+        onPublished: (() -> Void)? = nil,
         @ViewBuilder editor: @escaping (CreatorSubmission) -> some View
     ) {
         self.model = model
@@ -37,6 +41,7 @@ public struct CreatorStudioView: View {
         self.accessState = accessState
         self.lastFailureCode = lastFailureCode
         self.onAcceptTerms = onAcceptTerms
+        self.onPublished = onPublished ?? {}
         self.editor = { AnyView(editor($0)) }
     }
 
@@ -55,7 +60,7 @@ public struct CreatorStudioView: View {
         }
         .fileImporter(
             isPresented: $isImporting,
-            allowedContentTypes: [.mpeg4Movie, .quickTimeMovie],
+            allowedContentTypes: supportedContentTypes,
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -63,7 +68,7 @@ public struct CreatorStudioView: View {
                 if let url = urls.first { beginUpload(url) }
             case let .failure(error):
                 if (error as? CocoaError)?.code != .userCancelled {
-                    uploadProblem = "This video couldn’t be opened. Choose a readable MP4 or QuickTime file and try again."
+                    uploadProblem = "This file couldn’t be opened. Choose a readable \(supportedFormatNames) file and try again."
                 }
             }
         }
@@ -77,6 +82,31 @@ public struct CreatorStudioView: View {
                     onCancel: { isReviewingTerms = false }
                 )
             }
+        }
+        .sheet(item: $pendingSource) { source in
+            CreatorNewUploadForm(
+                fileName: source.url.lastPathComponent, categories: categories, tags: tags, licenses: licenses,
+                currentTermsVersion: model.authorization.currentCreatorTermsVersion,
+                onUpload: { draft in
+                    guard model.canUseCreatorStudio, source.subjectID == model.authorization.subjectID else {
+                        pendingSource = nil
+                        return
+                    }
+                    upload.start(fileURL: source.url, declaredByteCount: source.byteCount,
+                                 containerHint: source.containerHint, draft: draft,
+                                 creatorTermsVersion: model.authorization.currentCreatorTermsVersion)
+                    pendingSource = nil
+                },
+                onCancel: { pendingSource = nil }
+            )
+        }
+        .onChange(of: model.authorization.subjectID) { _, _ in
+            pendingSource = nil
+            isImporting = false
+            isReviewingTerms = false
+        }
+        .onChange(of: model.submissions.filter { $0.state == .published }.map(\.id)) { old, new in
+            if !Set(new).subtracting(old).isEmpty { onPublished() }
         }
         .onChange(of: accessState) { _, newState in
             if newState == .ready, model.canUseCreatorStudio {
@@ -98,12 +128,12 @@ public struct CreatorStudioView: View {
                 await model.refreshProcessingSubmissions()
             }
         }
-        .alert("Couldn’t Open Video", isPresented: Binding(
+        .alert("Couldn’t Prepare Upload", isPresented: Binding(
             get: { uploadProblem != nil }, set: { if !$0 { uploadProblem = nil } }
         )) {
             Button("OK", role: .cancel) { uploadProblem = nil }
         } message: {
-            Text(uploadProblem ?? "Choose another video and try again.")
+            Text(uploadProblem ?? "Choose another wallpaper file and try again.")
         }
     }
 
@@ -178,7 +208,7 @@ public struct CreatorStudioView: View {
                 ContentUnavailableView {
                     Label("Upload your first wallpaper", systemImage: "sparkles.rectangle.stack")
                 } description: {
-                    Text("Upload a video, add its details, and submit it for review.")
+                    Text("Choose a \(supportedFormatNames) file, add its details and credits, and publish it after automatic verification.")
                 } actions: {
                     uploadWallpaperButton
                         .controlSize(.large)
@@ -230,7 +260,9 @@ public struct CreatorStudioView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(submission.draft?.title ?? "Untitled wallpaper")
                             .font(.headline)
-                        Text(submission.wallpaperStatus?.creatorRestrictionLabel ?? submission.state.displayName)
+                        Text(submission.wallpaperStatus?.creatorRestrictionLabel
+                             ?? (submission.state == .approved && submission.processing?.safeErrorCode != nil
+                                 ? "Publishing needs another attempt" : submission.state.displayName))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -246,11 +278,16 @@ public struct CreatorStudioView: View {
                 .padding(.vertical, 4)
             }
             .contextMenu {
-                if submission.state == .processingFailed {
-                    Button("Upload Another Video", systemImage: "square.and.arrow.up") {
-                        isImporting = true
+                if submission.state == .approved, submission.processing?.safeErrorCode != nil {
+                    Button("Retry Publishing", systemImage: "arrow.clockwise") {
+                        Task { await model.retryPublication(submission) }
                     }
-                    .disabled(uploadIsActive)
+                }
+                if submission.state == .processingFailed {
+                    Button("Upload Another Wallpaper", systemImage: "square.and.arrow.up") {
+                        requestImport()
+                    }
+                    .disabled(uploadIsActive || isPreparingUpload)
                 }
                 if submission.state.canWithdraw {
                     Button("Withdraw", systemImage: "xmark.circle", role: .destructive) {
@@ -264,10 +301,11 @@ public struct CreatorStudioView: View {
     }
 
     private var uploadWallpaperButton: some View {
-        Button("Upload Wallpaper", systemImage: "square.and.arrow.up") {
-            isImporting = true
+        Button(isPreparingUpload ? "Checking Upload Formats…" : "Upload Wallpaper", systemImage: "square.and.arrow.up") {
+            requestImport()
         }
-        .disabled(!model.canUseCreatorStudio || uploadIsActive)
+        .disabled(!model.canUseCreatorStudio || uploadIsActive || isPreparingUpload)
+        .help("Supported uploads: \(supportedFormatNames)")
     }
 
     private var uploadIsActive: Bool {
@@ -325,29 +363,46 @@ public struct CreatorStudioView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.regularMaterial)
         case let .processing(result):
-            let submissionState = model.submissions.first(where: { $0.id == result.submissionID })?.state
+            let submission = model.submissions.first(where: { $0.id == result.submissionID })
+            let submissionState = submission?.state
             HStack {
                 if submissionState == .processingFailed {
-                    Label("This video couldn’t be prepared.", systemImage: "exclamationmark.triangle")
+                    Label("This wallpaper couldn’t be prepared.", systemImage: "exclamationmark.triangle")
                     Spacer()
-                    Button("Upload Another Video") { isImporting = true }
+                    if let submission {
+                        Button("Retry Processing") { Task { await model.retryProcessing(submission) } }
+                    }
+                } else if let submission, submissionState == .approved, submission.processing?.safeErrorCode != nil {
+                    Label("Publishing needs another attempt.", systemImage: "exclamationmark.triangle")
+                    Spacer()
+                    Button("Retry Publishing") { Task { await model.retryPublication(submission) } }
                 } else {
                     Label(
-                        submissionState == .readyForSubmission
-                            ? "Your wallpaper is ready. Open the submission to add its details."
-                            : "Upload complete. Open the submission for its latest status.",
-                        systemImage: "checkmark.circle.fill"
+                        submissionState == .published
+                            ? "Published. Your wallpaper is available in the catalog."
+                            : "Upload complete. Processing and publication continue even if you close WALI.",
+                        systemImage: submissionState == .published ? "checkmark.circle.fill" : "gearshape.2"
                     )
                 }
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.regularMaterial)
-        case .failed:
-            Label("Upload couldn’t be completed. Your source file is unchanged. Choose the video again to retry.", systemImage: "exclamationmark.triangle")
-                .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.regularMaterial)
+        case let .failed(code):
+            HStack {
+                Label([CreatorContractError.unsupportedUploadFormat.rawValue, "still_intake_disabled"].contains(code)
+                      ? "This format is not available for publishing. Choose a \(supportedFormatNames) file and try again."
+                      : upload.canRetry
+                      ? "Upload couldn’t be completed. Your source file and entered details are preserved."
+                      : (code == CreatorUploadError.sessionExpired.rawValue
+                         ? "This upload expired. Choose the source again to start a new upload."
+                         : "This upload can’t continue. Check the source and details, then start another upload."),
+                      systemImage: "exclamationmark.triangle")
+                Spacer()
+                if upload.canRetry { Button("Retry Upload") { upload.retry() } }
+                else { Button("Choose Wallpaper") { requestImport() } }
+                Button("Cancel", role: .destructive) { upload.cancel() }
+            }.padding().frame(maxWidth: .infinity, alignment: .leading).background(.regularMaterial)
         case .restricted:
             Label("Creator access expired. Sign in again before resuming.", systemImage: "lock")
                 .padding()
@@ -358,22 +413,90 @@ public struct CreatorStudioView: View {
         }
     }
 
+    private var supportedContentTypes: [UTType] {
+        CreatorUploadMediaType.allCases.filter { upload.supportedMediaTypes.contains($0) }.map {
+            switch $0 {
+            case .mp4: .mpeg4Movie
+            case .quickTime: .quickTimeMovie
+            case .jpeg: .jpeg
+            case .png: .png
+            }
+        }
+    }
+
+    private var supportedFormatNames: String {
+        let names = CreatorUploadMediaType.allCases.filter { upload.supportedMediaTypes.contains($0) }.map {
+            switch $0 {
+            case .mp4: "MP4"
+            case .quickTime: "QuickTime"
+            case .jpeg: "JPEG"
+            case .png: "PNG"
+            }
+        }
+        return names.isEmpty ? "supported wallpaper" : names.joined(separator: ", ")
+    }
+
+    private func requestImport() {
+        guard model.canUseCreatorStudio, !uploadIsActive, !isPreparingUpload else { return }
+        let subject = model.authorization.subjectID
+        let terms = model.authorization.currentCreatorTermsVersion
+        isPreparingUpload = true
+        Task { @MainActor in
+            defer { isPreparingUpload = false }
+            do {
+                let formats = try await upload.refreshSupportedMediaTypes()
+                guard model.canUseCreatorStudio, model.authorization.subjectID == subject,
+                      model.authorization.currentCreatorTermsVersion == terms else { return }
+                guard !formats.isEmpty else {
+                    uploadProblem = "Uploads are temporarily unavailable. Try again later."
+                    return
+                }
+                isImporting = true
+            } catch is CancellationError {
+                return
+            } catch {
+                guard model.authorization.subjectID == subject else { return }
+                uploadProblem = "Supported upload formats couldn’t be checked. Try again when the service is available."
+            }
+        }
+    }
+
     private func beginUpload(_ url: URL) {
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
-              let fileSize = values.fileSize,
-              fileSize > 0
-        else {
-            uploadProblem = "This video is empty or can’t be read. Choose another MP4 or QuickTime file."
+        let hint: String
+        switch url.pathExtension.lowercased() {
+        case "png": hint = "image/png"
+        case "jpg", "jpeg": hint = "image/jpeg"
+        case "mov": hint = "video/quicktime"
+        case "mp4", "m4v": hint = "video/mp4"
+        default:
+            uploadProblem = "Choose a \(supportedFormatNames) file."
             return
         }
-        let hint = url.pathExtension.lowercased() == "mov" ? "video/quicktime" : "video/mp4"
-        upload.start(
-            fileURL: url,
-            declaredByteCount: UInt64(fileSize),
-            containerHint: hint
-        )
+        guard let format = CreatorUploadMediaType(rawValue: hint), upload.supportedMediaTypes.contains(format) else {
+            uploadProblem = "This format is not available for publishing. Choose a \(supportedFormatNames) file."
+            return
+        }
+        let limit = hint.hasPrefix("image/") ? 134_217_728 : 1_073_741_824
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+              values.isRegularFile == true, let fileSize = values.fileSize, (1...limit).contains(fileSize)
+        else {
+            uploadProblem = hint.hasPrefix("image/")
+                ? "Choose a readable JPEG or PNG no larger than 128 MB."
+                : "Choose a readable MP4 or QuickTime file no larger than 1 GB."
+            return
+        }
+        pendingSource = PendingSource(url: url, byteCount: UInt64(fileSize), containerHint: hint,
+                                      subjectID: model.authorization.subjectID)
+    }
+
+    private struct PendingSource: Identifiable {
+        let id = UUID()
+        let url: URL
+        let byteCount: UInt64
+        let containerHint: String
+        let subjectID: String
     }
 }
 
@@ -385,11 +508,11 @@ extension CreatorSubmissionState {
         case .uploaded: "Uploaded"
         case .processing: "Processing"
         case .processingFailed: "Processing failed"
-        case .readyForSubmission: "Ready to submit"
+        case .readyForSubmission: "Preparing publication"
         case .submitted: "Submitted"
         case .underReview: "Under review"
         case .changesRequested: "Changes requested"
-        case .approved: "Approved"
+        case .approved: "Publishing"
         case .rejected: "Rejected"
         case .published: "Published"
         case .withdrawn: "Withdrawn"

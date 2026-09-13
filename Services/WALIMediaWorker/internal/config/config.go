@@ -17,13 +17,18 @@ var (
 	imagePattern      = regexp.MustCompile(`^[a-z0-9][a-z0-9./:_-]{0,191}@sha256:[a-f0-9]{64}$`)
 )
 
-const WorkerDatabaseRole = "wali_worker"
+const (
+	WorkerDatabaseRole         = "wali_worker"
+	StorageAuthStatic          = "static"
+	StorageAuthDatabaseRenewal = "database_renewal"
+)
 
 type Config struct {
 	DatabaseURL           string
 	StorageURL            string
 	StoragePublishableKey string
 	StorageWorkerToken    string
+	StorageAuthMode       string
 	WorkerID              string
 	QueueName             string
 	ScratchRoot           string
@@ -32,6 +37,7 @@ type Config struct {
 	VerifierImage         string
 	ClassifierImage       string
 	MediaPolicyDigest     string
+	StillPolicyDigest     string
 	HealthSocket          string
 	VisibilityTimeout     time.Duration
 	RetryDelay            time.Duration
@@ -45,10 +51,24 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("environment reader is required")
 	}
 	required := []string{
-		"WALI_DATABASE_URL", "WALI_STORAGE_URL", "WALI_STORAGE_PUBLISHABLE_KEY", "WALI_STORAGE_WORKER_TOKEN",
+		"WALI_DATABASE_URL", "WALI_STORAGE_URL", "WALI_STORAGE_PUBLISHABLE_KEY",
 		"WALI_WORKER_ID", "WALI_QUEUE_NAME", "WALI_SCRATCH_ROOT",
 		"WALI_PODMAN_PATH", "WALI_MEDIA_IMAGE", "WALI_VERIFIER_IMAGE", "WALI_MEDIA_POLICY_DIGEST",
 		"WALI_HEALTH_SOCKET",
+	}
+	authMode := getenv("WALI_STORAGE_AUTH_MODE")
+	if authMode == "" {
+		authMode = StorageAuthStatic
+	}
+	switch authMode {
+	case StorageAuthStatic:
+		required = append(required, "WALI_STORAGE_WORKER_TOKEN")
+	case StorageAuthDatabaseRenewal:
+		if getenv("WALI_STORAGE_WORKER_TOKEN") != "" {
+			return Config{}, errors.New("database renewal cannot be mixed with a static Storage token")
+		}
+	default:
+		return Config{}, errors.New("WALI_STORAGE_AUTH_MODE is invalid")
 	}
 	values := make(map[string]string, len(required))
 	for _, key := range required {
@@ -68,8 +88,10 @@ func Load(getenv func(string) string) (Config, error) {
 	if err := validateStorageURL(values["WALI_STORAGE_URL"]); err != nil {
 		return Config{}, fmt.Errorf("WALI_STORAGE_URL is invalid: %w", err)
 	}
-	if err := validateWorkerToken(values["WALI_STORAGE_WORKER_TOKEN"], values["WALI_WORKER_ID"], time.Now()); err != nil {
-		return Config{}, fmt.Errorf("WALI_STORAGE_WORKER_TOKEN is invalid: %w", err)
+	if authMode == StorageAuthStatic {
+		if _, err := NewStaticMediaAdmission(values["WALI_STORAGE_WORKER_TOKEN"], values["WALI_WORKER_ID"], time.Now); err != nil {
+			return Config{}, fmt.Errorf("WALI_STORAGE_WORKER_TOKEN is invalid: %w", err)
+		}
 	}
 	if len(values["WALI_STORAGE_PUBLISHABLE_KEY"]) > 2048 || strings.ContainsAny(values["WALI_STORAGE_PUBLISHABLE_KEY"], " \t") {
 		return Config{}, errors.New("WALI_STORAGE_PUBLISHABLE_KEY is invalid")
@@ -94,6 +116,10 @@ func Load(getenv func(string) string) (Config, error) {
 	if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(values["WALI_MEDIA_POLICY_DIGEST"]) {
 		return Config{}, errors.New("WALI_MEDIA_POLICY_DIGEST must be lowercase SHA-256")
 	}
+	stillPolicyDigest := getenv("WALI_STILL_POLICY_DIGEST")
+	if stillPolicyDigest != "" && !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(stillPolicyDigest) {
+		return Config{}, errors.New("WALI_STILL_POLICY_DIGEST must be empty or lowercase SHA-256")
+	}
 	classifierImage := getenv("WALI_CLASSIFIER_IMAGE")
 	if classifierImage != "" && !imagePattern.MatchString(classifierImage) {
 		return Config{}, errors.New("WALI_CLASSIFIER_IMAGE must be empty or an immutable named sha256 image")
@@ -105,10 +131,10 @@ func Load(getenv func(string) string) (Config, error) {
 
 	return Config{
 		DatabaseURL: values["WALI_DATABASE_URL"], StorageURL: values["WALI_STORAGE_URL"], StoragePublishableKey: values["WALI_STORAGE_PUBLISHABLE_KEY"],
-		StorageWorkerToken: values["WALI_STORAGE_WORKER_TOKEN"], WorkerID: values["WALI_WORKER_ID"],
+		StorageWorkerToken: values["WALI_STORAGE_WORKER_TOKEN"], StorageAuthMode: authMode, WorkerID: values["WALI_WORKER_ID"],
 		QueueName: values["WALI_QUEUE_NAME"], ScratchRoot: values["WALI_SCRATCH_ROOT"],
 		PodmanPath: values["WALI_PODMAN_PATH"], MediaImage: values["WALI_MEDIA_IMAGE"],
-		VerifierImage: values["WALI_VERIFIER_IMAGE"], ClassifierImage: classifierImage, MediaPolicyDigest: values["WALI_MEDIA_POLICY_DIGEST"],
+		VerifierImage: values["WALI_VERIFIER_IMAGE"], ClassifierImage: classifierImage, MediaPolicyDigest: values["WALI_MEDIA_POLICY_DIGEST"], StillPolicyDigest: stillPolicyDigest,
 		HealthSocket:      healthSocket,
 		VisibilityTimeout: 5 * time.Minute, RetryDelay: 30 * time.Second,
 		IdleDelay: time.Second, HeartbeatInterval: 30 * time.Second, LeaseDuration: 2 * time.Minute,
@@ -134,9 +160,14 @@ func validateDatabaseURL(value string) error {
 }
 
 func validateWorkerToken(value, workerID string, now time.Time) error {
+	_, err := workerTokenExpiry(value, workerID, now)
+	return err
+}
+
+func workerTokenExpiry(value, workerID string, now time.Time) (time.Time, error) {
 	parts := strings.Split(value, ".")
 	if len(parts) != 3 || len(parts[2]) < 16 {
-		return errors.New("must be a signed JWT")
+		return time.Time{}, errors.New("must be a signed JWT")
 	}
 	decode := func(part string, target any) error {
 		data, err := base64.RawURLEncoding.DecodeString(part)
@@ -151,7 +182,7 @@ func validateWorkerToken(value, workerID string, now time.Time) error {
 		Type      string `json:"typ"`
 	}
 	if err := decode(parts[0], &header); err != nil || (header.Algorithm != "HS256" && header.Algorithm != "ES256" && header.Algorithm != "RS256") || header.Type != "JWT" {
-		return errors.New("uses an unsupported JWT header")
+		return time.Time{}, errors.New("uses an unsupported JWT header")
 	}
 	var claims struct {
 		Role      string `json:"role"`
@@ -161,22 +192,22 @@ func validateWorkerToken(value, workerID string, now time.Time) error {
 		ExpiresAt int64  `json:"exp"`
 	}
 	if err := decode(parts[1], &claims); err != nil {
-		return errors.New("contains invalid JWT claims")
+		return time.Time{}, errors.New("contains invalid JWT claims")
 	}
 	if claims.Role != "wali_storage_worker" || claims.Role == "service_role" || claims.Role == "wali_worker" {
-		return errors.New("role must be wali_storage_worker")
+		return time.Time{}, errors.New("role must be wali_storage_worker")
 	}
 	if claims.WorkerID != workerID || !identifierPattern.MatchString(claims.WorkerID) {
-		return errors.New("worker_id must match WALI_WORKER_ID")
+		return time.Time{}, errors.New("worker_id must match WALI_WORKER_ID")
 	}
 	if claims.Audience != "authenticated" {
-		return errors.New("audience must be authenticated")
+		return time.Time{}, errors.New("audience must be authenticated")
 	}
 	issuedAt, expiresAt := time.Unix(claims.IssuedAt, 0), time.Unix(claims.ExpiresAt, 0)
 	if issuedAt.After(now.Add(5*time.Minute)) || issuedAt.Before(now.Add(-90*24*time.Hour)) || expiresAt.Before(now.Add(5*time.Minute)) || expiresAt.After(now.Add(90*24*time.Hour)) || !expiresAt.After(issuedAt) {
-		return errors.New("lifetime must be current and at most 90 days")
+		return time.Time{}, errors.New("lifetime must be current and at most 90 days")
 	}
-	return nil
+	return expiresAt, nil
 }
 
 func validateStorageURL(value string) error {

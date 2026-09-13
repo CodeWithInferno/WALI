@@ -37,6 +37,7 @@ type Limits struct {
 }
 
 type Spec struct {
+	MediaKind       string
 	Mode            Mode
 	AttemptID       string
 	SubmissionID    string
@@ -83,6 +84,9 @@ func (r *Runner) Run(ctx context.Context, spec Spec) error {
 }
 
 func BuildPodmanArgs(spec Spec) ([]string, error) {
+	if spec.MediaKind != "" && spec.MediaKind != "video" && spec.MediaKind != "still" {
+		return nil, errors.New("unsupported sandbox media kind")
+	}
 	command, suffix, err := modeCommand(spec.Mode)
 	if err != nil {
 		return nil, err
@@ -145,9 +149,14 @@ func BuildPodmanArgs(spec Spec) ([]string, error) {
 		"--env=TRANSFORMERS_OFFLINE=1",
 		"--env=HF_HUB_DISABLE_TELEMETRY=1",
 		"--env=DO_NOT_TRACK=1",
-		spec.Image,
 	}
-	if command != "" { args = append(args, command) }
+	if spec.MediaKind == "still" {
+		args = append(args, "--env=WALI_MEDIA_KIND=still")
+	}
+	args = append(args, spec.Image)
+	if command != "" {
+		args = append(args, command)
+	}
 	return args, nil
 }
 

@@ -9,6 +9,7 @@ import {
 import {
   isObject,
   readExactJSON,
+  requireEnum,
   requireEnvelope,
   requireRevision,
   requireUUID,
@@ -29,9 +30,14 @@ export async function handleRequestInstall(
   dependencies: EndpointDependencies,
 ): Promise<Response> {
   let requestID = UNKNOWN_REQUEST_ID;
+  let apiVersion: "catalog.v1" | "catalog.v2" = API_VERSION;
   try {
     const body = await readExactJSON(request, 16_384, KEYS);
-    const envelope = requireEnvelope(body, API_VERSION);
+    apiVersion = requireEnum(
+      body.api_version,
+      ["catalog.v1", "catalog.v2"] as const,
+    );
+    const envelope = requireEnvelope(body, apiVersion);
     requestID = envelope.requestID;
     const auth = await dependencies.authenticate(request);
     const wallpaperID = requireUUID(body.wallpaper_id);
@@ -45,7 +51,9 @@ export async function handleRequestInstall(
       60,
     );
     const data = await dependencies.database.rpc<unknown>(
-      "wali_edge_request_install_v1",
+      apiVersion === "catalog.v2"
+        ? "wali_edge_request_install_v2"
+        : "wali_edge_request_install_v1",
       {
         actor_id: auth.actorID,
         request_id: requestID,
@@ -56,9 +64,16 @@ export async function handleRequestInstall(
       },
     );
     validateGrant(data, wallpaperID, releaseID);
-    return success(API_VERSION, requestID, data);
+    if (
+      apiVersion === "catalog.v2" &&
+      (!isObject(data) ||
+        (data.media_kind !== "video" && data.media_kind !== "still"))
+    ) {
+      throw new EdgeError("temporarily_unavailable", 503, true);
+    }
+    return success(apiVersion, requestID, data);
   } catch (error) {
-    return safeFailure(API_VERSION, requestID, error);
+    return safeFailure(apiVersion, requestID, error);
   }
 }
 

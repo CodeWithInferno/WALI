@@ -26,7 +26,12 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     public private(set) var quitWasAcknowledged = false
     private var isQuitting = false
     private var quitRequestInProgress = false
+    #if !WALI_APP_STORE
+    private var directWantsToRun = false
+    private var directRequestGeneration: UInt64 = 0
+    #endif
     private let quitAgent: @MainActor @Sendable () async throws -> Void
+    private let requestApplicationTermination: @MainActor @Sendable () -> Void
     public let model: WALIAppModel
 
     private let connection: any AgentGateway
@@ -51,6 +56,7 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
         connection: any AgentGateway = AgentConnection(),
         lifecycle: AgentLifecycleController = AgentLifecycleController(),
         quitAgent: (@MainActor @Sendable () async throws -> Void)? = nil,
+        requestApplicationTermination: (@MainActor @Sendable () -> Void)? = nil,
         snapshotRequest: (@MainActor @Sendable () async throws -> AgentSnapshot)? = nil,
         snapshotInterval: Duration = .seconds(2)
     ) {
@@ -58,6 +64,9 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
         self.connection = connection
         self.lifecycle = lifecycle
         self.quitAgent = quitAgent ?? { _ = try await connection.send(.quit) }
+        self.requestApplicationTermination = requestApplicationTermination ?? {
+            NSApplication.shared.terminate(nil)
+        }
         self.snapshotRequest = snapshotRequest ?? { try await connection.send(.snapshot) }
         self.snapshotInterval = snapshotInterval
         #if WALI_APP_STORE
@@ -76,14 +85,30 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
             pendingActions.removeAll()
             Task { @MainActor in NSApplication.shared.terminate(nil) }
         }
+        #else
+        DirectForegroundLifetime.shared.register(self)
         #endif
     }
 
     public func start() {
+        #if !WALI_APP_STORE
+        directWantsToRun = true
+        #endif
         #if WALI_APP_STORE
         guard !visibleWindows.isEmpty else { return }
         #endif
         guard pollingTask == nil, !isQuitting else { return }
+        #if !WALI_APP_STORE
+        if lifecycle.isReinstalling {
+            lifecycle.onReinstallCompleted = { [weak self] in
+                guard let self else { return }
+                lifecycle.onReinstallCompleted = nil
+                guard directWantsToRun, !isQuitting else { return }
+                start()
+            }
+            return
+        }
+        #endif
         guard lifecycle.hasBackgroundPlaybackConsent else {
             backgroundState = .needsConsent
             return
@@ -122,9 +147,17 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
                 if ProcessInfo.processInfo.arguments.contains("--repair-agent-registration") {
                     try await lifecycle.reinstallAgent()
                 }
+                try Task.checkCancellation()
                 try lifecycle.ensureRunning()
+                #if !WALI_APP_STORE
+                DirectForegroundLifetime.shared.recordAgentActivity(if: !lifecycle.canQuitWithoutAgent)
+                #endif
                 backgroundState = .ready
             } catch {
+                guard !Task.isCancelled, !isQuitting else { return }
+                #if !WALI_APP_STORE
+                DirectForegroundLifetime.shared.recordAgentActivity(if: !lifecycle.canQuitWithoutAgent)
+                #endif
                 backgroundState = lifecycle.requiresApproval ? .needsApproval : .failed(error.localizedDescription)
                 present(error: error, title: "Background Access Needed")
                 #if WALI_APP_STORE
@@ -260,6 +293,12 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     /// Window closure does not call this in Store builds: the app keeps its
     /// authenticated lifecycle connection until an explicit Quit.
     public func stop() {
+        #if !WALI_APP_STORE
+        directWantsToRun = false
+        lifecycle.onReinstallCompleted = nil
+        directRequestGeneration &+= 1
+        DirectForegroundLifetime.shared.recordAgentActivity(if: !lifecycle.canQuitWithoutAgent)
+        #endif
         lifecycleReconnectTask?.cancel()
         lifecycleReconnectTask = nil
         presentationTask?.cancel()
@@ -282,19 +321,58 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
         connection.invalidate()
     }
 
-    public func send(_ action: WALIUIAction) {
+    #if !WALI_APP_STORE
+    var canQuitWithoutDirectAgent: Bool { lifecycle.canQuitWithoutAgent }
+    var hasPendingDirectServiceOperation: Bool { lifecycle.isReinstalling }
+
+    func suspendForDirectQuit() {
+        guard !isQuitting else { return }
+        let shouldResume = directWantsToRun
+        isQuitting = true
+        stop()
+        directWantsToRun = shouldResume
+    }
+
+    func resumeAfterFailedDirectQuit() {
+        guard isQuitting else { return }
+        isQuitting = false
+        if directWantsToRun { start() }
+    }
+    #endif
+
+    private var requestGeneration: UInt64 {
         #if WALI_APP_STORE
-        if case .quit = action { NSApplication.shared.terminate(nil); return }
+        0
+        #else
+        directRequestGeneration
+        #endif
+    }
+
+    private func checkDirectRequestAdmission(_ generation: UInt64) throws {
+        #if !WALI_APP_STORE
+        try Task.checkCancellation()
+        guard !isQuitting, generation == directRequestGeneration else { throw CancellationError() }
+        #endif
+    }
+
+    public func send(_ action: WALIUIAction) {
+        if case .quit = action { requestApplicationTermination(); return }
+        guard !isQuitting else { return }
+        #if WALI_APP_STORE
         guard backgroundState == .ready, !isQuitting else { return }
         #endif
         pendingActions.append(action)
         guard actionTask == nil else { return }
+        let generation = requestGeneration
         actionTask = Task { @MainActor [weak self] in
             guard let self else { return }
             while !Task.isCancelled, !pendingActions.isEmpty {
                 let next = pendingActions.removeFirst()
                 await perform(next)
             }
+            #if !WALI_APP_STORE
+            guard generation == directRequestGeneration else { return }
+            #endif
             actionTask = nil
         }
     }
@@ -302,6 +380,8 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     public func installCatalogRelease(
         _ prepared: PreparedCatalogInstall
     ) async throws {
+        let generation = requestGeneration
+        try checkDirectRequestAdmission(generation)
         #if WALI_APP_STORE
         guard backgroundState == .ready, !isQuitting else { throw AgentLifecycleError.consentRequired }
         #endif
@@ -313,12 +393,15 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
             quarantineReference: prepared.quarantineReference
         )
         let snapshot = try await sendWithSingleStaleRetry(.installCatalogRelease(request))
+        try checkDirectRequestAdmission(generation)
         apply(snapshot, clearNotice: true)
     }
 
     public func updateCatalogSecurityState(
         _ security: CatalogSecuritySnapshot
     ) async throws {
+        let generation = requestGeneration
+        try checkDirectRequestAdmission(generation)
         #if WALI_APP_STORE
         guard backgroundState == .ready, !isQuitting else { throw AgentLifecycleError.consentRequired }
         #endif
@@ -331,8 +414,10 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
                     keyID: transition.keyID
                 )
             ))
+            try checkDirectRequestAdmission(generation)
             apply(snapshot)
         }
+        try checkDirectRequestAdmission(generation)
         let revocations = security.revocations
         let snapshot = try await sendWithSingleStaleRetry(.updateCatalogRevocations(
             AgentCatalogRevocationUpdate(
@@ -342,15 +427,19 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
                 keyID: revocations.keyID
             )
         ))
+        try checkDirectRequestAdmission(generation)
         apply(snapshot)
     }
 
     private func perform(_ action: WALIUIAction) async {
+        let generation = requestGeneration
         do {
+            try checkDirectRequestAdmission(generation)
             guard let command = try command(for: action) else { return }
             let previousPreferences = lastSnapshot?.preferences
             let snapshot = try await sendWithSingleStaleRetry(command)
             try Task.checkCancellation()
+            try checkDirectRequestAdmission(generation)
             apply(snapshot, clearNotice: true)
             if case let .updatePreferences(preferences) = action,
                previousPreferences?.launchAtLogin != preferences.launchAtLogin {
@@ -367,22 +456,34 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
                 }
             }
         } catch {
+            #if !WALI_APP_STORE
+            guard !Task.isCancelled, !isQuitting, generation == directRequestGeneration else { return }
+            #endif
             present(error: error)
         }
     }
 
     private func sendWithSingleStaleRetry(_ command: AgentCommand) async throws -> AgentSnapshot {
         let idempotencyKey = UUID()
+        let generation = requestGeneration
         for attempt in 0...1 {
+            try checkDirectRequestAdmission(generation)
             do {
-                return try await connection.send(
+                let snapshot = try await connection.send(
                     command,
                     expectedRevision: expectedRevision(for: command),
                     idempotencyKey: idempotencyKey
                 )
+                try checkDirectRequestAdmission(generation)
+                #if !WALI_APP_STORE
+                DirectForegroundLifetime.shared.recordAgentActivity()
+                #endif
+                return snapshot
             } catch let failure as AgentFailure
                 where failure.code == .staleRevision && attempt == 0 {
+                try checkDirectRequestAdmission(generation)
                 let refreshed = try await connection.send(.snapshot)
+                try checkDirectRequestAdmission(generation)
                 apply(refreshed)
             }
         }
@@ -462,9 +563,15 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     }
 
     private func refresh() async {
+        let generation = requestGeneration
         do {
+            try checkDirectRequestAdmission(generation)
             let snapshot = try await snapshotRequest()
             try Task.checkCancellation()
+            try checkDirectRequestAdmission(generation)
+            #if !WALI_APP_STORE
+            DirectForegroundLifetime.shared.recordAgentActivity()
+            #endif
             lifecycleReconnectFailed = false
             apply(snapshot, clearNotice: true)
         } catch {
@@ -476,9 +583,7 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
     }
 
     private func apply(_ snapshot: AgentSnapshot, clearNotice: Bool = false) {
-        #if WALI_APP_STORE
         guard !isQuitting, !Task.isCancelled else { return }
-        #endif
         if _isDebugAssertConfiguration() {
             Self.logger.debug(
                 "Applying agent snapshot revision \(snapshot.revision.rawValue, privacy: .public) with \(snapshot.items.count, privacy: .public) library items"
@@ -519,14 +624,24 @@ public extension AgentSnapshot {
         let activeItem = items.first(where: { activeItemIDs.contains($0.id) })
         return WALIUISnapshot(
             wallpapers: items.map { item in
-                WALIWallpaperPresentation(
+                let duration: String?
+                let preview: URL?
+                switch item.mediaContent {
+                case let .video(_, previewURL, seconds):
+                    duration = seconds.formattedDuration
+                    preview = previewURL
+                case .still:
+                    duration = nil
+                    preview = nil
+                }
+                return WALIWallpaperPresentation(
                     id: item.id,
                     title: item.name,
                     dimensions: "\(item.pixelWidth) × \(item.pixelHeight)",
-                    duration: item.duration.formattedDuration,
+                    duration: duration,
                     fileSize: Int64(clamping: item.byteCount).formatted(.byteCount(style: .file)),
                     thumbnailURL: item.posterURL,
-                    previewURL: item.previewURL,
+                    previewURL: preview,
                     isActive: activeItemIDs.contains(item.id)
                 )
             },
@@ -584,9 +699,13 @@ public extension AgentSnapshot {
         case .idle: return .stopped
         case .preparing: return .converting(progress: nil)
         case .playing: return .playing
+        case .displaying: return .displaying
         case .paused: return .userPaused
         case .suspended:
-            return .automaticallyPaused(reason: resourceUsage.isLowPowerModeEnabled ? "Low Power Mode" : "System activity")
+            return .automaticallyPaused(reason: WALIRendererState.automaticPauseReason(
+                isLowPowerModeEnabled: resourceUsage.isLowPowerModeEnabled,
+                pausesForLowPowerMode: preferences.lowPowerBehavior == .pause,
+                thermalState: resourceUsage.thermalState))
         case .failed: return .error(message: "The wallpaper renderer needs attention.")
         }
     }
@@ -633,8 +752,8 @@ private extension AgentImportJob.Phase {
     var displayName: String {
         switch self {
         case .queued: "Waiting"
-        case .inspecting: "Inspecting video"
-        case .transcoding: "Preparing video"
+        case .inspecting: "Inspecting wallpaper"
+        case .transcoding: "Preparing wallpaper"
         case .poster: "Creating poster"
         case .installing: "Adding to library"
         case .complete: "Ready"

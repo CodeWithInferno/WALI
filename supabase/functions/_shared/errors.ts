@@ -16,6 +16,7 @@ const SAFE_MESSAGES: Readonly<Record<string, string>> = {
   idempotency_conflict: "This request key was already used.",
   rate_limited: "Too many requests. Try again shortly.",
   rights_workflow_unavailable: "Licensed proof review is not available yet.",
+  still_uploads_unavailable: "Image uploads are not available yet.",
   catalog_admission_unavailable: "Staff catalog uploads are unavailable.",
   catalog_attestation_required:
     "Accept the current Catalog License Attestation to continue.",
@@ -86,6 +87,19 @@ export function jsonResponse(value: unknown, status: number): Response {
 
 export function mapDatabaseError(message: string): EdgeError {
   const mappings: ReadonlyArray<readonly [string, string, number, boolean]> = [
+    ["WALI_STILL_INTAKE_DISABLED", "still_uploads_unavailable", 503, false],
+    ["WALI_MEDIA_KIND_MISMATCH", "invalid_request", 400, false],
+    ["WALI_VERIFIED_EMAIL_REQUIRED", "verified_email_required", 403, false],
+    ["WALI_UPLOAD_DAILY_QUOTA_EXCEEDED", "rate_limited", 429, true],
+    ["WALI_UPLOAD_DRAFT_REQUIRED", "invalid_request", 400, false],
+    ["WALI_PUBLICATION_LEASE_LOST", "publication_lease_lost", 409, false],
+    [
+      "WALI_AUTOMATIC_PUBLICATION_NOT_ELIGIBLE",
+      "publication_not_eligible",
+      409,
+      false,
+    ],
+    ["WALI_PUBLICATION_NOT_RETRYABLE", "publication_not_retryable", 409, false],
     ["WALI_IDEMPOTENCY_CONFLICT", "idempotency_conflict", 409, false],
     ["WALI_REVISION_MISMATCH", "stale_revision", 409, false],
     ["WALI_REPORT_NOT_FOUND", "not_found", 404, false],
@@ -140,6 +154,12 @@ export function mapDatabaseError(message: string): EdgeError {
     ["WALI_UPLOAD_EXPIRED", "upload_expired", 409, false],
     ["WALI_UPLOAD_INCOMPLETE", "upload_incomplete", 409, true],
     ["WALI_UPLOAD_CHANGED", "upload_changed", 409, false],
+    [
+      "WALI_PROCESSING_RETRY_LIMIT_REACHED",
+      "processing_retry_limit_reached",
+      409,
+      false,
+    ],
     ["WALI_STALE_PROCESSING_GENERATION", "stale_revision", 409, false],
     ["WALI_SUBMISSION_NOT_READY", "submission_not_ready", 409, false],
     [

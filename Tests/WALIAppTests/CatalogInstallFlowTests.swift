@@ -22,7 +22,7 @@ final class CatalogInstallFlowTests: XCTestCase {
             metadataBody: metadata,
             signatureBase64URL: signature,
             keyID: "catalog-test",
-            receipt: "opaque-install-receipt",
+            receipt: "33333333-3333-4333-8333-333333333333",
             expiresAt: Date().addingTimeInterval(300)
         )
         let events = CatalogInstallEvents()
@@ -78,7 +78,7 @@ final class CatalogInstallFlowTests: XCTestCase {
                 await events.append("security")
             }
         )
-        coordinator.model.accountState = .signedIn(userID: "test-user")
+        coordinator.model.accountState = .signedIn(userID: "44444444-4444-4444-8444-444444444444")
         coordinator.loadDetail(wallpaperID: Self.wallpaperID)
         guard try await waitForState("selected detail", coordinator: coordinator, events: events, until: {
             coordinator.model.detailState == .ready && coordinator.model.selectedDetail?.id == Self.wallpaperID
@@ -90,6 +90,8 @@ final class CatalogInstallFlowTests: XCTestCase {
             return coordinator.model.catalogInstall?.phase == .completed && recordedEvents.contains("metric")
         }) else { return }
 
+        let requestedMediaKinds = await gateway.requestedMediaKinds
+        XCTAssertEqual(requestedMediaKinds, [.video])
         XCTAssertEqual(received?.wallpaperID, Self.wallpaperID)
         XCTAssertEqual(received?.releaseID, Self.releaseID)
         XCTAssertNotNil(received?.quarantineReference)
@@ -240,6 +242,7 @@ final class CatalogInstallFlowTests: XCTestCase {
 }
 
 private actor InstallGateway: CatalogGateway {
+    private(set) var requestedMediaKinds: [CatalogMediaKind] = []
     let detailValue: CatalogWallpaperDetail
     let grant: CatalogInstallGrant
     let security: CatalogSecurityState
@@ -263,7 +266,11 @@ private actor InstallGateway: CatalogGateway {
     func detail(wallpaperID: String) async throws -> CatalogWallpaperDetail { detailValue }
     func setFavorite(wallpaperID: String, desired: Bool, expectedRevision: UInt64, idempotencyKey: String) async throws -> CatalogInteractionResult { throw CatalogRequestError.notConfigured }
     func setSaved(wallpaperID: String, desired: Bool, expectedRevision: UInt64, idempotencyKey: String) async throws -> CatalogInteractionResult { throw CatalogRequestError.notConfigured }
-    func requestInstall(wallpaperID: String, releaseID: String, expectedWallpaperRevision: UInt64, idempotencyKey: String) async throws -> CatalogInstallGrant { grant }
+    func requestInstall(wallpaperID: String, releaseID: String, mediaKind: CatalogMediaKind,
+                        expectedWallpaperRevision: UInt64, idempotencyKey: String) async throws -> CatalogInstallGrant {
+        requestedMediaKinds.append(mediaKind)
+        return grant
+    }
     func securityState() async throws -> CatalogSecurityState { security }
     func recordInstall(receipt: String, manifestDigest: String, releaseID: String, idempotencyKey: String) async throws {
         await events.append("metric")

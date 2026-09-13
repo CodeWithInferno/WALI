@@ -9,6 +9,7 @@ struct DiscoverView: View {
     @Bindable var marketplace: WALIMarketplaceModel
     let onRetry: () -> Void
     let onOpen: (String) -> Void
+    var onChooseCategories: () -> Void = {}
 
     @State private var featuredID: String?
     @State private var isCarouselPaused = false
@@ -46,6 +47,13 @@ struct DiscoverView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            HStack {
+                Button("Choose Categories", systemImage: "slider.horizontal.3", action: onChooseCategories)
+                Spacer()
+                Button("Refresh", systemImage: "arrow.clockwise", action: onRetry)
+            }.padding(.horizontal, 20).padding(.vertical, 10).background(.regularMaterial)
+        }
         .accessibilityIdentifier("WALI.Marketplace.Discover")
     }
 
@@ -479,6 +487,8 @@ private struct DiscoverHeroBand: View {
                     Circle()
                         .fill(.white.opacity(card.id == featuredCard?.id ? 0.95 : 0.35))
                         .frame(width: 7, height: 7)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(card.title)

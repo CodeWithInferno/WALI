@@ -23,6 +23,171 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         return coordinator.creatorContext.state == expectedState
     }
 
+    func testSearchPreservesTheSelectedBrowseCategoryAndTags() async throws {
+        let gateway = ScriptedCatalogGateway(homeSteps: [])
+        let coordinator = MarketplaceCoordinator(gateway: gateway)
+        coordinator.loadBrowse(category: "nature", tags: ["calm"], sort: .newest)
+        coordinator.search("forest")
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while await gateway.searchRequests.isEmpty, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let request = await gateway.searchRequests.last
+        XCTAssertEqual(request?.category, "nature")
+        XCTAssertEqual(request?.tags, ["calm"])
+        XCTAssertEqual(request?.sort, .newest)
+        coordinator.stop()
+    }
+
+    func testSigningOutClearsPrivateDetailInteractionState() async throws {
+        let gateway = ScriptedCatalogGateway(homeSteps: [], detailValue: Self.detail())
+        let auth = ScriptedAuthStore()
+        let coordinator = MarketplaceCoordinator(gateway: gateway, authStore: auth)
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: "11111111-1111-4111-8111-111111111111", expiresAt: .now.addingTimeInterval(60)))
+        let clock = ContinuousClock()
+        var deadline = clock.now.advanced(by: .seconds(2))
+        while coordinator.model.accountState == .signedOut, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        coordinator.loadDetail(wallpaperID: Self.wallpaperID)
+        deadline = clock.now.advanced(by: .seconds(2))
+        while coordinator.model.detailState == .loading, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNotNil(coordinator.model.selectedDetail)
+        await auth.emit(nil)
+        deadline = clock.now.advanced(by: .seconds(2))
+        while coordinator.model.accountState != .signedOut, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(coordinator.model.selectedDetail)
+        coordinator.stop()
+    }
+
+    func testSavedPaginationAndAccountSwitchKeepOwnerStateSeparate() async throws {
+        let first = Self.summary(id: Self.wallpaperID, title: "First")
+        let second = Self.summary(id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", title: "Second")
+        let otherOwner = Self.summary(id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3", title: "Other account bookmark")
+        let gateway = ScriptedCatalogGateway(homeSteps: [], savedPages: [
+            .init(items: [first], nextCursor: "saved-page-2"), .init(items: [first, second], nextCursor: nil),
+            .init(items: [otherOwner], nextCursor: nil)
+        ])
+        let auth = ScriptedAuthStore()
+        let coordinator = MarketplaceCoordinator(gateway: gateway, authStore: auth)
+        coordinator.start()
+        await auth.emit(CatalogAuthState(userID: "11111111-1111-4111-8111-111111111111", expiresAt: .now.addingTimeInterval(60)))
+        await assertEmailEventually { coordinator.model.accountState != .signedOut }
+        coordinator.loadSavedWallpapers()
+        await assertEmailEventually { coordinator.discovery.savedState == .ready }
+        coordinator.loadSavedWallpapers(loadMore: true)
+        await assertEmailEventually { coordinator.discovery.savedItems.count == 2 }
+        XCTAssertEqual(coordinator.discovery.savedItems.map(\.id), [first.id, second.id])
+        let cursors = await gateway.savedCursors
+        XCTAssertEqual(cursors, [nil, "saved-page-2"])
+        await auth.emit(CatalogAuthState(userID: "22222222-2222-4222-8222-222222222222", expiresAt: .now.addingTimeInterval(60)))
+        await assertEmailEventually { coordinator.model.accountState == .signedIn(userID: "22222222-2222-4222-8222-222222222222") }
+        await assertEmailEventually { coordinator.discovery.savedItems.map(\.id) == [otherOwner.id] }
+        XCTAssertEqual(coordinator.discovery.savedState, .ready)
+        XCTAssertNil(coordinator.discovery.savedNextCursor)
+        coordinator.stop()
+    }
+
+    func testAcknowledgementRetryOnlyRunsForItsOriginalSignedInSubject() async throws {
+        let first = "11111111-1111-4111-8111-111111111111"
+        let second = "22222222-2222-4222-8222-222222222222"
+        let store = CatalogInstallAcknowledgementStore()
+        let entry = try CatalogInstallAcknowledgement(subjectID: first, wallpaperID: Self.wallpaperID,
+            releaseID: Self.releaseID, receipt: "33333333-3333-4333-8333-333333333333", manifestDigest: String(repeating: "a", count: 64),
+            idempotencyKey: "record_recovery_test_0001", expiresAt: .now.addingTimeInterval(300))
+        try await store.enqueue(entry)
+        let gateway = ScriptedCatalogGateway(homeSteps: [], recordingSucceeds: true)
+        let coordinator = MarketplaceCoordinator(gateway: gateway, installAcknowledgementStore: store)
+        coordinator.model.accountState = .signedIn(userID: second)
+        coordinator.retryInstallRecording()
+        await assertEmailEventually { !coordinator.discovery.isRetryingInstallRecord }
+        let before = await gateway.recordedKeys
+        XCTAssertTrue(before.isEmpty)
+        coordinator.model.accountState = .signedIn(userID: first)
+        coordinator.retryInstallRecording()
+        await assertEmailEventually { await gateway.recordedKeys.count == 1 }
+        await assertEmailEventually { !coordinator.discovery.isRetryingInstallRecord }
+        let keys = await gateway.recordedKeys
+        XCTAssertEqual(keys, [entry.idempotencyKey])
+        let remaining = try await store.pending(subjectID: first)
+        XCTAssertTrue(remaining.isEmpty)
+        coordinator.stop()
+    }
+
+    func testAcknowledgementEnqueuedDuringRecordingDrainsWithoutAnotherRefresh() async throws {
+        let subject = "11111111-1111-4111-8111-111111111111"
+        let store = CatalogInstallAcknowledgementStore()
+        let first = try CatalogInstallAcknowledgement(subjectID: subject, wallpaperID: Self.wallpaperID,
+            releaseID: Self.releaseID, receipt: "33333333-3333-4333-8333-333333333333", manifestDigest: String(repeating: "a", count: 64),
+            idempotencyKey: "record_concurrent_test_0001", expiresAt: .now.addingTimeInterval(300))
+        let second = try CatalogInstallAcknowledgement(subjectID: subject, wallpaperID: Self.wallpaperID,
+            releaseID: Self.releaseID, receipt: "44444444-4444-4444-8444-444444444444", manifestDigest: String(repeating: "b", count: 64),
+            idempotencyKey: "record_concurrent_test_0002", expiresAt: .now.addingTimeInterval(300))
+        try await store.enqueue(first)
+        let gateway = ScriptedCatalogGateway(homeSteps: [], recordingSucceeds: true, holdFirstRecord: true)
+        let coordinator = MarketplaceCoordinator(gateway: gateway, installAcknowledgementStore: store)
+        coordinator.model.accountState = .signedIn(userID: subject)
+        coordinator.retryInstallRecording()
+        await assertEmailEventually { await gateway.recordedKeys.count == 1 }
+        try await store.enqueue(second)
+        coordinator.retryInstallRecording()
+        await gateway.releaseFirstRecord()
+        await assertEmailEventually { await gateway.recordedKeys.count == 2 }
+        await assertEmailEventually { !coordinator.discovery.isRetryingInstallRecord }
+        let keys = await gateway.recordedKeys
+        XCTAssertEqual(keys, [first.idempotencyKey, second.idempotencyKey])
+        let remaining = try await store.pending(subjectID: subject)
+        XCTAssertTrue(remaining.isEmpty)
+        XCTAssertFalse(coordinator.discovery.canRetryInstallRecord)
+        coordinator.stop()
+    }
+
+    func testTwoConfiguredWindowsPreserveEachOthersPendingAcknowledgements() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("WALI-Windows-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let contents = directory.appendingPathComponent("Fixture.bundle/Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let bundleID = "private.wali.acknowledgement-test." + UUID().uuidString
+        let projectURL = URL(string: "https://example.supabase.co")!
+        let info: [String: Any] = [
+            "CFBundleIdentifier": bundleID, "CFBundlePackageType": "BNDL",
+            "WALIMarketplaceEnabled": "YES", "WALIAuthenticationMethod": "native_apple",
+            "WALIMarketplaceURL": projectURL.absoluteString, "WALIMarketplacePublishableKey": "public-test-key",
+            "WALIApprovedCDNHosts": "catalog.wali.example", "WALICatalogSigningKeyID": "test-key",
+            "WALICatalogSigningPublicKeyBase64": Data(repeating: 1, count: 32).base64EncodedString()
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: contents.appendingPathComponent("Info.plist"))
+        let bundle = try XCTUnwrap(Bundle(url: contents.deletingLastPathComponent()))
+        let fileURL = try CatalogInstallAcknowledgementStore.defaultURL(bundleIdentifier: bundleID, projectURL: projectURL)
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent().deletingLastPathComponent()) }
+        let services = try XCTUnwrap(MarketplaceForegroundServices(bundle: bundle))
+        let firstWindow = MarketplaceCoordinator.configured(services: services, bundle: bundle)
+        let secondWindow = MarketplaceCoordinator.configured(services: services, bundle: bundle)
+        let subject = "11111111-1111-4111-8111-111111111111"
+        _ = try await firstWindow.installAcknowledgementStore.pending(subjectID: subject)
+        _ = try await secondWindow.installAcknowledgementStore.pending(subjectID: subject)
+        let first = try CatalogInstallAcknowledgement(subjectID: subject, wallpaperID: Self.wallpaperID,
+            releaseID: Self.releaseID, receipt: "33333333-3333-4333-8333-333333333333", manifestDigest: String(repeating: "a", count: 64),
+            idempotencyKey: "record_window_test_0001", expiresAt: .now.addingTimeInterval(300))
+        let second = try CatalogInstallAcknowledgement(subjectID: subject, wallpaperID: Self.wallpaperID,
+            releaseID: Self.releaseID, receipt: "44444444-4444-4444-8444-444444444444", manifestDigest: String(repeating: "b", count: 64),
+            idempotencyKey: "record_window_test_0002", expiresAt: .now.addingTimeInterval(300))
+        try await firstWindow.installAcknowledgementStore.enqueue(first)
+        try await secondWindow.installAcknowledgementStore.enqueue(second)
+        try await firstWindow.installAcknowledgementStore.remove(first)
+        let restored = try await CatalogInstallAcknowledgementStore(fileURL: fileURL).pending(subjectID: subject)
+        XCTAssertEqual(restored, [second], "Completing one window's install must preserve another window's durable confirmation")
+        firstWindow.stop()
+        secondWindow.stop()
+    }
+
     func testDiagnosticsExposeOnlyStableBoundedCodes() {
         XCTAssertEqual(
             MarketplaceCoordinator.diagnosticCode(for: SecretBearingError()),
@@ -625,7 +790,7 @@ final class MarketplaceCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(coordinator.creatorContext.state, .ready)
         let acceptedVersion = await creator.acceptedVersion()
-        XCTAssertEqual(acceptedVersion, "2026-09-01")
+        XCTAssertEqual(acceptedVersion, "2026-09-12")
     }
 
     func testCreatorTermsTimeoutAlwaysLeavesTheLoadingState() async throws {
@@ -937,7 +1102,7 @@ final class MarketplaceCoordinatorTests: XCTestCase {
             height: 1,
             frameRateNumerator: 30,
             frameRateDenominator: 1,
-            videoDefault: summary.preview,
+            videoDefault: summary.preview!,
             related: [],
             isFavorite: false,
             favoriteRevision: 0,
@@ -1037,6 +1202,13 @@ private actor ReceiptRecordingProbe {
 
 private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
     private(set) var interactionCallCount = 0
+    private(set) var searchRequests: [CatalogSearchRequest] = []
+    private(set) var savedCursors: [String?] = []
+    private(set) var recordedKeys: [String] = []
+    private var savedPages: [CatalogPage]
+    private let recordingSucceeds: Bool
+    private let holdFirstRecord: Bool
+    private var firstRecordContinuation: CheckedContinuation<Void, Never>?
     enum HomeStep: Sendable {
         case value(CatalogHome, delay: Duration)
         case failure(CatalogRemoteError)
@@ -1050,11 +1222,23 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
     init(
         homeSteps: [HomeStep],
         detailValue: CatalogWallpaperDetail? = nil,
-        reportFailuresRemaining: Int = 0
+        reportFailuresRemaining: Int = 0,
+        savedPages: [CatalogPage] = [],
+        recordingSucceeds: Bool = false,
+        holdFirstRecord: Bool = false
     ) {
         self.homeSteps = homeSteps
         self.detailValue = detailValue
         self.reportFailuresRemaining = reportFailuresRemaining
+        self.savedPages = savedPages
+        self.recordingSucceeds = recordingSucceeds
+        self.holdFirstRecord = holdFirstRecord
+    }
+
+    func savedWallpapers(cursor: String?) async throws -> CatalogPage {
+        savedCursors.append(cursor)
+        guard !savedPages.isEmpty else { throw CatalogRequestError.notConfigured }
+        return savedPages.removeFirst()
     }
 
     func home(locale: String, ratingCeiling: String) async throws -> CatalogHome {
@@ -1076,6 +1260,7 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
     }
 
     func search(_ request: CatalogSearchRequest) async throws -> CatalogSearchPage {
+        searchRequests.append(request)
         throw CatalogRequestError.notConfigured
     }
 
@@ -1109,6 +1294,7 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
     func requestInstall(
         wallpaperID: String,
         releaseID: String,
+        mediaKind: CatalogMediaKind,
         expectedWallpaperRevision: UInt64,
         idempotencyKey: String
     ) async throws -> CatalogInstallGrant {
@@ -1121,7 +1307,16 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
         releaseID: String,
         idempotencyKey: String
     ) async throws {
-        throw CatalogRequestError.notConfigured
+        recordedKeys.append(idempotencyKey)
+        if holdFirstRecord && recordedKeys.count == 1 {
+            await withCheckedContinuation { firstRecordContinuation = $0 }
+        }
+        if !recordingSucceeds { throw CatalogRequestError.notConfigured }
+    }
+
+    func releaseFirstRecord() {
+        firstRecordContinuation?.resume()
+        firstRecordContinuation = nil
     }
 
     func report(_ request: CatalogReportRequest) async throws -> CatalogReportReceipt {
@@ -1226,7 +1421,7 @@ private actor ScriptedCreatorAuthorizationGateway: CreatorAuthorizationGateway {
 
     init(
         userID: String,
-        termsVersion: String = "2026-09-01",
+        termsVersion: String = "2026-09-12",
         metadataVersion: String? = nil,
         moderatorGrantRevision: UInt64? = nil,
         mfaStore: ScriptedMFAStore? = nil,

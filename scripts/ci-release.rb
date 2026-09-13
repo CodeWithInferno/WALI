@@ -73,7 +73,7 @@ module WALICIRelease
     demand(env["GITHUB_RUN_ATTEMPT"] == "1", "Do not rerun release jobs; dispatch a new candidate after reconciling any draft release")
     demand(env.fetch("GITHUB_RUN_ID", "").match?(/\A[1-9][0-9]*\z/), "Invalid workflow run")
     demand(env.fetch("GITHUB_SHA", "").match?(/\A[0-9a-f]{40}\z/), "Invalid workflow commit")
-    demand(env.fetch("WALI_RELEASE_TAG", "").match?(/\Av[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*\z/) && env["WALI_RELEASE_TAG"].bytesize <= 100, "Use a prerelease version tag such as v0.1.0-beta.1 (ADR 0022)")
+    demand(env.fetch("WALI_RELEASE_TAG", "").match?(/\Av[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?\z/) && env["WALI_RELEASE_TAG"].bytesize <= 100, "Use a version tag such as v0.1.0 or v0.1.0-beta.1")
     demand(env["RUNNER_DEBUG"] != "1" && !%w[ACTIONS_STEP_DEBUG ACTIONS_RUNNER_DEBUG].any? { |key| env[key] == "true" }, "Release credential steps forbid debug logging")
     demand(File.realpath(env.fetch("GITHUB_WORKSPACE")) == File.realpath(root), "Unexpected checkout root")
     commit = WALIReleaseSupport.source_commit(root)

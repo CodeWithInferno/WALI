@@ -101,13 +101,15 @@ public struct StatusPanel: View {
 
     private var primaryControls: some View {
         HStack(spacing: 8) {
-            Button {
-                actions.send(.setPaused(!status.state.isPaused))
-            } label: {
-                Label(status.state.isPaused ? "Resume" : "Pause", systemImage: status.state.isPaused ? "play.fill" : "pause.fill")
-                    .frame(maxWidth: .infinity)
+            if status.state != .displaying {
+                Button {
+                    actions.send(.setPaused(!status.state.isPaused))
+                } label: {
+                    Label(status.state.isPaused ? "Resume" : "Pause", systemImage: status.state.isPaused ? "play.fill" : "pause.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(status.state == .stopped)
             }
-            .disabled(status.state == .stopped)
 
             Button {
                 actions.send(.nextWallpaper)
@@ -186,6 +188,7 @@ public struct StatusPanel: View {
         switch status.state {
         case .stopped: "Stopped"
         case .playing: "Playing"
+        case .displaying: "Displayed"
         case .automaticallyPaused: "Automatically Paused"
         case .userPaused: "Paused"
         case .converting: "Converting"
@@ -206,6 +209,7 @@ public struct StatusPanel: View {
         switch status.state {
         case .stopped: "stop.circle"
         case .playing: "play.circle.fill"
+        case .displaying: "photo"
         case .automaticallyPaused: "leaf.circle"
         case .userPaused: "pause.circle.fill"
         case .converting: "arrow.trianglehead.2.clockwise.rotate.90"
@@ -215,7 +219,7 @@ public struct StatusPanel: View {
 
     private var stateTint: Color {
         switch status.state {
-        case .playing: .accentColor
+        case .playing, .displaying: .accentColor
         case .automaticallyPaused: .orange
         case .error: .red
         default: .secondary

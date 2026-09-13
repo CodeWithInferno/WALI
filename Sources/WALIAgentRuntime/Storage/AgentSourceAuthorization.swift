@@ -119,7 +119,7 @@ public enum StoreWorkerRequestFactory {
         let result = StoreTranscoderRequest(request: TranscoderRequest(
             jobID: request.jobID, attemptGeneration: request.attemptGeneration,
             sourceBookmark: sourceGrant, sourceURL: source.url,
-            stagingDirectoryURL: request.stagingDirectoryURL, sourceByteLimit: request.sourceByteLimit
+            stagingDirectoryURL: request.stagingDirectoryURL, sourceByteLimit: request.sourceByteLimit, mediaKind: request.mediaKind
         ), stagingBookmark: stagingGrant)
         _ = try StoreTranscoderWireCodec.encodeRequest(result)
         return result

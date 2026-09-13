@@ -27,7 +27,7 @@ public struct MediaPipelineProgress: Codable, Sendable, Hashable {
     }
 }
 
-/// Deterministic video-first conversion using Apple media frameworks.
+/// Bounded, kind-specific preparation using Apple media frameworks.
 public struct MediaTranscoder: Sendable {
     private let inspector = MediaInspector()
 
@@ -38,6 +38,9 @@ public struct MediaTranscoder: Sendable {
         progress: @escaping @Sendable (MediaPipelineProgress) -> () = { _ in }
     ) async throws -> MediaTranscodeResult {
         try Task.checkCancellation()
+        if request.mediaKind == .still {
+            return try StillMediaPreparer().prepare(request, progress: progress)
+        }
         progress(.init(phase: .inspecting, fractionCompleted: 0))
         let sourceInspection = try await inspector.inspectVideo(
             at: request.sourceURL,
@@ -130,7 +133,7 @@ public struct MediaTranscoder: Sendable {
         }
     }
 
-    private func makeAttemptDirectory(for request: MediaTranscodeRequest) throws -> URL {
+    func makeAttemptDirectory(for request: MediaTranscodeRequest) throws -> URL {
         let manager = FileManager.default
         do {
             try manager.createDirectory(

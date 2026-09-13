@@ -43,6 +43,25 @@ final class CatalogMapperTests: XCTestCase {
         XCTAssertEqual(request.tags, ["night", "sky"])
     }
 
+    func testCatalogPreferencesRejectMalformedAndOversizedOwnerState() throws {
+        let subject = "11111111-1111-4111-8111-111111111111"
+        let category = "22222222-2222-4222-8222-222222222222"
+        XCTAssertThrowsError(try CatalogPreferences(userID: "another user", categoryIDs: [], ratingCeiling: "teen", personalizationOptOut: false, revision: 1))
+        XCTAssertThrowsError(try CatalogPreferences(userID: subject, categoryIDs: [category, category], ratingCeiling: "teen", personalizationOptOut: false, revision: 1))
+        XCTAssertThrowsError(try CatalogPreferences(userID: subject, categoryIDs: [], ratingCeiling: "adult", personalizationOptOut: false, revision: 1))
+        XCTAssertThrowsError(try CatalogPreferences(userID: subject, categoryIDs: [], ratingCeiling: "teen", personalizationOptOut: false, revision: 9_007_199_254_740_992))
+        XCTAssertThrowsError(try CatalogPreferences(userID: subject, categoryIDs: (0..<13).map { _ in UUID().uuidString.lowercased() }, ratingCeiling: "teen", personalizationOptOut: false, revision: 1))
+    }
+
+    func testCatalogPreferenceDTOUsesExactServerFieldNamesAndExplicitChoices() throws {
+        let data = Data(#"{"user_id":"11111111-1111-4111-8111-111111111111","category_ids":["33333333-3333-4333-8333-333333333333","22222222-2222-4222-8222-222222222222"],"rating_ceiling":"everyone","personalization_opt_out":true,"revision":8,"replayed":true}"#.utf8)
+        let value = try JSONDecoder().decode(CatalogPreferencesDTO.self, from: data).validated()
+        XCTAssertEqual(value.categoryIDs, ["22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"])
+        XCTAssertEqual(value.ratingCeiling, "everyone")
+        XCTAssertTrue(value.personalizationOptOut)
+        XCTAssertEqual(value.revision, 8)
+    }
+
     func testRemoteErrorNeverStoresUnderlyingSDKDescription() {
         let error = CatalogRemoteError(
             code: "temporarily_unavailable",
@@ -121,12 +140,8 @@ final class CatalogMapperTests: XCTestCase {
                 redistributionAllowed: true,
                 termsRevision: 1
             ),
-            durationMilliseconds: 24_200,
-            width: 3840,
-            height: 2160,
-            frameRateNumerator: 60,
-            frameRateDenominator: 1,
-            videoDefault: videoDefault,
+            media: CatalogMediaDTO(kind: "video", width: 3840, height: 2160, artifact: videoDefault,
+                                   durationMilliseconds: 24_200, frameRateNumerator: 60, frameRateDenominator: 1),
             related: [],
             isFavorite: false,
             favoriteRevision: 0,
@@ -136,10 +151,36 @@ final class CatalogMapperTests: XCTestCase {
 
         let detail = try mapper.detail(dto)
 
-        XCTAssertEqual(detail.videoDefault.role, .videoDefault)
+        XCTAssertEqual(detail.media.artifact.role, .videoDefault)
         XCTAssertEqual(detail.width, 3840)
         XCTAssertEqual(detail.height, 2160)
         XCTAssertEqual(detail.framesPerSecond, 60)
+    }
+
+    func testV2StillMediaHasNoSyntheticVideoMetadata() throws {
+        let bytes = Data(#"{"kind":"still","width":3840,"height":2160,"artifact":{"role":"image_default","url":"https://cdn.wali.example/image.png","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","byte_count":8192,"media_type":"image/png","width":3840,"height":2160,"duration_ms":0}}"#.utf8)
+        let value = try JSONDecoder().decode(CatalogMediaDTO.self, from: bytes)
+        XCTAssertEqual(value.kind, "still")
+        XCTAssertNil(value.durationMilliseconds)
+        XCTAssertNil(value.frameRateNumerator)
+        let text = try XCTUnwrap(String(data: bytes, encoding: .utf8))
+        for injected in [",\"duration_ms\":0", ",\"frame_rate_numerator\":0", ",\"kind_hint\":\"video\""] {
+            let wrong = Data((String(text.dropLast()) + injected + "}").utf8)
+            XCTAssertThrowsError(try JSONDecoder().decode(CatalogMediaDTO.self, from: wrong))
+        }
+        let missingKind = Data(text.replacingOccurrences(of: "\"kind\":\"still\",", with: "").utf8)
+        XCTAssertThrowsError(try JSONDecoder().decode(CatalogMediaDTO.self, from: missingKind))
+    }
+
+    func testV2SummaryRequiresExplicitKindAndRejectsVideoPreviewOnStill() throws {
+        let policy = try CatalogRemoteURLPolicy(supabaseURL: XCTUnwrap(URL(string: "https://project.supabase.co")),
+                                                approvedCDNHosts: ["cdn.wali.example"])
+        let mapper = CatalogMapper(remoteURLPolicy: policy)
+        var summary = wallpaperSummary(mediaHost: "cdn.wali.example")
+        summary.mediaKind = "still"
+        XCTAssertThrowsError(try mapper.page(.init(items: [summary], nextCursor: nil)))
+        summary.mediaKind = "future"
+        XCTAssertThrowsError(try mapper.page(.init(items: [summary], nextCursor: nil)))
     }
 
     func testMapperAcceptsSupabasePostgresTimestamp() throws {

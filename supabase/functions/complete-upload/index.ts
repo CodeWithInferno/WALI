@@ -1,3 +1,4 @@
+import { creatorUploadDraft } from "../_shared/creator-upload-draft.ts";
 import { EdgeError, success } from "../_shared/errors.ts";
 import { enforceRateLimit } from "../_shared/rate-limit.ts";
 import {
@@ -22,16 +23,18 @@ export async function handleCompleteUpload(
 ): Promise<Response> {
   let requestID = UNKNOWN_REQUEST_ID;
   try {
-    const body = await readExactJSON(request, 8_192, [
+    const body = await readExactJSON(request, 32_768, [
       "api_version",
       "request_id",
       "idempotency_key",
       "upload_session_id",
       "expected_session_revision",
+      "draft",
     ]);
     const envelope = requireEnvelope(body, API_VERSION);
     requestID = envelope.requestID;
     const auth = await dependencies.authenticate(request);
+    const draft = creatorUploadDraft(body.draft);
     const sessionID = requireUUID(body.upload_session_id);
     const expectedRevision = requireRevision(body.expected_session_revision);
     await enforceRateLimit(
@@ -49,6 +52,7 @@ export async function handleCompleteUpload(
         idempotency_key: envelope.idempotencyKey,
         upload_session_id: sessionID,
         expected_session_revision: expectedRevision,
+        draft,
       },
     );
     if (

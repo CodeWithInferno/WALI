@@ -332,7 +332,7 @@ account export/deletion retrieval and status, and the Supabase Auth cleanup
 executor are wired. Staging has a dedicated worker and native evidence for
 agreement acceptance, media processing, requested revisions, resubmission,
 MFA-protected approval, account export, and catalog installation. Rights-proof
-scanning and reviewer grants, licensed/other submissions, content-safety
+scanning and reviewer grants, other-rights submissions, content-safety
 screening, public-object removal and copyright case handling remain incomplete.
 Native report hiding/removal is verified for the original staging canary.
 Production signing and
@@ -340,6 +340,16 @@ recovery, exact release verification, capacity, and backup/restore evidence
 remain release gates. See the dated
 [evidence ledger](docs/release/marketplace-public-beta-evidence.md) for the
 verified candidate and remaining native journeys.
+
+[ADR0025](docs/adr/0025-public-creator-and-catalog-flows.md) activates ordinary
+Creator access through verified accounts and effective terms. User metadata and
+rights are bound before processing. A durable server workflow records a system
+policy decision, waits for independently verified promotion, and signs eligible
+releases with existing signing custody; it never invents a human review. Account
+preferences constrain personalized categories, current successful-install/active-
+save counts are separate from ranking, and saved bookmarks have a Library reader.
+The [production product flow plan](docs/plans/2026-09-12-production-product-flows.md)
+tracks actual native acceptance separately from implementation.
 
 Supabase is the only public control plane: Auth, a non-exposed authoritative
 Postgres schema, explicit public views/RPCs, private upload/evidence/export
@@ -351,7 +361,7 @@ private key, worker credential, or moderator secret.
 
 ```text
 hostile upload -> opaque private object -> networkless media sandbox
-  -> independent verifier -> processing-private -> human approval
+  -> independent verifier -> processing-private -> bound publication decision
   -> digest-verified promotion -> catalog-public immutable release
   -> canonical manifest -> detached Ed25519 signature
   -> WALICatalog verification -> bounded quarantine -> private transcoder

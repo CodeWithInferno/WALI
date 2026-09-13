@@ -34,9 +34,9 @@ module WALIReleaseSupport
     actual
   end
 
-  def verify_prerelease_tag!(tag, version:)
-    unless tag.is_a?(String) && tag.bytesize <= 100 && tag.match?(/\Av#{Regexp.escape(version)}-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*\z/)
-      raise "The initial production release requires a prerelease tag (ADR 0022)"
+  def verify_release_tag!(tag, version:)
+    unless tag.is_a?(String) && tag.bytesize <= 100 && tag.match?(/\Av#{Regexp.escape(version)}(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?\z/)
+      raise "Release tag must match the packaged version, optionally followed by a prerelease suffix"
     end
   end
 

@@ -70,15 +70,42 @@ type Client struct {
 	baseURL        *url.URL
 	publishableKey string
 	token          string
+	tokenSource    TokenSource
 	httpClient     *http.Client
 }
 
 func NewClient(rawURL, publishableKey, token string, httpClient *http.Client) (*Client, error) {
+	if token == "" || strings.ContainsAny(token, "\r\n") {
+		return nil, errors.New("storage token is missing or invalid")
+	}
+	client, err := newClient(rawURL, publishableKey, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	client.token = token
+	return client, nil
+}
+
+// NewClientWithTokenSource resolves authorization for each request, including
+// post-mutation byte verification. It never replays an ambiguous mutation.
+func NewClientWithTokenSource(rawURL, publishableKey string, source TokenSource, httpClient *http.Client) (*Client, error) {
+	if source == nil {
+		return nil, ErrCredentialsUnavailable
+	}
+	client, err := newClient(rawURL, publishableKey, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	client.tokenSource = source
+	return client, nil
+}
+
+func newClient(rawURL, publishableKey string, httpClient *http.Client) (*Client, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, errors.New("storage URL must be an origin-only HTTPS URL")
 	}
-	if publishableKey == "" || len(publishableKey) > 2048 || strings.ContainsAny(publishableKey, "\r\n \t") || token == "" || strings.ContainsAny(token, "\r\n") {
+	if publishableKey == "" || len(publishableKey) > 2048 || strings.ContainsAny(publishableKey, "\r\n \t") {
 		return nil, errors.New("storage token is missing or invalid")
 	}
 	if httpClient == nil {
@@ -88,7 +115,7 @@ func NewClient(rawURL, publishableKey, token string, httpClient *http.Client) (*
 	clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return errors.New("storage redirects are forbidden")
 	}
-	return &Client{baseURL: parsed, publishableKey: publishableKey, token: token, httpClient: &clientCopy}, nil
+	return &Client{baseURL: parsed, publishableKey: publishableKey, httpClient: &clientCopy}, nil
 }
 
 func (c *Client) Download(ctx context.Context, object RawObjectRef, destination string) (ObservedObject, error) {
@@ -99,7 +126,9 @@ func (c *Client) Download(ctx context.Context, object RawObjectRef, destination 
 	if err != nil {
 		return ObservedObject{}, err
 	}
-	c.authorize(request)
+	if err := c.authorize(request); err != nil {
+		return ObservedObject{}, err
+	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
 		return ObservedObject{}, fmt.Errorf("download object: %w", err)
@@ -146,7 +175,9 @@ func (c *Client) DownloadVerified(ctx context.Context, object ImmutableObjectRef
 	if err != nil {
 		return err
 	}
-	c.authorize(request)
+	if err := c.authorize(request); err != nil {
+		return err
+	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("download immutable object: %w", err)
@@ -200,7 +231,9 @@ func (c *Client) Publish(ctx context.Context, publication PublishRequest) error 
 	if err != nil {
 		return err
 	}
-	c.authorize(request)
+	if err := c.authorize(request); err != nil {
+		return err
+	}
 	request.ContentLength = publication.ByteCount
 	request.Header.Set("Content-Type", publication.MediaType)
 	request.Header.Set("x-upsert", "false")
@@ -256,7 +289,9 @@ func (c *Client) Delete(ctx context.Context, bucket, objectPath string) error {
 	if err != nil {
 		return err
 	}
-	c.authorize(request)
+	if err := c.authorize(request); err != nil {
+		return err
+	}
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.httpClient.Do(request)
 	if err != nil {
@@ -273,7 +308,9 @@ func (c *Client) Delete(ctx context.Context, bucket, objectPath string) error {
 	if err != nil {
 		return err
 	}
-	c.authorize(check)
+	if err := c.authorize(check); err != nil {
+		return err
+	}
 	verification, err := c.httpClient.Do(check)
 	if err != nil {
 		return fmt.Errorf("verify object deletion: %w", err)
@@ -290,7 +327,9 @@ func (c *Client) verifyExisting(ctx context.Context, publication PublishRequest)
 	if err != nil {
 		return err
 	}
-	c.authorize(request)
+	if err := c.authorize(request); err != nil {
+		return err
+	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("verify existing object: %w", err)
@@ -313,9 +352,24 @@ func (c *Client) verifyExisting(ctx context.Context, publication PublishRequest)
 	return nil
 }
 
-func (c *Client) authorize(request *http.Request) {
-	request.Header.Set("Authorization", "Bearer "+c.token)
+func (c *Client) authorize(request *http.Request) error {
+	if err := request.Context().Err(); err != nil {
+		return err
+	}
+	token := c.token
+	if c.tokenSource != nil {
+		current, err := c.tokenSource.Token(request.Context())
+		if contextErr := request.Context().Err(); contextErr != nil {
+			return contextErr
+		}
+		if err != nil || !safeCredentialHeader(current) {
+			return ErrCredentialsUnavailable
+		}
+		token = current
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("apikey", c.publishableKey)
+	return nil
 }
 
 func (c *Client) objectURL(bucket, objectPath string) string {

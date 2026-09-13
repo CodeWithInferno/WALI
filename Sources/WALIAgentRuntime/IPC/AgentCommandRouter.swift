@@ -118,14 +118,12 @@ public actor AgentCommandRouter {
 
     public func handle(_ request: AgentRequest) async -> AgentResponse {
         do {
-            #if WALI_APP_STORE
             if isShuttingDown {
                 switch request.command {
                 case .quit, .snapshot, .handshake, .diagnosticsSnapshot: break
                 default: throw CancellationError()
                 }
             }
-            #endif
             switch request.command {
             case .handshake, .snapshot, .diagnosticsSnapshot:
                 return response(for: request, snapshot: await engine.snapshot())
@@ -298,8 +296,13 @@ public actor AgentCommandRouter {
                 guard let item = snapshot.items.first(where: { $0.id == itemID }) else {
                     throw EngineError.itemNotFound(itemID)
                 }
+                let file: URL
+                switch item.mediaContent {
+                case let .video(masterURL, _, _): file = masterURL
+                case let .still(imageURL): file = imageURL
+                }
                 await MainActor.run {
-                    NSWorkspace.shared.activateFileViewerSelecting([item.masterURL])
+                    NSWorkspace.shared.activateFileViewerSelecting([file])
                 }
                 return response(for: request, snapshot: snapshot)
 
@@ -334,16 +337,8 @@ public actor AgentCommandRouter {
                     throw error
                 }
                 #else
-                await MainActor.run {
-                    DistributedNotificationCenter.default().postNotificationName(
-                        Notification.Name("com.wali.quitAll"),
-                        object: Bundle.main.object(forInfoDictionaryKey: "WALIControlServiceName") as? String
-                            ?? Bundle.main.bundleIdentifier,
-                        userInfo: nil,
-                        deliverImmediately: true
-                    )
-                    NSApplication.shared.terminate(nil)
-                }
+                // The host completes termination only after this reply is queued.
+                isShuttingDown = true
                 #endif
                 return response(for: request, snapshot: await engine.snapshot())
             }
@@ -352,6 +347,56 @@ public actor AgentCommandRouter {
                 requestID: request.requestID,
                 result: .failure(Self.failure(from: error))
             )
+        }
+    }
+
+    @discardableResult
+    func recordRendererObservation(_ observation: RendererResourceObservation) async throws -> EngineSnapshot {
+        try await mergeResourceObservation(observation, storageUsedBytes: nil)
+    }
+
+    @discardableResult
+    func recordStorageUsage(_ bytes: UInt64) async throws -> EngineSnapshot {
+        try await mergeResourceObservation(nil, storageUsedBytes: bytes)
+    }
+
+    /// Both resource producers merge against current state while holding the same gate.
+    private func mergeResourceObservation(_ observation: RendererResourceObservation?,
+                                          storageUsedBytes: UInt64?) async throws -> EngineSnapshot {
+        await transactionGate.acquire()
+        do {
+            try Task.checkCancellation()
+            guard !isShuttingDown else { throw CancellationError() }
+            var snapshot = await engine.snapshot()
+            var usage = snapshot.resourceUsage
+            if let observation {
+                usage.activePlayers = observation.activePlayers
+                usage.isLowPowerModeEnabled = observation.isLowPowerModeEnabled
+                usage.thermalState = observation.thermalState
+            }
+            if let storageUsedBytes { usage.storageUsedBytes = storageUsedBytes }
+            var actions: [EngineAction] = []
+            if usage != snapshot.resourceUsage { actions.append(.setResourceUsage(usage)) }
+            if let observation, observation.playbackStatus != snapshot.playbackStatus {
+                actions.append(.setPlaybackStatus(observation.playbackStatus))
+            }
+            for action in actions {
+                try Task.checkCancellation()
+                guard !isShuttingDown else { throw CancellationError() }
+                try validateDistribution(action)
+                _ = try await effectHandler(.preflight(action), snapshot)
+                try Task.checkCancellation()
+                guard !isShuttingDown else { throw CancellationError() }
+                try validateDistribution(action)
+                let transaction = try await engine.perform(action)
+                try await execute(transaction)
+                snapshot = transaction.snapshot
+            }
+            await transactionGate.release()
+            return snapshot
+        } catch {
+            await transactionGate.release()
+            throw error
         }
     }
 
@@ -580,6 +625,7 @@ private extension EnginePlaybackStatus {
         case .idle: .idle
         case .preparing: .preparing
         case .playing: .playing
+        case .displaying: .displaying
         case .paused: .paused
         case .suspended: .suspended
         case .failed: .failed
@@ -589,20 +635,13 @@ private extension EnginePlaybackStatus {
 
 private extension EngineLibraryItem {
     var wireValue: AgentLibraryItem {
-        .init(
-            id: id,
-            name: name,
-            createdAt: createdAt,
-            duration: duration,
-            pixelWidth: pixelWidth,
-            pixelHeight: pixelHeight,
-            masterURL: masterURL,
-            previewURL: previewURL,
-            posterURL: posterURL,
-            contentDigest: contentDigest,
-            byteCount: byteCount,
-            isFavorite: isFavorite
-        )
+        let content: AgentWallpaperMediaContent = switch mediaContent {
+        case let .video(masterURL, previewURL, duration): .video(masterURL: masterURL, previewURL: previewURL, duration: duration)
+        case let .still(imageURL): .still(imageURL: imageURL)
+        }
+        return .init(id: id, name: name, createdAt: createdAt, mediaContent: content,
+              pixelWidth: pixelWidth, pixelHeight: pixelHeight, posterURL: posterURL,
+              contentDigest: contentDigest, byteCount: byteCount, isFavorite: isFavorite)
     }
 }
 

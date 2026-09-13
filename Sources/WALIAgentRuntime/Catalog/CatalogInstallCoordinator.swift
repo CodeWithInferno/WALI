@@ -52,18 +52,20 @@ public actor CatalogInstallCoordinator {
         idempotencyKey: UUID,
         acceptedRevision: EngineRevision
     ) async throws -> CatalogInstallResult {
+        let revocations = try await revocationStore.current()
+        let verified = try await trustStore.verify(request, revocations: revocations)
+        let manifest = verified.manifest.manifest
+        let defaultArtifact = manifest.primaryArtifact
+        let nativeMediaKind: WallpaperMediaKind = switch manifest.mediaKind {
+        case .video: .video
+        case .still: .still
+        }
+        let quarantineExtension = manifest.mediaKind == .still ? "png" : "mp4"
         let quarantineURL = quarantineRoot.appendingPathComponent(
-            "\(request.quarantineReference.uuidString.lowercased()).wali-quarantine.mp4",
+            "\(request.quarantineReference.uuidString.lowercased()).wali-quarantine.\(quarantineExtension)",
             isDirectory: false
         )
         defer { try? FileManager.default.removeItem(at: quarantineURL) }
-        let revocations = try await revocationStore.current()
-        let verified = try await trustStore.verify(request, revocations: revocations)
-        guard let defaultArtifact = verified.manifest.manifest.artifacts.first(where: {
-            $0.role == .videoDefault
-        }) else {
-            throw CatalogInstallError.missingDefaultArtifact
-        }
         let manifestDigest = verified.origin.manifestDigest
         if let existing = try await runtimeStore.installedCatalogRecord(
             releaseID: verified.manifest.manifest.releaseID,
@@ -80,7 +82,8 @@ public actor CatalogInstallCoordinator {
             quarantineURL,
             under: quarantineRoot,
             expectedDigest: sourceDigest,
-            expectedByteCount: defaultArtifact.byteCount
+            expectedByteCount: defaultArtifact.byteCount,
+            mediaKind: nativeMediaKind
         )
         do {
             #if WALI_APP_STORE
@@ -113,9 +116,17 @@ public actor CatalogInstallCoordinator {
                     sourceBookmark: sourceBookmark,
                     sourceURL: ownedSourceURL,
                     stagingDirectoryURL: context.stagingDirectoryURL,
-                    sourceByteLimit: defaultArtifact.byteCount
+                    sourceByteLimit: defaultArtifact.byteCount,
+                    mediaKind: nativeMediaKind
                 ))
-                guard output.sourceDigest == defaultArtifact.sha256 else {
+                _ = try TranscoderWireCodec.encodeOutput(output)
+                guard output.jobID == jobUUID,
+                      output.attemptGeneration == context.generation.rawValue,
+                      output.mediaKind == nativeMediaKind,
+                      output.sourceDigest == defaultArtifact.sha256,
+                      output.sourceMedia.byteCount == defaultArtifact.byteCount,
+                      output.sourceMedia.pixelWidth == defaultArtifact.width,
+                      output.sourceMedia.pixelHeight == defaultArtifact.height else {
                     throw CatalogInstallError.sourceClaimMismatch
                 }
                 try await runtimeStore.finishImportAttempt(
@@ -136,6 +147,13 @@ public actor CatalogInstallCoordinator {
                         claimedByteCount: claim.byteCount
                     )
                     installed.append(try await runtimeStore.installArtifact(candidate))
+                }
+                if manifest.mediaKind == .still {
+                    guard let master = installed.first(where: { $0.role == .masterImage }),
+                          master.pixelSize.width == defaultArtifact.width,
+                          master.pixelSize.height == defaultArtifact.height else {
+                        throw CatalogInstallError.sourceClaimMismatch
+                    }
                 }
                 let record = try LibraryRecordFactory.makeCatalogRecord(
                     displayName: verified.metadata.metadata.title,

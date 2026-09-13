@@ -6,6 +6,62 @@ import XCTest
 
 @MainActor
 final class CreatorModerationModelTests: XCTestCase {
+    func testStillReviewReturnsTypedImageInsteadOfVideoURL() async throws {
+        let artifact = try CreatorCanonicalArtifact.fixture(role: .imageDefault)
+        let item = ModerationQueueItem.fixture(canonicalArtifacts: [artifact])
+        let cache = RecordingPresentationMediaCache(result: .success(URL(fileURLWithPath: "/private/tmp/verified-image.png")))
+        let model = CreatorModerationModel(gateway: ScriptedModerationGateway(queueItems: [item]),
+            authorization: .moderatorFixture(expiresAt: .distantFuture), presentationMediaCache: cache)
+        await model.loadQueue()
+        model.prepareReview(item)
+        guard case .still(let image) = await model.loadReviewMedia(for: item) else {
+            return XCTFail("Still artifact was not presented as a typed image")
+        }
+        XCTAssertEqual(image.url.lastPathComponent, "verified-image.png")
+        XCTAssertEqual(image.width, artifact.width)
+        XCTAssertEqual(image.height, artifact.height)
+        let requested = await cache.requestedIDs()
+        XCTAssertEqual(requested, [artifact.id])
+    }
+
+    func testReportedStillUsesTypedCanonicalImage() async throws {
+        let artifact = try CreatorCanonicalArtifact.fixture(role: .imageDefault)
+        let report = ModerationReport(id: UUID(), revision: 1, reasonCode: "rights_review",
+            safeSummary: "Review requested.", createdAt: .now, status: .open,
+            wallpaperID: UUID(), wallpaperRevision: 2, wallpaperTitle: "Still", wallpaperStatus: .published,
+            releaseID: UUID(), edition: 1, canonicalArtifacts: [artifact])
+        let cache = RecordingPresentationMediaCache(result: .success(URL(fileURLWithPath: "/private/tmp/verified-image.png")))
+        let model = CreatorModerationModel(gateway: ScriptedModerationGateway(queueItems: [], reportItems: [report]),
+            authorization: .moderatorFixture(expiresAt: .distantFuture), presentationMediaCache: cache)
+        await model.loadReports(); model.prepareReport(report)
+        guard case .still(let source) = await model.loadReportMedia(report) else {
+            return XCTFail("Reported still was not loaded as an image")
+        }
+        XCTAssertEqual(source.width, artifact.width)
+        model.updateAuthorization(model.authorization.removingModeratorGrant())
+        let restricted = await model.loadReportMedia(report)
+        XCTAssertNil(restricted)
+    }
+
+    func testDelayedStillMediaCannotReturnToAnotherReviewOrGrant() async throws {
+        let artifact = try CreatorCanonicalArtifact.fixture(role: .imageDefault)
+        let item = ModerationQueueItem.fixture(canonicalArtifacts: [artifact])
+        let cache = SuspendedModerationMediaCache()
+        let model = CreatorModerationModel(gateway: ScriptedModerationGateway(queueItems: [item]),
+            authorization: .moderatorFixture(expiresAt: .distantFuture), presentationMediaCache: cache)
+        await model.loadQueue(); model.prepareReview(item)
+        let load = Task { await model.loadReviewMedia(for: item) }
+        await cache.waitUntilRequested()
+        model.finishReview(item)
+        model.prepareReview(item) // Same identity, new route lifetime.
+        await cache.finish()
+        let result = await load.value
+        XCTAssertNil(result)
+        model.updateAuthorization(model.authorization.removingModeratorGrant())
+        let restricted = await model.loadReviewMedia(for: item)
+        XCTAssertNil(restricted)
+    }
+
     func testQueuePublishesOnlyLocallyVerifiedCanonicalMedia() async throws {
         let artifact = try CreatorCanonicalArtifact.fixture()
         let item = ModerationQueueItem.fixture(canonicalArtifacts: [artifact])
@@ -281,17 +337,17 @@ private extension ModerationQueueItem {
 }
 
 private extension CreatorCanonicalArtifact {
-    static func fixture() throws -> Self {
+    static func fixture(role: CreatorArtifactRole = .poster) throws -> Self {
         let policy = try CatalogRemoteURLPolicy(
             supabaseURL: XCTUnwrap(URL(string: "https://project.supabase.co")),
             approvedCDNHosts: ["cdn.example.test"]
         )
         return try Self(
-            role: .poster,
-            url: XCTUnwrap(URL(string: "https://project.supabase.co/storage/v1/object/sign/processing-private/sha256/aa/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/poster.jpg?token=moderator-safe-token")),
+            role: role,
+            url: XCTUnwrap(URL(string: "https://project.supabase.co/storage/v1/object/sign/processing-private/sha256/aa/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/\(role == .imageDefault ? "image-default.png" : "poster.jpg")?token=moderator-safe-token")),
             sha256: String(repeating: "a", count: 64),
             byteCount: 1_024,
-            mediaType: "image/jpeg",
+            mediaType: role == .imageDefault ? "image/png" : "image/jpeg",
             width: 1920,
             height: 1080,
             durationMilliseconds: 0,
@@ -316,4 +372,21 @@ private actor RecordingPresentationMediaCache: CatalogPresentationMediaCaching {
     }
 
     func requestedIDs() -> [String] { ids }
+}
+
+private actor SuspendedModerationMediaCache: CatalogPresentationMediaCaching {
+    private var continuation: CheckedContinuation<URL, Never>?
+    private var started: CheckedContinuation<Void, Never>?
+    func localURL(for artifact: CatalogArtifact) async throws -> URL { throw CatalogPresentationMediaCacheError.unsupportedArtifact }
+    func localURL(for artifact: CreatorCanonicalArtifact) async throws -> URL {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            started?.resume(); started = nil
+        }
+    }
+    func waitUntilRequested() async {
+        if continuation != nil { return }
+        await withCheckedContinuation { started = $0 }
+    }
+    func finish() { continuation?.resume(returning: URL(fileURLWithPath: "/private/tmp/verified-image.png")); continuation = nil }
 }

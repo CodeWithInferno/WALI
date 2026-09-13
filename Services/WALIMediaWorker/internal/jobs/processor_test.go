@@ -930,7 +930,7 @@ func TestSandboxRunnerUsesAbsolutePodmanAndSurfacesCrash(t *testing.T) {
 func validEnvironmentTest(role, sslMode string) map[string]string {
 	now := time.Now()
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"role":"%s","worker_id":"worker-1","aud":"authenticated","iat":%d,"exp":%d}`, role, now.Add(-time.Minute).Unix(), now.Add(time.Hour).Unix())))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"role":"%s","worker_id":"worker-1","aud":"authenticated","iat":%d,"exp":%d}`, role, now.Add(-time.Minute).Unix(), now.Add(2*time.Hour).Unix())))
 	return map[string]string{
 		"WALI_DATABASE_URL": "postgresql://worker:secret@db.example.test:5432/postgres?sslmode=" + sslMode,
 		"WALI_STORAGE_URL":  "https://project.supabase.co", "WALI_STORAGE_PUBLISHABLE_KEY": "sb_publishable_test",

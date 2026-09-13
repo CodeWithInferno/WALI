@@ -44,6 +44,7 @@ class Request:
     description: str
     taxonomy_revision: str
     frames: tuple[Frame, ...]
+    media_kind: str = ""
 
     @property
     def frame_set_digest(self) -> str:
@@ -127,12 +128,20 @@ def load_request(path: Path) -> Request:
     value = _load_json(path, MAX_REQUEST_BYTES, "invalid_request")
     if not isinstance(value, dict):
         raise ContractError("invalid_request")
+    version = value.get("schema_version")
+    if type(version) is not int or version not in (1, 2):
+        raise ContractError("invalid_request")
+    keys = {"schema_version", "attempt_id", "submission_id", "generation", "title", "description", "taxonomy_revision", "frames"}
+    if version == 2:
+        keys.add("media_kind")
+        if value.get("media_kind") != "still":
+            raise ContractError("invalid_request")
     _require_exact_keys(
         value,
-        {"schema_version", "attempt_id", "submission_id", "generation", "title", "description", "taxonomy_revision", "frames"},
+        keys,
         "invalid_request",
     )
-    if value["schema_version"] != 1 or isinstance(value["generation"], bool) or not isinstance(value["generation"], int) or not 1 <= value["generation"] <= 2**31 - 1:
+    if isinstance(value["generation"], bool) or not isinstance(value["generation"], int) or not 1 <= value["generation"] <= 2**31 - 1:
         raise ContractError("invalid_request")
     if not isinstance(value["attempt_id"], str) or not IDENTIFIER.fullmatch(value["attempt_id"]):
         raise ContractError("invalid_request")
@@ -140,7 +149,7 @@ def load_request(path: Path) -> Request:
         raise ContractError("invalid_request")
     if value["taxonomy_revision"] != EXPECTED_TAXONOMY_REVISION:
         raise ContractError("taxonomy_mismatch")
-    if not isinstance(value["frames"], list) or len(value["frames"]) != 7:
+    if not isinstance(value["frames"], list) or len(value["frames"]) != (1 if version == 2 else 7):
         raise ContractError("invalid_frame_set")
     frames: list[Frame] = []
     for index, raw_frame in enumerate(value["frames"], start=1):
@@ -156,9 +165,12 @@ def load_request(path: Path) -> Request:
                 raise ContractError("invalid_frame_set")
         if not 1 <= raw_frame["byte_count"] <= 16 * 1024 * 1024 or not 1 <= raw_frame["width"] <= 1024 or not 1 <= raw_frame["height"] <= 1024:
             raise ContractError("invalid_frame_set")
+        if version == 2 and (raw_frame["width"], raw_frame["height"]) != (384, 224):
+            raise ContractError("invalid_frame_set")
         frames.append(Frame(**raw_frame))
     return Request(
-        schema_version=1,
+        schema_version=version,
+        media_kind="still" if version == 2 else "",
         attempt_id=value["attempt_id"],
         submission_id=value["submission_id"],
         generation=value["generation"],

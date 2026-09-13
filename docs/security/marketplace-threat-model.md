@@ -327,3 +327,22 @@ history or weaken verification during urgency.
 - One shared VM kernel is not strong tenant isolation. WALI's hostile-media
   worker must not be presented as harmless to unrelated production workloads;
   a dedicated VM remains the production target.
+
+## Automatic publication under ADR0025
+
+The scheduler token exists only in production Vault and Edge secrets. It can
+trigger at most four leased publication jobs per bounded request; it is not a
+user session, upload credential, administrator grant, or signing key. Requests
+with no valid token fail before database access. The dispatcher never takes an
+actor or release ID from the caller. Each claimed job revalidates the active
+account, real rights attestation, revision/generation, independently verified
+artifact set, immutable promotions, and signing snapshot. A lost response replays
+the same publication; failure to finish a lease leaves it recoverable. Public
+responses contain aggregate job counts only.
+
+A system decision has an explicit policy version and distinct nullable-human
+authority; human reviews still use actual different moderators and AAL2. Model
+classification is neither evidence of legal rights nor a safety approval.
+Disable the exact scheduler to pause automatic publication without deleting
+uploads, evidence, or immutable published releases. Public versioned legal
+delivery reads only bundled text and exposes no database or authentication path.

@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
+readonly INPUT=/work/input OUTPUT=/work/output
+readonly POLICY=/opt/wali/policy/still-image-policy.json CONTRACT=/opt/wali/bin/still-image-contract
+readonly CLAIM="$INPUT/media-claim.json"
+emit_failure() {
+  local code="${1:-verification_failed}" status="${2:-65}"
+  case "$code" in invalid_contract|policy_mismatch|credential_exposed|invalid_media_claim|artifact_missing|artifact_mismatch|unsafe_track_layout|verification_failed) ;; *) code=verification_failed ;; esac
+  jq -n --arg attempt_id "${WALI_ATTEMPT_ID:-unknown}" --arg submission_id "${WALI_SUBMISSION_ID:-unknown}" \
+    --argjson generation "${WALI_GENERATION:-0}" --arg safe_code "$code" \
+    '{schema_version:1,attempt_id:$attempt_id,submission_id:$submission_id,generation:$generation,safe_code:$safe_code}' \
+    >"$OUTPUT/.failure.json.tmp" 2>/dev/null || true
+  mv -f -- "$OUTPUT/.failure.json.tmp" "$OUTPUT/failure.json" 2>/dev/null || true
+  exit "$status"
+}
+trap 'status=$?; trap - ERR; emit_failure verification_failed "$status"' ERR
+[[ "${WALI_MEDIA_KIND:-}" == still ]] || emit_failure invalid_contract
+for secret in AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN SUPABASE_SERVICE_ROLE_KEY WALI_STORAGE_SECRET_KEY DATABASE_URL; do
+  [[ -z "${!secret:-}" ]] || emit_failure credential_exposed
+done
+[[ -f "$POLICY" && ! -L "$POLICY" && "$(sha256sum "$POLICY" | cut -d' ' -f1)" == "${WALI_POLICY_DIGEST:-}" ]] || emit_failure policy_mismatch
+[[ -f "$CLAIM" && ! -L "$CLAIM" && "$(stat -c '%s' "$CLAIM")" -le 1048576 ]] || emit_failure invalid_media_claim
+[[ -d "$INPUT/artifacts" && ! -L "$INPUT/artifacts" && -d "$INPUT/frames" && ! -L "$INPUT/frames" ]] || emit_failure artifact_missing
+[[ -d "$OUTPUT" && ! -L "$OUTPUT" && ! -e "$OUTPUT/verification-claim.json" ]] || emit_failure invalid_contract
+jq -e '
+  def integer: type=="number" and floor==.;
+  def bounded($max): integer and .>0 and .<=$max;
+  (keys | sort)==(["schema_version","media_kind","kind","attempt_id","submission_id","generation","policy_digest","input_digest","artifacts","sample_frames","encoder_build","safe_code"]|sort) and
+  .schema_version==2 and .media_kind=="still" and .kind=="media" and .safe_code=="ok" and
+  .encoder_build=="ffmpeg-7.1.2-kvazaar-2.3.1" and
+  (.generation|bounded(2147483647)) and
+  (.artifacts|type=="array" and length==3) and
+  ((.artifacts|map(.role)|sort)==["image_default","poster","thumbnail"]) and
+  (.sample_frames|type=="array" and length==1) and
+  all(.artifacts[];
+    (keys|sort)==(["role","relative_path","digest","byte_count","media_type","width","height","duration_ms","frame_rate_numerator","frame_rate_denominator","codec","pixel_format","color_space","has_audio"]|sort) and
+    (.digest|type=="string" and test("^[a-f0-9]{64}$")) and
+    (.width|bounded(7680)) and (.height|bounded(7680)) and .width*.height<=33177600 and
+    .duration_ms==0 and .frame_rate_numerator==0 and .frame_rate_denominator==1 and .has_audio==false and
+    (if .role=="image_default" then
+      .relative_path=="artifacts/image-default.png" and .media_type=="image/png" and .codec=="png" and .pixel_format=="rgb24" and .color_space=="srgb" and (.byte_count|bounded(134217728))
+     else .relative_path==("artifacts/"+.role+".jpg") and .media_type=="image/jpeg" and .codec=="mjpeg" and .pixel_format=="yuvj420p" and .color_space=="bt470bg" and (.byte_count|bounded(16777216)) and
+      (if .role=="poster" then .width<=1920 and .height<=1920 else .width==512 and .height==512 end) end)) and
+  all(.sample_frames[];
+    (keys|sort)==(["ordinal","relative_path","digest","byte_count","width","height"]|sort) and
+    .ordinal==1 and .relative_path=="frames/frame-001.jpg" and .width==384 and .height==224 and
+    (.byte_count|bounded(16777216)) and (.digest|type=="string" and test("^[a-f0-9]{64}$"))) and
+  (([.artifacts[].byte_count]+[.sample_frames[].byte_count]|add)<=201326592)
+' "$CLAIM" >/dev/null || emit_failure invalid_media_claim
+for field in attempt_id submission_id generation input_digest policy_digest; do
+  case "$field" in
+    attempt_id) expected="${WALI_ATTEMPT_ID:-}" ;; submission_id) expected="${WALI_SUBMISSION_ID:-}" ;;
+    generation) expected="${WALI_GENERATION:-}" ;; input_digest) expected="${WALI_INPUT_DIGEST:-}" ;; policy_digest) expected="${WALI_POLICY_DIGEST:-}" ;;
+  esac
+  [[ "$(jq -r --arg field "$field" '.[$field]' "$CLAIM")" == "$expected" ]] || emit_failure invalid_media_claim
+done
+verify_file() {
+  local record=$1 path=$2 codec=$3 pixel=$4 color=$5
+  local file="$INPUT/$path" width height bytes digest probe=/tmp/verification-probe.json
+  width="$(jq -r '.width' "$record")"; height="$(jq -r '.height' "$record")"
+  bytes="$(jq -r '.byte_count' "$record")"; digest="$(jq -r '.digest' "$record")"
+  [[ -f "$file" && ! -L "$file" && "$(stat -c '%s' "$file")" == "$bytes" ]] || emit_failure artifact_missing
+  [[ "$(sha256sum "$file" | cut -d' ' -f1)" == "$digest" ]] || emit_failure artifact_mismatch
+  # Independently screen the exact container and private metadata before a
+  # second complete decode; matching bytes alone is not a verified raster.
+  "$CONTRACT" inspect-canonical "$file" >/tmp/verified-image.json 2>/tmp/verification-error || emit_failure artifact_mismatch
+  [[ "$(jq -r '.width' /tmp/verified-image.json)" == "$width" && "$(jq -r '.height' /tmp/verified-image.json)" == "$height" ]] || emit_failure artifact_mismatch
+  ffprobe -v error -show_streams -of json "$file" >"$probe" 2>/tmp/verification-error || emit_failure artifact_mismatch
+  jq -e --arg codec "$codec" --arg pixel "$pixel" --arg color "$color" --argjson width "$width" --argjson height "$height" '
+    (.streams|length)==1 and .streams[0].codec_type=="video" and .streams[0].codec_name==$codec and
+    .streams[0].width==$width and .streams[0].height==$height and .streams[0].pix_fmt==$pixel and
+    (if $codec=="png" then true else .streams[0].color_space==$color end)
+  ' "$probe" >/dev/null || emit_failure unsafe_track_layout
+  ffmpeg -nostdin -hide_banner -loglevel error -filter_threads 2 -threads 1 -xerror -max_alloc 134217728 -err_detect explode -noautorotate \
+    -i "$file" -map 0:v:0 -an -sn -dn -frames:v 2 -c:v rawvideo -pix_fmt rgb24 -threads 1 -f rawvideo \
+    -y /tmp/verified-raster.rgb 2>/tmp/verification-error || emit_failure artifact_mismatch
+  [[ "$(stat -c '%s' /tmp/verified-raster.rgb)" -eq $((width*height*3)) ]] || emit_failure artifact_mismatch
+}
+for role in image_default poster thumbnail; do
+  jq --arg role "$role" '.artifacts[]|select(.role==$role)' "$CLAIM" >/tmp/verify-record.json
+  if [[ "$role" == image_default ]]; then verify_file /tmp/verify-record.json artifacts/image-default.png png rgb24 srgb
+  else verify_file /tmp/verify-record.json "artifacts/${role}.jpg" mjpeg yuvj420p bt470bg; fi
+done
+jq '.sample_frames[0]' "$CLAIM" >/tmp/verify-record.json
+verify_file /tmp/verify-record.json frames/frame-001.jpg mjpeg yuvj420p bt470bg
+jq '.kind="verification"' "$CLAIM" >"$OUTPUT/.verification-claim.json.tmp"
+mv -- "$OUTPUT/.verification-claim.json.tmp" "$OUTPUT/verification-claim.json"
+trap - ERR

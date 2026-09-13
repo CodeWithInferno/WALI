@@ -32,6 +32,10 @@ public final class WALIAgentController: WALIUIActionHandling {
 
     private let renderer = WallpaperRenderer()
     private let diagnostics = ProcessDiagnostics()
+    private var resourceObservationTokens: [any NSObjectProtocol] = []
+    private lazy var rendererSynchronization = RendererObservationSynchronizer { [weak self] in
+        await self?.synchronizeRenderer()
+    }
     private let stateStore: EngineSnapshotStore?
     private let runtimeStore: RuntimeStore?
     #if WALI_APP_STORE
@@ -41,6 +45,7 @@ public final class WALIAgentController: WALIUIActionHandling {
     private let lockScreenHelper: LockScreenHelperConnection?
     private let lockScreenMetadataDirectory: URL?
     private var hasAttemptedLockScreenActivation = false
+    private var hasCompletedDirectQuit = false
     #endif
     private let transcoder: TranscoderConnection
     private let catalogInstallCoordinator: CatalogInstallCoordinator?
@@ -104,8 +109,16 @@ public final class WALIAgentController: WALIUIActionHandling {
         #if WALI_APP_STORE
         guard !isShuttingDown else { return }
         #endif
-        renderer.onSnapshotChange = { [weak self] snapshot in
-            self?.rendererDidChange(snapshot)
+        rendererSynchronization.start()
+        renderer.onSnapshotChange = { [weak self] _ in
+            self?.rendererSynchronization.request()
+        }
+        for name in [ProcessInfo.thermalStateDidChangeNotification, .NSProcessInfoPowerStateDidChange] {
+            resourceObservationTokens.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.rendererSynchronization.request() }
+            })
         }
         #if !WALI_APP_STORE
         renderer.onPresentationRefresh = { [weak self] in
@@ -122,6 +135,7 @@ public final class WALIAgentController: WALIUIActionHandling {
     }
 
     public func shutdown() {
+        stopResourceObservation()
         startupTask?.cancel()
         startupTask = nil
         #if !WALI_APP_STORE
@@ -156,6 +170,7 @@ public final class WALIAgentController: WALIUIActionHandling {
 
     private func performStoreShutdown() async throws {
         isShuttingDown = true
+        stopResourceObservation()
         startupTask?.cancel()
         for task in purgeTasks.values { task.cancel() }
         for task in importTasks.values { task.cancel() }
@@ -296,8 +311,13 @@ public final class WALIAgentController: WALIUIActionHandling {
         let host = AgentServiceHost(afterQuitReply: { [weak self] in
             #if WALI_APP_STORE
             await self?.terminateAfterQuitReply()
+            #else
+            await self?.completeDirectQuit()
             #endif
         }) { [weak self] request in
+            if case .diagnosticsSnapshot = request.command {
+                await self?.refreshRendererObservation()
+            }
             var response = await router.handle(request)
             #if WALI_APP_STORE
             if case let .snapshot(snapshot) = response.result {
@@ -340,7 +360,8 @@ public final class WALIAgentController: WALIUIActionHandling {
         for item in restored.trashedItems {
             scheduleTrashPurge(item.id)
         }
-        await synchronizeRenderer(renderer.snapshot)
+        await refreshRendererObservation()
+        guard !Task.isCancelled else { return }
         await publishSnapshot()
         if let durableSnapshot {
             await resumeImports(from: durableSnapshot)
@@ -351,9 +372,24 @@ public final class WALIAgentController: WALIUIActionHandling {
         #if WALI_APP_STORE
         if case .quit = action { NSApplication.shared.terminate(nil); return }
         guard !isShuttingDown else { return }
+        #else
+        if case .quit = action {
+            do {
+                if try DirectAgentQuit.requestForegroundQuit() { return }
+                if let router {
+                    let response = await router.handle(.init(command: .quit))
+                    if case let .failure(failure) = response.result { throw failure }
+                }
+                completeDirectQuit()
+            } catch {
+                present(error)
+            }
+            return
+        }
         #endif
         guard let router else { return }
         do {
+            if case .refreshDiagnostics = action { await refreshRendererObservation() }
             let state = await router.snapshot()
             guard let command = try command(for: action, preserving: state.preferences) else { return }
             let request = AgentRequest(
@@ -374,6 +410,15 @@ public final class WALIAgentController: WALIUIActionHandling {
             present(error)
         }
     }
+
+    #if !WALI_APP_STORE
+    private func completeDirectQuit() {
+        guard !hasCompletedDirectQuit else { return }
+        hasCompletedDirectQuit = true
+        shutdown()
+        NSApplication.shared.terminate(nil)
+    }
+    #endif
 
     private func command(
         for action: WALIUIAction,
@@ -430,15 +475,6 @@ public final class WALIAgentController: WALIUIActionHandling {
             )
             return .openForegroundApp
         case .quit:
-            #if !WALI_APP_STORE
-            DistributedNotificationCenter.default().postNotificationName(
-                Notification.Name("com.wali.quitAll"),
-                object: Bundle.main.object(forInfoDictionaryKey: "WALIControlServiceName") as? String
-                    ?? Bundle.main.bundleIdentifier,
-                userInfo: nil,
-                deliverImmediately: true
-            )
-            #endif
             return .quit
         }
     }
@@ -641,7 +677,7 @@ public final class WALIAgentController: WALIUIActionHandling {
             }
             #endif
             let output = try await transcoder.transcode(
-                TranscoderRequest(
+                try LocalImportTranscoderRequestFactory.make(
                     jobID: durableUUID,
                     attemptGeneration: context.generation.rawValue,
                     sourceBookmark: sourceBookmark,
@@ -879,11 +915,7 @@ public final class WALIAgentController: WALIUIActionHandling {
         let used = durable.library
             .flatMap(\.artifacts)
             .reduce(UInt64(0)) { $0 &+ $1.byteCount }
-        let current = await router.snapshot()
-        guard current.resourceUsage.storageUsedBytes != used else { return }
-        var resourceUsage = current.resourceUsage
-        resourceUsage.storageUsedBytes = used
-        _ = try? await router.performInternal(.setResourceUsage(resourceUsage))
+        _ = try? await router.recordStorageUsage(used)
     }
 
     private static func reconcile(
@@ -986,16 +1018,22 @@ public final class WALIAgentController: WALIUIActionHandling {
                   let item = items[itemID] else {
                 return nil
             }
-            let primaryURL = snapshot.preferences.quality == .efficiency ? item.previewURL : item.masterURL
+            let content: WallpaperRenderingContent
+            switch item.mediaContent {
+            case let .video(masterURL, previewURL, _):
+                content = .video(
+                    videoURL: snapshot.preferences.quality == .efficiency ? previewURL : masterURL,
+                    efficientVideoURL: previewURL, posterURL: item.posterURL,
+                    lowPowerResponse: lowPowerResponse
+                )
+            case let .still(imageURL):
+                content = .still(imageURL: imageURL)
+            }
             return WallpaperRenderingAssignment(
-                displayID: .init(rawValue: display.id),
-                videoURL: primaryURL,
-                efficientVideoURL: item.previewURL,
-                posterURL: item.posterURL,
+                displayID: .init(rawValue: display.id), content: content,
                 contentFit: PresentationContentFit(
                     rawValue: (display.scaling ?? snapshot.preferences.scaling).rawValue
-                ) ?? .fill,
-                lowPowerResponse: lowPowerResponse
+                ) ?? .fill
             )
         }
         renderer.setAssignments(assignments)
@@ -1117,7 +1155,8 @@ public final class WALIAgentController: WALIUIActionHandling {
         return snapshot.displays.compactMap { display in
             guard display.isOnline,
                   let itemID = display.assignedItemID,
-                  let item = items[itemID] else { return nil }
+                  let item = items[itemID],
+                  case let .video(masterURL, _, _) = item.mediaContent else { return nil }
             let record = records[itemID]
             let masterArtifact = record?.artifacts.first(where: { $0.role == .masterVideo })
             let posterArtifact = record?.artifacts.first(where: { $0.role == .posterImage })
@@ -1135,7 +1174,7 @@ public final class WALIAgentController: WALIUIActionHandling {
                 masterBitDepth: masterBitDepth,
                 masterArtifactSHA256: masterArtifact?.digest.value,
                 posterArtifactSHA256: posterArtifact?.digest.value,
-                masterURL: item.masterURL,
+                masterURL: masterURL,
                 posterURL: item.posterURL
             )
         }
@@ -1150,19 +1189,23 @@ public final class WALIAgentController: WALIUIActionHandling {
     }
 
     #endif
-    private func rendererDidChange(_ snapshot: WallpaperRendererSnapshot) {
-        #if WALI_APP_STORE
-        guard !isShuttingDown else { return }
-        #endif
-        Task { @MainActor [weak self] in
-            await self?.synchronizeRenderer(snapshot)
-        }
+    private func stopResourceObservation() {
+        rendererSynchronization.stop()
+        renderer.onSnapshotChange = nil
+        for token in resourceObservationTokens { NotificationCenter.default.removeObserver(token) }
+        resourceObservationTokens.removeAll()
     }
 
-    private func synchronizeRenderer(_ snapshot: WallpaperRendererSnapshot) async {
-        guard let router else { return }
+    private func refreshRendererObservation() async {
+        await rendererSynchronization.flush()
+    }
+
+    private func synchronizeRenderer() async {
+        guard let router, !Task.isCancelled else { return }
+        let snapshot = renderer.snapshot
         do {
             let state = await router.snapshot()
+            try Task.checkCancellation()
             let displays = snapshot.displays.map { display in
                 EngineDisplay(
                     id: display.id.rawValue,
@@ -1204,17 +1247,40 @@ public final class WALIAgentController: WALIUIActionHandling {
                 _ = try await router.performInternal(.replaceDisplays(displays))
             }
 
-            let playbackStatus = Self.playbackStatus(from: snapshot)
-            if (await router.snapshot()).playbackStatus != playbackStatus {
-                _ = try await router.performInternal(.setPlaybackStatus(playbackStatus))
-            }
+            try Task.checkCancellation()
+            let process = ProcessInfo.processInfo
+            let observation = Self.resourceObservation(from: renderer.snapshot,
+                isLowPowerModeEnabled: process.isLowPowerModeEnabled, thermalState: process.thermalState)
+            _ = try await router.recordRendererObservation(observation)
+            try Task.checkCancellation()
             await publishSnapshot()
+        } catch is CancellationError {
+            return
         } catch {
             present(error)
         }
     }
 
-    private static func playbackStatus(from snapshot: WallpaperRendererSnapshot) -> EnginePlaybackStatus {
+    static func resourceObservation(from snapshot: WallpaperRendererSnapshot,
+                                    isLowPowerModeEnabled: Bool,
+                                    thermalState: ProcessInfo.ThermalState) -> RendererResourceObservation {
+        let thermalLabel: String
+        switch thermalState {
+        case .nominal: thermalLabel = "nominal"
+        case .fair: thermalLabel = "fair"
+        case .serious: thermalLabel = "serious"
+        case .critical: thermalLabel = "critical"
+        @unknown default: thermalLabel = "unknown"
+        }
+        return RendererResourceObservation(playbackStatus: playbackStatus(from: snapshot),
+            activePlayers: snapshot.sessions.count { $0.status == .playing },
+            isLowPowerModeEnabled: isLowPowerModeEnabled, thermalState: thermalLabel)
+    }
+
+    static func playbackStatus(from snapshot: WallpaperRendererSnapshot) -> EnginePlaybackStatus {
+        if !snapshot.sessions.isEmpty && snapshot.sessions.allSatisfy({ $0.status == .displaying }) {
+            return .displaying
+        }
         if snapshot.isUserPaused { return .paused }
         if let failure = snapshot.sessions.lazy.compactMap({ session -> String? in
             if case let .failed(message) = session.status { return message }
@@ -1222,7 +1288,9 @@ public final class WALIAgentController: WALIUIActionHandling {
         }).first {
             return .failed(failure)
         }
-        if snapshot.sessions.contains(where: { session in
+        let hasPlayingSession = snapshot.sessions.contains { $0.status == .playing }
+        // A covered display must not label another display's motion as suspended.
+        if !hasPlayingSession, snapshot.sessions.contains(where: { session in
             if case let .paused(reasons) = session.status { return !reasons.isEmpty }
             return false
         }) {
@@ -1231,9 +1299,8 @@ public final class WALIAgentController: WALIUIActionHandling {
         if snapshot.sessions.contains(where: { if case .preparing = $0.status { true } else { false } }) {
             return .preparing
         }
-        if snapshot.sessions.contains(where: { if case .playing = $0.status { true } else { false } }) {
-            return .playing
-        }
+        if hasPlayingSession { return .playing }
+        if snapshot.sessions.contains(where: { $0.status == .displaying }) { return .displaying }
         return .idle
     }
 
@@ -1332,7 +1399,7 @@ private struct ImportProgressUpdate {
     let timestamp: Date
 }
 
-private extension AgentSnapshot {
+extension AgentSnapshot {
     var agentPresentation: WALIUISnapshot {
         let activeIDs = Set(displays.compactMap(\.assignedItemID))
         let activeItem = items.first { activeIDs.contains($0.id) }
@@ -1340,8 +1407,12 @@ private extension AgentSnapshot {
         case .idle: .stopped
         case .preparing: .converting(progress: nil)
         case .playing: .playing
+        case .displaying: .displaying
         case .paused: .userPaused
-        case .suspended: .automaticallyPaused(reason: "System activity")
+        case .suspended: .automaticallyPaused(reason: WALIRendererState.automaticPauseReason(
+            isLowPowerModeEnabled: resourceUsage.isLowPowerModeEnabled,
+            pausesForLowPowerMode: preferences.lowPowerBehavior == .pause,
+            thermalState: resourceUsage.thermalState))
         case .failed: .error(message: "Playback failed")
         }
         return WALIUISnapshot(
@@ -1380,5 +1451,59 @@ private extension AgentRuntimeNotice {
         case .error: .error
         }
         return .init(id: id, kind: presentationKind, title: title, message: message)
+    }
+}
+
+/// Transient agent-local observation; never encoded or sent across IPC.
+struct RendererResourceObservation: Sendable, Equatable {
+    let playbackStatus: EnginePlaybackStatus
+    let activePlayers: Int
+    let isLowPowerModeEnabled: Bool
+    let thermalState: String
+}
+
+/// One event-driven drain; a change during an await requests a fresh pass.
+@MainActor
+final class RendererObservationSynchronizer {
+    private let synchronize: @MainActor () async -> Void
+    private var task: Task<Void, Never>?
+    private var pending = false
+    private var isActive = false
+    private var generation: UInt64 = 0
+
+    init(synchronize: @escaping @MainActor () async -> Void) {
+        self.synchronize = synchronize
+    }
+
+    func start() { isActive = true }
+
+    func request() {
+        guard isActive else { return }
+        pending = true
+        guard task == nil else { return }
+        let admittedGeneration = generation
+        task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if generation == admittedGeneration { task = nil }
+            }
+            while isActive, generation == admittedGeneration, pending, !Task.isCancelled {
+                pending = false
+                await synchronize()
+            }
+        }
+    }
+
+    func flush() async {
+        request()
+        await task?.value
+    }
+
+    func stop() {
+        isActive = false
+        pending = false
+        generation &+= 1
+        task?.cancel()
+        task = nil
     }
 }

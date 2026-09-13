@@ -40,6 +40,7 @@ public enum EnginePlaybackStatus: Codable, Sendable, Hashable {
     case idle
     case preparing
     case playing
+    case displaying
     case paused
     case suspended
     case failed(String)
@@ -49,42 +50,85 @@ public struct EngineLibraryItem: Codable, Sendable, Hashable, Identifiable {
     public let id: UUID
     public var name: String
     public let createdAt: Date
-    public let duration: TimeInterval
+    public let mediaContent: EngineWallpaperMediaContent
     public let pixelWidth: Int
     public let pixelHeight: Int
-    public let masterURL: URL
-    public let previewURL: URL
     public let posterURL: URL
     public let contentDigest: String
     public let byteCount: UInt64
     public var isFavorite: Bool
 
-    public init(
-        id: UUID,
-        name: String,
-        createdAt: Date,
-        duration: TimeInterval,
-        pixelWidth: Int,
-        pixelHeight: Int,
-        masterURL: URL,
-        previewURL: URL,
-        posterURL: URL,
-        contentDigest: String,
-        byteCount: UInt64 = 0,
-        isFavorite: Bool = false
-    ) {
+    public init(id: UUID, name: String, createdAt: Date,
+                mediaContent: EngineWallpaperMediaContent, pixelWidth: Int, pixelHeight: Int,
+                posterURL: URL, contentDigest: String, byteCount: UInt64 = 0,
+                isFavorite: Bool = false) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
-        self.duration = duration
+        self.mediaContent = mediaContent
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
-        self.masterURL = masterURL
-        self.previewURL = previewURL
         self.posterURL = posterURL
         self.contentDigest = contentDigest
         self.byteCount = byteCount
         self.isFavorite = isFavorite
+    }
+
+    /// Source compatibility for callers constructing a known video item.
+    public init(id: UUID, name: String, createdAt: Date, duration: TimeInterval,
+                pixelWidth: Int, pixelHeight: Int, masterURL: URL, previewURL: URL,
+                posterURL: URL, contentDigest: String, byteCount: UInt64 = 0,
+                isFavorite: Bool = false) {
+        self.init(id: id, name: name, createdAt: createdAt,
+                  mediaContent: .video(masterURL: masterURL, previewURL: previewURL, duration: duration),
+                  pixelWidth: pixelWidth, pixelHeight: pixelHeight, posterURL: posterURL,
+                  contentDigest: contentDigest, byteCount: byteCount, isFavorite: isFavorite)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, createdAt, mediaContent, pixelWidth, pixelHeight, posterURL
+        case contentDigest, byteCount, isFavorite, duration, masterURL, previewURL
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        pixelWidth = try values.decode(Int.self, forKey: .pixelWidth)
+        pixelHeight = try values.decode(Int.self, forKey: .pixelHeight)
+        posterURL = try values.decode(URL.self, forKey: .posterURL)
+        contentDigest = try values.decode(String.self, forKey: .contentDigest)
+        byteCount = try values.decodeIfPresent(UInt64.self, forKey: .byteCount) ?? 0
+        isFavorite = try values.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+        if values.contains(.mediaContent) {
+            guard !values.contains(.masterURL), !values.contains(.previewURL), !values.contains(.duration) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Mixed legacy and typed media."))
+            }
+            mediaContent = try values.decode(EngineWallpaperMediaContent.self, forKey: .mediaContent)
+        } else {
+            // Only the complete historic video shape can migrate from engine-state-v1.
+            let legacy = EngineWallpaperMediaContent.video(
+                masterURL: try values.decode(URL.self, forKey: .masterURL),
+                previewURL: try values.decode(URL.self, forKey: .previewURL),
+                duration: try values.decode(TimeInterval.self, forKey: .duration))
+            _ = try JSONEncoder().encode(legacy)
+            mediaContent = legacy
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(name, forKey: .name)
+        try values.encode(createdAt, forKey: .createdAt)
+        try values.encode(mediaContent, forKey: .mediaContent)
+        try values.encode(pixelWidth, forKey: .pixelWidth)
+        try values.encode(pixelHeight, forKey: .pixelHeight)
+        try values.encode(posterURL, forKey: .posterURL)
+        try values.encode(contentDigest, forKey: .contentDigest)
+        try values.encode(byteCount, forKey: .byteCount)
+        try values.encode(isFavorite, forKey: .isFavorite)
     }
 }
 

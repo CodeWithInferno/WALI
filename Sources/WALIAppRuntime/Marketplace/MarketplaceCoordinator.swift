@@ -155,6 +155,7 @@ public final class MarketplaceCreatorContext {
         self.metadata = metadata
         self.moderationMetadata = moderationMetadata
         studioModel?.updateAuthorization(authorization)
+        uploadCoordinator?.updateAuthorization(authorization)
         moderationModel?.updateAuthorization(authorization)
         state = .ready
     }
@@ -178,22 +179,26 @@ public final class MarketplaceCreatorContext {
             assuranceLevel: .aal1
         )
         studioModel?.updateAuthorization(restricted)
+        uploadCoordinator?.updateAuthorization(restricted)
         moderationModel?.updateAuthorization(restricted)
         state = .idle
     }
 }
 
-/// One foreground gateway/session authority, shared by otherwise independent windows.
+/// Shared foreground session and acknowledgement authority; windows own presentation.
 @MainActor
 struct MarketplaceForegroundServices {
     let environment: CatalogEnvironment
     let gateway: SupabaseCatalogGateway
+    let installAcknowledgementStore: CatalogInstallAcknowledgementStore
 
     init?(bundle: Bundle) {
         guard let environment = try? CatalogEnvironment.from(bundle: bundle),
               let gateway = try? SupabaseCatalogGateway(environment: environment) else { return nil }
         self.environment = environment
         self.gateway = gateway
+        installAcknowledgementStore = CatalogInstallAcknowledgementStore(fileURL: try? CatalogInstallAcknowledgementStore.defaultURL(
+            bundleIdentifier: bundle.bundleIdentifier ?? "io.github.codewithinferno.wali.WALI", projectURL: environment.supabaseURL))
     }
 }
 
@@ -205,6 +210,7 @@ public final class MarketplaceCoordinator {
     )
 
     public let model: WALIMarketplaceModel
+    public let discovery = CatalogDiscoveryModel()
     public let isMarketplaceAvailable: Bool
     public let authenticationMethod: CatalogAuthenticationMethod
     let emailSignIn = EmailCodeSignInModel()
@@ -254,6 +260,7 @@ public final class MarketplaceCoordinator {
     private var acceptsAuthenticationResults = true
     private let installPreparer: CatalogInstallPreparer?
     private let presentationMediaCache: (any CatalogPresentationMediaCaching)?
+    private var savedMediaLease = CatalogMediaLease()
     private var homeMediaLease = CatalogMediaLease()
     private var browseMediaLease = CatalogMediaLease()
     private var searchMediaLease = CatalogMediaLease()
@@ -265,13 +272,23 @@ public final class MarketplaceCoordinator {
     private var homeGeneration: UInt64 = 0
     private var browseGeneration: UInt64 = 0
     private var detailGeneration: UInt64 = 0
+    private var taxonomyTask: Task<Void, Never>?
+    private var preferencesTask: Task<Void, Never>?
+    private var savedTask: Task<Void, Never>?
+    private var savedGeneration: UInt64 = 0
+    private var pendingPreferenceWrite: (subjectID: String, categories: [String], rating: String, optOut: Bool, revision: UInt64, key: String)?
+    let installAcknowledgementStore: CatalogInstallAcknowledgementStore
+    private var recordGeneration: UInt64 = 0
+    private var recordTask: Task<Void, Never>?
+    private var recordRetryRequested = false
     private var homeTask: Task<Void, Never>?
     private var browseTask: Task<Void, Never>?
     private var detailTask: Task<Void, Never>?
     private var detailTargetID: String?
     private var actionTask: Task<Void, Never>?
     private var installTask: Task<Void, Never>?
-    private var retryableInstall: WALICatalogDetailPresentation?
+    private var selectedInstallMedia: (wallpaperID: String, releaseID: String, revision: UInt64, kind: CatalogMediaKind)?
+    private var retryableInstall: (detail: WALICatalogDetailPresentation, kind: CatalogMediaKind)?
     private var reportTask: Task<Void, Never>?
     private var accountTask: Task<Void, Never>?
     private var authenticationTask: Task<Void, Never>?
@@ -339,6 +356,7 @@ public final class MarketplaceCoordinator {
         installPreparer: CatalogInstallPreparer? = nil,
         presentationMediaCache: (any CatalogPresentationMediaCaching)? = nil,
         securityStore: CatalogSecurityStateStore? = nil,
+        installAcknowledgementStore: CatalogInstallAcknowledgementStore? = nil,
         installHandler: (@MainActor (PreparedCatalogInstall) async throws -> Void)? = nil,
         securityHandler: (@MainActor (CatalogSecuritySnapshot) async throws -> Void)? = nil,
         creatorRequestTimeout: Duration = .seconds(15),
@@ -369,6 +387,7 @@ public final class MarketplaceCoordinator {
         self.installPreparer = isMarketplaceAvailable ? installPreparer : nil
         self.presentationMediaCache = isMarketplaceAvailable ? presentationMediaCache : nil
         self.securityStore = isMarketplaceAvailable ? securityStore : nil
+        self.installAcknowledgementStore = installAcknowledgementStore ?? CatalogInstallAcknowledgementStore()
         self.installHandler = isMarketplaceAvailable ? installHandler : nil
         self.securityHandler = isMarketplaceAvailable ? securityHandler : nil
         self.creatorRequestTimeout = creatorRequestTimeout
@@ -436,6 +455,7 @@ public final class MarketplaceCoordinator {
                 bundleIdentifier: bundleIdentifier
             ),
             securityStore: securityStore,
+            installAcknowledgementStore: services.installAcknowledgementStore,
             installHandler: installHandler,
             securityHandler: securityHandler
         )
@@ -448,6 +468,7 @@ public final class MarketplaceCoordinator {
             return
         }
         Self.logger.info("Marketplace lifecycle started")
+        loadTaxonomy()
         if model.homeState == .idle { loadHome() }
         observeAccount()
         securityTask?.cancel()
@@ -460,6 +481,10 @@ public final class MarketplaceCoordinator {
         acceptsAuthenticationResults = false
         detachEmailFlow()
         Self.logger.info("Marketplace lifecycle stopped")
+        taxonomyTask?.cancel()
+        preferencesTask?.cancel()
+        savedTask?.cancel()
+        recordTask?.cancel()
         installTask?.cancel()
         moderatorAccess?.cancel()
         authenticationTask?.cancel()
@@ -478,6 +503,195 @@ public final class MarketplaceCoordinator {
         sessionExpiryTask?.cancel()
     }
 
+    public func loadTaxonomy() {
+        guard let gateway else { return }
+        taxonomyTask?.cancel()
+        discovery.taxonomyState = .loading
+        taxonomyTask = Task { [weak self] in
+            do {
+                async let categories = gateway.categories()
+                async let tags = gateway.tags()
+                let options = try await (categories, tags)
+                try Task.checkCancellation()
+                self?.discovery.categories = options.0
+                self?.discovery.tags = options.1
+                self?.discovery.taxonomyState = options.0.isEmpty ? .empty : .ready
+            } catch is CancellationError { return }
+            catch { self?.discovery.taxonomyState = Self.loadState(for: error) }
+        }
+    }
+
+    public func loadPreferences() {
+        guard let gateway, case let .signedIn(subjectID) = model.accountState else { return }
+        preferencesTask?.cancel()
+        discovery.preferencesState = .loading
+        preferencesTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let value = try await gateway.catalogPreferences()
+                try Task.checkCancellation()
+                guard model.accountState == .signedIn(userID: subjectID), value.userID == subjectID else { return }
+                discovery.preferences = value
+                discovery.preferencesState = .ready
+                refreshAfterPublication()
+            } catch is CancellationError { return }
+            catch {
+                guard model.accountState == .signedIn(userID: subjectID) else { return }
+                discovery.preferencesState = Self.loadState(for: error)
+            }
+        }
+    }
+
+    public func savePreferences(categoryIDs: [String], ratingCeiling: String, personalizationOptOut: Bool) {
+        guard let gateway, case let .signedIn(subjectID) = model.accountState,
+              let current = discovery.preferences, current.userID == subjectID,
+              discovery.preferencesSaveState != .working,
+              categoryIDs.count <= 12, Set(categoryIDs).count == categoryIDs.count,
+              Set(categoryIDs).isSubset(of: Set(discovery.categories.map(\.id))) else { return }
+        let categories = categoryIDs.sorted()
+        let prior = pendingPreferenceWrite
+        let write = prior?.subjectID == subjectID && prior?.categories == categories && prior?.rating == ratingCeiling
+            && prior?.optOut == personalizationOptOut ? prior! :
+            (subjectID, categories, ratingCeiling, personalizationOptOut, current.revision, UUID().uuidString.lowercased())
+        pendingPreferenceWrite = write
+        discovery.preferencesSaveState = .working
+        preferencesTask?.cancel()
+        preferencesTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let updated = try await gateway.setCatalogPreferences(categoryIDs: write.1, ratingCeiling: write.2,
+                    personalizationOptOut: write.3, expectedRevision: write.4, idempotencyKey: write.5)
+                try Task.checkCancellation()
+                guard model.accountState == .signedIn(userID: subjectID), updated.userID == subjectID else { return }
+                discovery.preferences = updated
+                discovery.preferencesSaveState = .succeeded(message: "Discover preferences saved.")
+                pendingPreferenceWrite = nil
+                refreshAfterPublication()
+            } catch is CancellationError { return }
+            catch {
+                guard model.accountState == .signedIn(userID: subjectID) else { return }
+                if let remote = error as? CatalogRemoteError, ["stale_revision", "revision_mismatch"].contains(remote.code) {
+                    pendingPreferenceWrite = nil
+                    loadPreferences()
+                    discovery.preferencesSaveState = .failed(message: "Preferences changed elsewhere. Review them and save again.")
+                } else {
+                    discovery.preferencesSaveState = .failed(message: "Preferences could not be saved. Try again.")
+                }
+            }
+        }
+    }
+
+    public func refreshCatalogSurfaces() {
+        loadHome()
+        if let query = currentSearchQuery { search(query) }
+        else if model.browseState != .idle {
+            loadBrowse(category: currentBrowseCategory, tags: currentBrowseTags, sort: currentBrowseSort)
+        }
+    }
+
+    public func refreshAfterPublication() {
+        refreshCatalogSurfaces()
+        if discovery.savedState != .idle { loadSavedWallpapers() }
+        if let wallpaperID = model.selectedDetail?.id { loadDetail(wallpaperID: wallpaperID) }
+    }
+
+    public func loadSavedWallpapers(loadMore: Bool = false) {
+        guard let gateway, case let .signedIn(subjectID) = model.accountState else {
+            discovery.savedItems = []; discovery.savedState = .empty
+            return
+        }
+        if loadMore && (discovery.isLoadingSavedPage || discovery.savedNextCursor == nil) { return }
+        savedTask?.cancel()
+        savedGeneration &+= 1
+        let generation = savedGeneration
+        let cursor = loadMore ? discovery.savedNextCursor : nil
+        discovery.savedPageError = nil
+        if loadMore { discovery.isLoadingSavedPage = true }
+        else { discovery.savedState = .loading; discovery.savedNextCursor = nil }
+        savedTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if generation == savedGeneration { discovery.isLoadingSavedPage = false } }
+            do {
+                let page = try await gateway.savedWallpapers(cursor: cursor)
+                try Task.checkCancellation()
+                guard generation == savedGeneration, model.accountState == .signedIn(userID: subjectID) else { return }
+                if !loadMore { savedMediaLease = CatalogMediaLease() }
+                let cards = page.items.map { Self.card($0) }
+                discovery.savedItems = loadMore ? appendUnique(discovery.savedItems, cards) : cards
+                discovery.savedNextCursor = page.nextCursor
+                discovery.savedState = discovery.savedItems.isEmpty ? .empty : .ready
+                _ = await presentationCards(page.items, retaining: savedMediaLease) { [weak self] card in
+                    guard let self, generation == savedGeneration,
+                          model.accountState == .signedIn(userID: subjectID) else { return }
+                    discovery.savedItems = discovery.savedItems.map { $0.id == card.id ? $0.withMedia(from: card) : $0 }
+                }
+            } catch is CancellationError { return }
+            catch {
+                guard generation == savedGeneration, model.accountState == .signedIn(userID: subjectID) else { return }
+                if loadMore { discovery.savedPageError = "More saved wallpapers could not be loaded." }
+                else { discovery.savedState = Self.loadState(for: error) }
+            }
+        }
+    }
+
+    public func retryInstallRecording() {
+        guard gateway != nil, case .signedIn = model.accountState else { return }
+        guard recordTask == nil else { recordRetryRequested = true; return }
+        recordRetryRequested = false
+        discovery.isRetryingInstallRecord = true
+        recordTask = Task { [weak self] in await self?.recordPendingInstall() }
+    }
+
+    private func recordPendingInstall() async {
+        guard let gateway, case let .signedIn(subjectID) = model.accountState else { recordTask = nil; return }
+        let generation = recordGeneration
+        discovery.isRetryingInstallRecord = true
+        defer {
+            if generation == recordGeneration {
+                discovery.isRetryingInstallRecord = false
+                recordTask = nil
+                if recordRetryRequested && !Task.isCancelled { retryInstallRecording() }
+            }
+        }
+        do {
+            let entries = try await installAcknowledgementStore.pending(subjectID: subjectID)
+            guard generation == recordGeneration, model.accountState == .signedIn(userID: subjectID) else { return }
+            discovery.canRetryInstallRecord = !entries.isEmpty
+            for pending in entries {
+                try Task.checkCancellation()
+                guard generation == recordGeneration, model.accountState == .signedIn(userID: subjectID) else { return }
+                let code = await Self.recordInstallWithRetry {
+                    try await gateway.recordInstall(receipt: pending.receipt, manifestDigest: pending.manifestDigest,
+                        releaseID: pending.releaseID, idempotencyKey: pending.idempotencyKey)
+                }
+                guard generation == recordGeneration, model.accountState == .signedIn(userID: subjectID) else { return }
+                if let code {
+                    if ["install_receipt_expired", "install_receipt_invalid", "install_receipt_consumed", "idempotency_conflict", "manifest_invalid"].contains(code) {
+                        try await installAcknowledgementStore.remove(pending)
+                        guard generation == recordGeneration, model.accountState == .signedIn(userID: subjectID) else { return }
+                        discovery.installRecordingFailure = "The wallpaper is in your Library. Its download count could not be recorded because the confirmation is no longer valid."
+                        discovery.canRetryInstallRecord = false
+                        continue
+                    }
+                    discovery.installRecordingFailure = "The wallpaper is in your Library. Its download count has not been updated yet. Try again when connected."
+                    discovery.canRetryInstallRecord = true
+                    return
+                }
+                try await installAcknowledgementStore.remove(pending)
+                guard generation == recordGeneration, model.accountState == .signedIn(userID: subjectID) else { return }
+                discovery.installRecordingFailure = nil
+                discovery.canRetryInstallRecord = false
+                if model.selectedDetail?.id == pending.wallpaperID { loadDetail(wallpaperID: pending.wallpaperID) }
+                refreshCatalogSurfaces()
+            }
+        } catch is CancellationError { return }
+        catch {
+            guard generation == recordGeneration, model.accountState == .signedIn(userID: subjectID) else { return }
+            discovery.installRecordingFailure = "The wallpaper is in your Library. Download confirmation recovery is unavailable. Try again."
+            discovery.canRetryInstallRecord = true
+        }
+    }
+
     public func loadHome() {
         homeTask?.cancel()
         homeGeneration &+= 1
@@ -488,11 +702,12 @@ public final class MarketplaceCoordinator {
             model.homeState = .empty
             return
         }
+        let ratingCeiling = discovery.preferences?.ratingCeiling ?? "teen"
         homeTask = Task { [weak self] in
             do {
                 let home = try await gateway.home(
                     locale: Locale.current.identifier,
-                    ratingCeiling: "mature"
+                    ratingCeiling: ratingCeiling
                 )
                 try Task.checkCancellation()
                 guard let self, generation == self.homeGeneration else { return }
@@ -521,6 +736,8 @@ public final class MarketplaceCoordinator {
         let started = Date()
         currentBrowseCategory = category
         currentBrowseTags = tags
+        discovery.selectedCategory = category
+        discovery.selectedTags = Set(tags)
         currentBrowseSort = sort
         currentSearchQuery = nil
         isLoadingMore = false
@@ -552,7 +769,12 @@ public final class MarketplaceCoordinator {
         }
     }
 
-    public func search(_ query: String) {
+    public func search(_ query: String, category: String? = nil, tags: [String]? = nil, sort: CatalogBrowseSort? = nil) {
+        if let sort { currentBrowseSort = sort }
+        if tags != nil {
+            currentBrowseCategory = category
+            currentBrowseTags = tags ?? []
+        }
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         browseTask?.cancel()
         isLoadingMore = false
@@ -576,7 +798,8 @@ public final class MarketplaceCoordinator {
         browseTask = Task { [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(180))
-                let response = try await gateway.search(CatalogSearchRequest(query: query))
+                let response = try await gateway.search(CatalogSearchRequest(query: query, category: self?.currentBrowseCategory,
+                    tags: self?.currentBrowseTags ?? [], ratingCeiling: self?.discovery.preferences?.ratingCeiling ?? "teen", sort: self?.currentBrowseSort))
                 try Task.checkCancellation()
                 guard let self, generation == self.browseGeneration else { return }
                 self.searchMediaLease = CatalogMediaLease()
@@ -613,7 +836,8 @@ public final class MarketplaceCoordinator {
             }
             do {
                 if let searchQuery {
-                    let request = try CatalogSearchRequest(query: searchQuery, cursor: cursor)
+                    let request = try CatalogSearchRequest(query: searchQuery, category: currentBrowseCategory, tags: currentBrowseTags,
+                        ratingCeiling: discovery.preferences?.ratingCeiling ?? "teen", sort: currentBrowseSort, cursor: cursor)
                     let response = try await gateway.search(request)
                     try Task.checkCancellation()
                     guard generation == browseGeneration else { return }
@@ -650,6 +874,7 @@ public final class MarketplaceCoordinator {
         let generation = detailGeneration
         Self.logger.info("Wallpaper detail requested; generation=\(generation, privacy: .public)")
         model.selectedDetail = nil
+        selectedInstallMedia = nil
         detailMediaLease = CatalogMediaLease()
         model.detailState = .loading
         guard let gateway else {
@@ -661,6 +886,7 @@ public final class MarketplaceCoordinator {
                 let detail = try await gateway.detail(wallpaperID: wallpaperID)
                 try Task.checkCancellation()
                 guard let self, generation == self.detailGeneration else { return }
+                self.selectedInstallMedia = (detail.id, detail.summary.currentReleaseID, detail.summary.revision, detail.media.kind)
                 self.model.selectedDetail = self.presentationDetail(detail)
                 self.model.detailState = .ready
                 Self.logger.info("Wallpaper metadata ready; generation=\(generation, privacy: .public)")
@@ -752,6 +978,8 @@ public final class MarketplaceCoordinator {
                 if case .report = action { model.reportState = .idle }
                 else if action != nil { model.actionState = .idle }
                 model.accountState = .signedIn(userID: state.userID)
+                if discovery.preferences?.userID != state.userID { loadPreferences() }
+                retryInstallRecording()
                 loadAccountProfile(for: state.userID)
                 let pending = deferredAction
                 deferredAction = nil
@@ -1046,6 +1274,7 @@ public final class MarketplaceCoordinator {
                 try Task.checkCancellation()
                 clearSubjectBoundState()
                 model.accountState = .signedOut
+                refreshCatalogSurfaces()
                 model.authenticationState = .idle
             } catch is CancellationError {
                 model.authenticationState = .idle
@@ -1104,6 +1333,7 @@ public final class MarketplaceCoordinator {
                 } else {
                     moderationMetadata = nil
                 }
+                guard model.accountState == .signedIn(userID: userID), !Task.isCancelled else { return }
                 creatorContext.apply(
                     authorization: authorization,
                     metadata: metadata,
@@ -1401,13 +1631,15 @@ public final class MarketplaceCoordinator {
     }
 
     public func installSelectedWallpaper() {
-        guard requireAuthentication(for: .install), let detail = model.selectedDetail else { return }
-        startCatalogInstall(detail)
+        guard requireAuthentication(for: .install), let detail = model.selectedDetail,
+              let media = selectedInstallMedia, media.wallpaperID == detail.id,
+              media.releaseID == detail.currentReleaseID, media.revision == detail.wallpaperRevision else { return }
+        startCatalogInstall(detail, mediaKind: media.kind)
     }
 
     public func retryCatalogInstall() {
         guard requireAuthentication(for: .install), let retryableInstall else { return }
-        startCatalogInstall(retryableInstall)
+        startCatalogInstall(retryableInstall.detail, mediaKind: retryableInstall.kind)
     }
 
     public func cancelCatalogInstall() {
@@ -1416,12 +1648,13 @@ public final class MarketplaceCoordinator {
         model.catalogInstall?.phase = .cancelled
     }
 
-    private func startCatalogInstall(_ detail: WALICatalogDetailPresentation) {
+    private func startCatalogInstall(_ detail: WALICatalogDetailPresentation, mediaKind: CatalogMediaKind) {
         guard model.catalogInstall?.isActive != true,
-              let gateway, let installPreparer, let securityStore, let installHandler else { return }
+              let gateway, let installPreparer, let securityStore, let installHandler,
+              case let .signedIn(installSubjectID) = model.accountState else { return }
         let operationID = UUID()
         let idempotencyKey = operationID.uuidString.lowercased()
-        retryableInstall = detail
+        retryableInstall = (detail, mediaKind)
         model.catalogInstall = .init(id: operationID, wallpaperID: detail.id,
             releaseID: detail.currentReleaseID, title: detail.title)
         installTask = Task { [weak self] in
@@ -1430,7 +1663,7 @@ public final class MarketplaceCoordinator {
                 let security = try await refreshCatalogSecurityState(gateway: gateway, store: securityStore)
                 try Task.checkCancellation()
                 let grant = try await gateway.requestInstall(
-                    wallpaperID: detail.id, releaseID: detail.currentReleaseID,
+                    wallpaperID: detail.id, releaseID: detail.currentReleaseID, mediaKind: mediaKind,
                     expectedWallpaperRevision: detail.wallpaperRevision, idempotencyKey: idempotencyKey)
                 try Task.checkCancellation()
                 let prepared = try await installPreparer.prepare(grant: grant,
@@ -1452,6 +1685,21 @@ public final class MarketplaceCoordinator {
                 // Do not offer a cancel button that cannot cancel that operation.
                 model.catalogInstall?.phase = .installing
                 try await installHandler(prepared)
+                // Persist the acknowledgement immediately after agent success,
+                // even if the foreground account changed while the agent worked.
+                // It can only be sent when its original subject is signed in.
+                do {
+                    let acknowledgement = try CatalogInstallAcknowledgement(subjectID: installSubjectID,
+                    wallpaperID: detail.id, releaseID: prepared.releaseID, receipt: grant.receipt,
+                    manifestDigest: prepared.manifestDigest, idempotencyKey: idempotencyKey, expiresAt: grant.expiresAt)
+                    try await installAcknowledgementStore.enqueue(acknowledgement)
+                }
+                catch {
+                    if model.accountState == .signedIn(userID: installSubjectID) {
+                        discovery.installRecordingFailure = "The wallpaper is in your Library. Its download confirmation could not be saved for recovery."
+                        discovery.canRetryInstallRecord = true
+                    }
+                }
                 try Task.checkCancellation()
                 guard model.catalogInstall?.id == operationID else { return }
                 model.catalogInstall?.phase = .completed
@@ -1459,12 +1707,9 @@ public final class MarketplaceCoordinator {
                 if model.selectedDetail?.id == detail.id, model.actionState != .working {
                     model.actionState = .succeeded(message: "Added to Library")
                 }
-                if let code = await Self.recordInstallWithRetry(operation: {
-                    try await gateway.recordInstall(receipt: grant.receipt, manifestDigest: prepared.manifestDigest,
-                        releaseID: prepared.releaseID, idempotencyKey: idempotencyKey)
-                }) {
-                    Self.logger.error("Install metric could not be recorded; code=\(code, privacy: .public)")
-                }
+                guard case let .signedIn(currentSubjectID) = model.accountState,
+                      currentSubjectID == installSubjectID else { return }
+                retryInstallRecording()
             } catch is CancellationError {
                 if model.catalogInstall?.id == operationID { model.catalogInstall?.phase = .cancelled }
             } catch {
@@ -1520,6 +1765,7 @@ public final class MarketplaceCoordinator {
             current.favoriteRevision = result.revision
             current.favoriteCount = result.aggregateCount
             self.model.selectedDetail = current
+            self.refreshCatalogSurfaces()
         }
     }
 
@@ -1541,6 +1787,8 @@ public final class MarketplaceCoordinator {
             current.savedRevision = result.revision
             current.saveCount = result.aggregateCount
             self.model.selectedDetail = current
+            self.loadSavedWallpapers()
+            self.refreshCatalogSurfaces()
         }
     }
 
@@ -1625,14 +1873,21 @@ public final class MarketplaceCoordinator {
         }
         sessionExpiryTask?.cancel()
         guard let state, state.expiresAt > .now else {
-            clearSubjectBoundState()
-            model.accountState = .signedOut
+            if previousUserID != nil {
+                clearSubjectBoundState()
+                model.accountState = .signedOut
+                refreshCatalogSurfaces()
+            } else { model.accountState = .signedOut }
             return
         }
-        if previousUserID != nil, previousUserID != state.userID {
-            clearSubjectBoundState()
-        }
+        let changedSubject = previousUserID != nil && previousUserID != state.userID
+        let reloadSavedForNewSubject = changedSubject && discovery.savedState != .idle
+        if changedSubject { clearSubjectBoundState() }
         model.accountState = .signedIn(userID: state.userID)
+        if changedSubject { refreshCatalogSurfaces() }
+        if reloadSavedForNewSubject { loadSavedWallpapers() }
+        if discovery.preferences?.userID != state.userID { loadPreferences() }
+        retryInstallRecording()
         if model.accountProfile?.userID != state.userID {
             loadAccountProfile(for: state.userID)
         }
@@ -1647,10 +1902,52 @@ public final class MarketplaceCoordinator {
             else { return }
             clearSubjectBoundState()
             model.accountState = .signedOut
+            refreshCatalogSurfaces()
         }
     }
 
     private func clearSubjectBoundState() {
+        preferencesTask?.cancel()
+        savedTask?.cancel()
+        recordTask?.cancel()
+        savedGeneration &+= 1
+        pendingPreferenceWrite = nil
+        recordGeneration &+= 1
+        recordTask = nil
+        recordRetryRequested = false
+        discovery.preferences = nil
+        discovery.preferencesState = .idle
+        discovery.preferencesSaveState = .idle
+        discovery.savedItems = []
+        discovery.savedState = .idle
+        discovery.savedNextCursor = nil
+        discovery.savedPageError = nil
+        discovery.isLoadingSavedPage = false
+        discovery.installRecordingFailure = nil
+        discovery.isRetryingInstallRecord = false
+        discovery.canRetryInstallRecord = false
+        savedMediaLease = CatalogMediaLease()
+        detailTask?.cancel()
+        detailGeneration &+= 1
+        detailTargetID = nil
+        model.selectedDetail = nil
+        selectedInstallMedia = nil
+        model.detailState = .idle
+        browseTask?.cancel()
+        browseGeneration &+= 1
+        isLoadingMore = false
+        model.browseItems = []
+        model.searchItems = []
+        model.browseNextCursor = nil
+        model.searchNextCursor = nil
+        model.browsePageError = nil
+        if model.browseState != .idle { model.browseState = .loading }
+        browseMediaLease = CatalogMediaLease()
+        searchMediaLease = CatalogMediaLease()
+        homeTask?.cancel()
+        homeGeneration &+= 1
+        model.homeSections = []
+        model.homeState = .idle
         installTask?.cancel()
         model.catalogInstall = nil
         retryableInstall = nil
@@ -2129,9 +2426,10 @@ public final class MarketplaceCoordinator {
             func enqueue(_ entry: (offset: Int, element: CatalogWallpaperSummary)) {
                 group.addTask {
                     let posterURL = try? await presentationMediaCache.localURL(for: entry.element.poster, retaining: lease)
-                    let previewURL = includePreview && !Task.isCancelled
-                        ? try? await presentationMediaCache.localURL(for: entry.element.preview, retaining: lease)
-                        : nil
+                    var previewURL: URL?
+                    if includePreview, !Task.isCancelled, let preview = entry.element.preview {
+                        previewURL = try? await presentationMediaCache.localURL(for: preview, retaining: lease)
+                    }
                     return (entry.offset, Self.card(entry.element, posterURL: posterURL, previewURL: previewURL))
                 }
             }
@@ -2213,10 +2511,12 @@ public final class MarketplaceCoordinator {
                 .poster(try? await presentationMediaCache.localURL(for: value.summary.poster, retaining: lease))
             }
             group.addTask {
-                let playback = try? await presentationMediaCache.localURL(for: value.videoDefault, retaining: lease)
+                guard case let .video(artifact, _, _, _) = value.media else { return .preview(nil) }
+                let playback = try? await presentationMediaCache.localURL(for: artifact, retaining: lease)
                 guard !Task.isCancelled else { return .preview(nil) }
                 if let playback { return .preview(playback) }
-                return .preview(try? await presentationMediaCache.localURL(for: value.summary.preview, retaining: lease))
+                guard let preview = value.summary.preview else { return .preview(nil) }
+                return .preview(try? await presentationMediaCache.localURL(for: preview, retaining: lease))
             }
             group.addTask { [weak self] in
                 .related(await self?.presentationCards(value.related, retaining: lease) ?? [])
@@ -2248,8 +2548,10 @@ public final class MarketplaceCoordinator {
     private func presentationDetail(
         _ value: CatalogWallpaperDetail
     ) -> WALICatalogDetailPresentation {
-        let totalSeconds = value.durationMilliseconds / 1_000
-        let duration = String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+        let duration = value.durationMilliseconds.map { milliseconds in
+            let totalSeconds = milliseconds / 1_000
+            return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+        }
         return WALICatalogDetailPresentation(
             id: value.id,
             title: value.summary.title,

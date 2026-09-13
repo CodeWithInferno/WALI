@@ -35,6 +35,8 @@ type Frame struct {
 }
 
 type Request struct {
+	// Empty/video retains the exact legacy seven-frame protocol.
+	MediaKind       string
 	AttemptID       string
 	InputDirectory  string
 	OutputDirectory string
@@ -113,6 +115,7 @@ func (classifier *Sandboxed) Classify(ctx context.Context, request Request) (Res
 	}
 	payload := struct {
 		SchemaVersion    uint16  `json:"schema_version"`
+		MediaKind        string  `json:"media_kind,omitempty"`
 		AttemptID        string  `json:"attempt_id"`
 		SubmissionID     string  `json:"submission_id"`
 		Generation       uint32  `json:"generation"`
@@ -120,7 +123,7 @@ func (classifier *Sandboxed) Classify(ctx context.Context, request Request) (Res
 		Description      string  `json:"description"`
 		TaxonomyRevision string  `json:"taxonomy_revision"`
 		Frames           []Frame `json:"frames"`
-	}{1, request.AttemptID, request.SubmissionID, request.Generation, request.Title, request.Description, TaxonomyRevision, request.Frames}
+	}{requestSchema(request), requestKind(request), request.AttemptID, request.SubmissionID, request.Generation, request.Title, request.Description, TaxonomyRevision, request.Frames}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return Result{}, err
@@ -130,7 +133,7 @@ func (classifier *Sandboxed) Classify(ctx context.Context, request Request) (Res
 		return Result{}, err
 	}
 	if err := classifier.runner.Run(ctx, sandbox.Spec{
-		Mode: sandbox.ModeClassify, AttemptID: request.AttemptID, SubmissionID: request.SubmissionID,
+		Mode: sandbox.ModeClassify, MediaKind: request.MediaKind, AttemptID: request.AttemptID, SubmissionID: request.SubmissionID,
 		Generation: request.Generation, InputDigest: frameSetDigest(request.Frames), Image: classifier.image,
 		InputDirectory: request.InputDirectory, OutputDirectory: request.OutputDirectory,
 		PolicyDigest: request.PolicyDigest, Limits: sandbox.Limits{CPUs: "2", Memory: "4g", PIDs: 64, TmpfsBytes: 1 << 30},
@@ -147,6 +150,7 @@ func (classifier *Sandboxed) Classify(ctx context.Context, request Request) (Res
 
 type claim struct {
 	SchemaVersion       uint16    `json:"schema_version"`
+	MediaKind           string    `json:"media_kind,omitempty"`
 	AttemptID           string    `json:"attempt_id"`
 	SubmissionID        string    `json:"submission_id"`
 	Generation          uint32    `json:"generation"`
@@ -169,6 +173,9 @@ func decodeClaim(reader io.Reader, request Request) (Result, error) {
 	if err != nil || len(data) > 128<<10 {
 		return Result{}, errors.New("classifier claim is unreadable or oversized")
 	}
+	if err := validateClaimJSON(data, requestSchema(request)); err != nil {
+		return Result{}, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var value claim
@@ -179,7 +186,7 @@ func decodeClaim(reader io.Reader, request Request) (Result, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return Result{}, errors.New("classifier claim has trailing data")
 	}
-	if value.SchemaVersion != 1 || value.AttemptID != request.AttemptID || value.SubmissionID != request.SubmissionID || value.Generation != request.Generation ||
+	if value.SchemaVersion != requestSchema(request) || value.MediaKind != requestKind(request) || value.AttemptID != request.AttemptID || value.SubmissionID != request.SubmissionID || value.Generation != request.Generation ||
 		!value.Available || value.SafeCode != "ok" || value.ModelID != ModelID || value.ModelRevision != ModelRevision || value.ModelDigest != ModelDigest ||
 		value.TaxonomyRevision != TaxonomyRevision || value.InputFrameSetDigest != frameSetDigest(request.Frames) {
 		return Result{}, errors.New("classifier claim identity is invalid")
@@ -231,14 +238,39 @@ func validateScores(scores []Score, maximum int) error {
 	return nil
 }
 
+func requestSchema(request Request) uint16 {
+	if request.MediaKind == "still" {
+		return 2
+	}
+	return 1
+}
+func requestKind(request Request) string {
+	if request.MediaKind == "still" {
+		return "still"
+	}
+	return ""
+}
+
 func validateRequest(request Request) error {
-	if request.AttemptID == "" || request.SubmissionID == "" || request.Generation == 0 || len([]rune(request.Title)) < 1 || len([]rune(request.Title)) > 120 || len([]rune(request.Description)) > 2000 || len(request.Frames) != 7 {
+	expectedFrames := 7
+	switch request.MediaKind {
+	case "", "video":
+	case "still":
+		expectedFrames = 1
+	default:
+		return errors.New("classifier media kind is invalid")
+	}
+
+	if request.AttemptID == "" || request.SubmissionID == "" || request.Generation == 0 || len([]rune(request.Title)) < 1 || len([]rune(request.Title)) > 120 || len([]rune(request.Description)) > 2000 || len(request.Frames) != expectedFrames {
 		return errors.New("classifier request is invalid")
 	}
 	if filepath.Clean(request.InputDirectory) != request.InputDirectory || filepath.Clean(request.OutputDirectory) != request.OutputDirectory || !filepath.IsAbs(request.InputDirectory) || !filepath.IsAbs(request.OutputDirectory) {
 		return errors.New("classifier directories are invalid")
 	}
 	for index, frame := range request.Frames {
+		if request.MediaKind == "still" && (frame.Width != 384 || frame.Height != 224) {
+			return errors.New("still classifier dimensions are invalid")
+		}
 		if frame.Ordinal != index+1 || len(frame.Digest) != 64 || frame.ByteCount <= 0 || frame.ByteCount > 16<<20 || frame.Width <= 0 || frame.Width > 1024 || frame.Height <= 0 || frame.Height > 1024 {
 			return errors.New("classifier frame set is invalid")
 		}
@@ -254,4 +286,80 @@ func frameSetDigest(frames []Frame) string {
 	hasher := sha256.New()
 	_, _ = io.Copy(hasher, strings.NewReader(strings.Join(digests, "")))
 	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+// Reject duplicate, missing, null and case-folded identity keys before Go's
+// permissive struct decoder; bound nesting independently of the byte budget.
+func validateClaimJSON(data []byte, version uint16) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := rejectDuplicateJSON(decoder, 0); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return errors.New("trailing classifier data")
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(data, &object) != nil {
+		return errors.New("classifier claim must be an object")
+	}
+	keys := []string{"schema_version", "attempt_id", "submission_id", "generation", "available", "safe_code", "model_id", "model_revision", "model_digest", "taxonomy_revision", "input_frame_set_digest", "visual_embedding", "text_embedding", "combined_embedding", "categories", "tags"}
+	if version == 2 {
+		keys = append(keys, "media_kind")
+	}
+	if len(object) != len(keys) {
+		return errors.New("classifier claim keys are invalid")
+	}
+	for _, key := range keys {
+		value, ok := object[key]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return errors.New("classifier claim is incomplete")
+		}
+	}
+	return nil
+}
+func rejectDuplicateJSON(decoder *json.Decoder, depth int) error {
+	if depth > 16 {
+		return errors.New("claim nesting exceeds bound")
+	}
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		seen := map[string]bool{}
+		for decoder.More() {
+			raw, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := raw.(string)
+			if !ok || seen[key] {
+				return errors.New("duplicate claim key")
+			}
+			seen[key] = true
+			if err := rejectDuplicateJSON(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		if end, err := decoder.Token(); err != nil || end != json.Delim('}') {
+			return errors.New("invalid claim object")
+		}
+	case '[':
+		for decoder.More() {
+			if err := rejectDuplicateJSON(decoder, depth+1); err != nil {
+				return err
+			}
+		}
+		if end, err := decoder.Token(); err != nil || end != json.Delim(']') {
+			return errors.New("invalid claim array")
+		}
+	default:
+		return errors.New("invalid claim delimiter")
+	}
+	return nil
 }

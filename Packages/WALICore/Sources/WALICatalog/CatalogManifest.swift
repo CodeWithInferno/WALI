@@ -2,6 +2,10 @@ import Foundation
 import WALIModel
 
 public typealias CatalogSchemaVersion = RecordSchemaVersion
+public enum CatalogMediaKind: String, Codable, Sendable, Hashable {
+    case video
+    case still
+}
 
 public struct CatalogArtifact: Codable, Sendable, Hashable {
     public static let maximumByteCount: UInt64 = 2_147_483_648
@@ -45,7 +49,9 @@ public struct CatalogArtifact: Codable, Sendable, Hashable {
               (1...Self.maximumByteCount).contains(byteCount),
               ["video/mp4", "image/avif", "image/jpeg", "image/png"].contains(mediaType),
               (1...7_680).contains(width),
-              (1...4_320).contains(height),
+              (1...(role == .imageDefault ? 7_680 : 4_320)).contains(height),
+              UInt64(width) * UInt64(height) <= 33_177_600,
+              role != .imageDefault || (mediaType == "image/png" && byteCount <= 134_217_728),
               durationMilliseconds <= 600_000
         else {
             throw CatalogValidationError.invalidArtifact
@@ -89,7 +95,10 @@ public struct CatalogManifest: Codable, Sendable, Hashable {
     public static let minimumArtifactCount = 4
     public static let maximumArtifactCount = 7
 
+    public static let stillSchema = try! CatalogSchemaVersion(epoch: 2, revision: 0)
+
     public let schema: CatalogSchemaVersion
+    public let mediaKind: CatalogMediaKind
     public let keyID: CatalogKeyID
     public let wallpaperID: String
     public let releaseID: String
@@ -100,6 +109,7 @@ public struct CatalogManifest: Codable, Sendable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case schema, edition, artifacts
+        case mediaKind = "media_kind"
         case keyID = "key_id"
         case wallpaperID = "wallpaper_id"
         case releaseID = "release_id"
@@ -115,24 +125,39 @@ public struct CatalogManifest: Codable, Sendable, Hashable {
         edition: UInt64,
         issuedAt: Date,
         artifacts: [CatalogArtifact],
-        metadataDigest: String
+        metadataDigest: String,
+        mediaKind: CatalogMediaKind = .video
     ) throws {
-        guard schema == .current else { throw CatalogValidationError.unsupportedSchema }
+        guard (schema == .current && mediaKind == .video)
+            || (schema == Self.stillSchema && mediaKind == .still)
+        else { throw CatalogValidationError.unsupportedSchema }
+        let roles = Set(artifacts.map(\.role))
+        let validRoles = mediaKind == .still
+            ? roles == [.thumbnail, .poster, .imageDefault]
+            : !roles.contains(.imageDefault) && roles.isSuperset(of: [.thumbnail, .poster, .preview, .videoDefault])
         guard validateCanonicalUUID(wallpaperID),
               validateCanonicalUUID(releaseID),
               (1...2_147_483_647).contains(edition),
-              artifacts.count >= Self.minimumArtifactCount,
+              artifacts.count >= (mediaKind == .still ? 3 : Self.minimumArtifactCount),
               artifacts.count <= Self.maximumArtifactCount,
               validateSHA256(metadataDigest),
               Set(artifacts.map(\.role)).count == artifacts.count,
-              Set(artifacts.map(\.role)).isSuperset(of: [
-                  .thumbnail, .poster, .preview, .videoDefault
-              ]),
+              validRoles,
               artifacts == artifacts.sorted(by: Self.artifactOrder)
         else {
             throw CatalogValidationError.invalidManifest
         }
+        if mediaKind == .still {
+            guard let thumbnail = artifacts.first(where: { $0.role == .thumbnail }),
+                  thumbnail.mediaType == "image/jpeg", thumbnail.width == 512, thumbnail.height == 512,
+                  thumbnail.byteCount <= 16 * 1_024 * 1_024,
+                  let poster = artifacts.first(where: { $0.role == .poster }),
+                  poster.mediaType == "image/jpeg", max(poster.width, poster.height) <= 1_920,
+                  poster.byteCount <= 16 * 1_024 * 1_024
+            else { throw CatalogValidationError.invalidManifest }
+        }
         self.schema = schema
+        self.mediaKind = mediaKind
         self.keyID = keyID
         self.wallpaperID = wallpaperID
         self.releaseID = releaseID
@@ -144,8 +169,16 @@ public struct CatalogManifest: Codable, Sendable, Hashable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schema = try container.decode(CatalogSchemaVersion.self, forKey: .schema)
+        let kind: CatalogMediaKind
+        if schema == .current {
+            guard !container.contains(.mediaKind) else { throw CatalogValidationError.invalidManifest }
+            kind = .video
+        } else {
+            kind = try container.decode(CatalogMediaKind.self, forKey: .mediaKind)
+        }
         try self.init(
-            schema: container.decode(CatalogSchemaVersion.self, forKey: .schema),
+            schema: schema,
             keyID: container.decode(CatalogKeyID.self, forKey: .keyID),
             wallpaperID: container.decode(String.self, forKey: .wallpaperID),
             releaseID: container.decode(String.self, forKey: .releaseID),
@@ -154,13 +187,15 @@ public struct CatalogManifest: Codable, Sendable, Hashable {
                 container.decode(String.self, forKey: .issuedAt)
             ),
             artifacts: container.decode([CatalogArtifact].self, forKey: .artifacts),
-            metadataDigest: container.decode(String.self, forKey: .metadataDigest)
+            metadataDigest: container.decode(String.self, forKey: .metadataDigest),
+            mediaKind: kind
         )
     }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(schema, forKey: .schema)
+        if schema == Self.stillSchema { try container.encode(mediaKind, forKey: .mediaKind) }
         try container.encode(keyID, forKey: .keyID)
         try container.encode(wallpaperID, forKey: .wallpaperID)
         try container.encode(releaseID, forKey: .releaseID)
@@ -168,6 +203,11 @@ public struct CatalogManifest: Codable, Sendable, Hashable {
         try container.encode(formatCatalogTimestamp(issuedAt), forKey: .issuedAt)
         try container.encode(artifacts, forKey: .artifacts)
         try container.encode(metadataDigest, forKey: .metadataDigest)
+    }
+
+    public var primaryArtifact: CatalogArtifact {
+        // Initialization validates the exact required role for each media kind.
+        artifacts.first { $0.role == (mediaKind == .still ? .imageDefault : .videoDefault) }!
     }
 
     private static func artifactOrder(_ lhs: CatalogArtifact, _ rhs: CatalogArtifact) -> Bool {

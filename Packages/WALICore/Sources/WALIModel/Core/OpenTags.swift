@@ -15,6 +15,9 @@ public struct RendererID: Codable, Sendable, Hashable {
     /// WALI's native video renderer tag.
     public static let waliVideo = RendererID(unchecked: "wali.video")
 
+    /// WALI’s static raster renderer tag.
+    public static let waliImage = RendererID(unchecked: "wali.image")
+
     /// Decodes and validates a single tag string.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -54,6 +57,9 @@ public struct MediaTypeID: Codable, Sendable, Hashable {
 
     /// WALI's HEIC image media tag.
     public static let waliImageHEIC = MediaTypeID(unchecked: "wali.image.heic")
+
+    /// WALI’s canonical PNG image media tag.
+    public static let waliImagePNG = MediaTypeID(unchecked: "wali.image.png")
 
     /// Decodes and validates a single tag string.
     public init(from decoder: any Decoder) throws {

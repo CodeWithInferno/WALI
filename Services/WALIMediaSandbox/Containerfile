@@ -39,19 +39,22 @@ RUN curl --fail --location --proto '=https' --tlsv1.2 \
       --disable-network --disable-gpl --disable-nonfree --disable-iconv \
       --disable-everything --enable-ffmpeg --enable-ffprobe \
       --enable-avcodec --enable-avformat --enable-avfilter --enable-swscale --enable-zlib \
-      --enable-protocol=file,pipe --enable-demuxer=mov,image2 --enable-muxer=mp4,image2 \
-      --enable-decoder=h264,hevc,mjpeg,png --enable-encoder=libkvazaar,mjpeg,png \
+      --enable-protocol=file,pipe --enable-demuxer=mov,image2,image_png_pipe,image_jpeg_pipe --enable-muxer=mp4,image2,rawvideo \
+      --enable-decoder=h264,hevc,mjpeg,png --enable-encoder=libkvazaar,mjpeg,png,rawvideo \
       --enable-parser=h264,hevc,mjpeg,png --enable-libkvazaar --enable-bsf=hevc_mp4toannexb \
-      --enable-filter=scale,crop,pad,thumbnail,select,fps,format,setpts \
+      --enable-filter=scale,crop,pad,thumbnail,select,fps,format,setpts,premultiply,hflip,vflip,transpose \
     && make -j2 \
     && make install
+
+COPY bin/still-image-contract.c /build/still-image-contract.c
+RUN mkdir -p /opt/wali/bin && cc -std=c11 -O2 -Wall -Wextra -Werror /build/still-image-contract.c -lz -o /opt/wali/bin/still-image-contract
 
 # Keep the complete checked sources, licenses, and explicit rebuild inputs with
 # the binaries. No generated outputs or ambient build-context files are copied.
 COPY Containerfile THIRD_PARTY_NOTICES.md LICENSE SOURCE-LICENSES.sha256 /opt/wali/share/media-compliance/build-context/
 COPY patches/ffmpeg-7.1.2-libkvazaar-10bit.patch /opt/wali/share/media-compliance/build-context/patches/
-COPY policy/ffmpeg-policy.json /opt/wali/share/media-compliance/build-context/policy/
-COPY bin/process-media bin/verify-media /opt/wali/share/media-compliance/build-context/bin/
+COPY policy/ffmpeg-policy.json policy/still-image-policy.json /opt/wali/share/media-compliance/build-context/policy/
+COPY bin/process-media bin/verify-media bin/process-still bin/verify-still bin/still-image-contract.c /opt/wali/share/media-compliance/build-context/bin/
 RUN mkdir -p /opt/wali/share/media-compliance/sources \
       /opt/wali/share/media-compliance/licenses/ffmpeg \
       /opt/wali/share/media-compliance/licenses/kvazaar \
@@ -76,8 +79,9 @@ RUN rm -f /etc/apt/sources.list.d/debian.sources \
 COPY --from=build /opt/ffmpeg /opt/ffmpeg
 COPY --from=build /opt/kvazaar/lib /opt/wali/lib
 COPY --from=build /opt/wali/share/media-compliance /opt/wali/share/media-compliance
-COPY policy/ffmpeg-policy.json /opt/wali/policy/ffmpeg-policy.json
-COPY bin/process-media bin/verify-media /opt/wali/bin/
+COPY policy/ffmpeg-policy.json policy/still-image-policy.json /opt/wali/policy/
+COPY --from=build /opt/wali/bin/still-image-contract /opt/wali/bin/still-image-contract
+COPY bin/process-media bin/verify-media bin/process-still bin/verify-still /opt/wali/bin/
 
 ENV PATH=/opt/ffmpeg/bin:/usr/bin:/bin \
     LD_LIBRARY_PATH=/opt/wali/lib \

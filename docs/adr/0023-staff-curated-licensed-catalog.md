@@ -1,10 +1,15 @@
 # 0023: Admit staff-curated licensed catalog content without opening Creator intake
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-09-12
 - owner_role: catalog_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner approval of the admin licensed catalog upload tool and backend access change, 2026-09-12
+
+- superseded_by: 0025
+- superseded_scope: closed_public_creator_intake,mandatory_human_curated_review
+
+The scoped clauses identified above are superseded by [ADR 0025](0025-public-creator-and-catalog-flows.md). The original decision text is retained below.
 
 ## Context
 

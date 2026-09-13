@@ -77,17 +77,18 @@ public struct CatalogInstallPreparer: Sendable {
         guard verified.manifest.keyID.rawValue == grant.keyID,
               metadata.metadata.wallpaperID == expectedWallpaperID,
               metadata.metadata.releaseID == expectedReleaseID,
-              let artifact = verified.manifest.artifacts.first(where: { $0.role == .videoDefault })
+              verified.manifest.mediaKind == grant.mediaKind
         else {
             throw CatalogValidationError.invalidManifest
         }
+        let artifact = verified.manifest.primaryArtifact
         progress?(0, artifact.byteCount)
         let quarantineURL = try await downloader.download(
             artifact: artifact,
             quarantineDirectory: quarantineDirectory,
             progress: progress
         )
-        let quarantineSuffix = ".wali-quarantine.mp4"
+        let quarantineSuffix = verified.manifest.mediaKind == .still ? ".wali-quarantine.png" : ".wali-quarantine.mp4"
         let quarantineName = quarantineURL.lastPathComponent
         guard quarantineName.hasSuffix(quarantineSuffix),
               let reference = UUID(
@@ -149,10 +150,11 @@ public struct CatalogInstallPreparer: Sendable {
     }
 
     public func discard(quarantineReference: UUID) {
-        let url = quarantineDirectory.appendingPathComponent(
-            "\(quarantineReference.uuidString.lowercased()).wali-quarantine.mp4",
-            isDirectory: false
-        )
-        try? FileManager.default.removeItem(at: url)
+        for suffix in ["mp4", "png"] {
+            let url = quarantineDirectory.appendingPathComponent(
+                "\(quarantineReference.uuidString.lowercased()).wali-quarantine.\(suffix)", isDirectory: false
+            )
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 }

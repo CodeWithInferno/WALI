@@ -9,9 +9,11 @@ const ARTIFACT_ROLES = [
   "video_1080p",
   "video_1440p",
   "video_2160p",
+  "image_default",
 ] as const;
 
 export type PreparedPublication = {
+  media_kind?: "still";
   wallpaper_id: string;
   release_id: string;
   edition: number;
@@ -66,7 +68,10 @@ export async function buildSignedPublication(
   const metadataBody = new TextEncoder().encode(orderedMetadataJSON(metadata));
   const metadataDigest = await sha256Hex(metadataBody);
   const manifest = {
-    schema: { epoch: 1, revision: 0 },
+    schema: { epoch: prepared.media_kind === "still" ? 2 : 1, revision: 0 },
+    ...(prepared.media_kind === "still"
+      ? { media_kind: "still" as const }
+      : {}),
     key_id: prepared.key_id,
     wallpaper_id: prepared.wallpaper_id,
     release_id: prepared.release_id,
@@ -189,12 +194,20 @@ function parsePrepared(
   value: unknown,
   approvedCDNHost: string,
 ): PreparedPublication {
+  const still = isObject(value) && value.media_kind === "still";
+  const required = still
+    ? ["thumbnail", "poster", "image_default"]
+    : ["thumbnail", "poster", "preview", "video_default"];
   if (
     !isObject(value) || !Array.isArray(value.artifacts) ||
-    value.artifacts.length < 4 || value.artifacts.length > 7 ||
+    (still
+      ? value.artifacts.length !== 3
+      : value.artifacts.length < 4 || value.artifacts.length > 7) ||
     !isObject(value.creator) || !isObject(value.attribution) ||
     Object.keys(value).sort().join(",") !==
-      "artifacts,attribution,creator,edition,issued_at,key_id,public_key,release_id,rights_holder,title,wallpaper_id" ||
+      (still
+        ? "artifacts,attribution,creator,edition,issued_at,key_id,media_kind,public_key,release_id,rights_holder,title,wallpaper_id"
+        : "artifacts,attribution,creator,edition,issued_at,key_id,public_key,release_id,rights_holder,title,wallpaper_id") ||
     Object.keys(value.creator).sort().join(",") !== "display_name,handle,id" ||
     Object.keys(value.attribution).sort().join(",") !==
       "license_code,source_url,text"
@@ -226,26 +239,43 @@ function parsePrepared(
       Object.keys(artifact).sort().join(",") !==
         "byte_count,duration_ms,height,media_type,role,sha256,url,width" ||
       !ARTIFACT_ROLES.includes(artifact.role) || roles.has(artifact.role) ||
+      (still
+        ? !required.includes(artifact.role)
+        : artifact.role === "image_default") ||
       !safeCDNURL(artifact.url, approvedCDNHost) ||
       !/^[0-9a-f]{64}$/.test(artifact.sha256) ||
       !Number.isSafeInteger(artifact.byte_count) || artifact.byte_count <= 0 ||
-      artifact.byte_count > 2_147_483_648 ||
+      artifact.byte_count >
+        (still
+          ? artifact.role === "image_default" ? 134_217_728 : 16_777_216
+          : 2_147_483_648) ||
       !Number.isSafeInteger(artifact.width) || artifact.width < 1 ||
       artifact.width > 7_680 ||
       !Number.isSafeInteger(artifact.height) || artifact.height < 1 ||
-      artifact.height > 4_320 ||
+      artifact.height > (still ? 7_680 : 4_320) ||
+      (still && artifact.width * artifact.height > 33_177_600) ||
       !Number.isSafeInteger(artifact.duration_ms) || artifact.duration_ms < 0 ||
       artifact.duration_ms > 600_000 ||
-      ((artifact.role === "thumbnail" || artifact.role === "poster")
-        ? (!(artifact.media_type === "image/jpeg" ||
-          artifact.media_type === "image/png") || artifact.duration_ms !== 0)
-        : (artifact.media_type !== "video/mp4" || artifact.duration_ms === 0))
+      (still
+        ? (artifact.duration_ms !== 0 ||
+          (artifact.role === "image_default"
+            ? artifact.media_type !== "image/png"
+            : artifact.media_type !== "image/jpeg") ||
+          (artifact.role === "thumbnail" &&
+            (artifact.width !== 512 || artifact.height !== 512)) ||
+          (artifact.role === "poster" &&
+            (artifact.width > 1920 || artifact.height > 1920)))
+        : ((artifact.role === "thumbnail" || artifact.role === "poster")
+          ? (!(artifact.media_type === "image/jpeg" ||
+            artifact.media_type === "image/png") || artifact.duration_ms !== 0)
+          : (artifact.media_type !== "video/mp4" ||
+            artifact.duration_ms === 0)))
     ) {
       throw new EdgeError("artifact_set_invalid", 409);
     }
     roles.add(artifact.role);
   }
-  for (const role of ["thumbnail", "poster", "preview", "video_default"]) {
+  for (const role of required) {
     if (!roles.has(role)) throw new EdgeError("artifact_set_invalid", 409);
   }
   return prepared;
@@ -281,6 +311,7 @@ function orderedMetadataJSON(
 
 function orderedManifestJSON(value: {
   schema: { epoch: number; revision: number };
+  media_kind?: "still";
   key_id: string;
   wallpaper_id: string;
   release_id: string;
@@ -308,6 +339,7 @@ function orderedManifestJSON(value: {
       `"schema":{${pair("epoch", value.schema.epoch)},${
         pair("revision", value.schema.revision)
       }}`,
+      ...(value.media_kind === "still" ? [pair("media_kind", "still")] : []),
       pair("key_id", value.key_id),
       pair("wallpaper_id", value.wallpaper_id),
       pair("release_id", value.release_id),

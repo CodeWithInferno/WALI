@@ -284,21 +284,23 @@ public final class CreatorModerationModel {
         reportMediaLease = CatalogMediaLease()
     }
 
-    public func loadReportVideo(_ report: ModerationReport) async -> URL? {
+    public func loadReportMedia(_ report: ModerationReport) async -> CreatorReviewMedia? {
         guard canShowReviewQueue, let presentationMediaCache,
               reports.contains(where: { $0.id == report.id && $0.revision == report.revision }),
-              let video = report.canonicalArtifacts.first(where: { $0.role == .videoDefault })
+              let artifact = primaryArtifact(report.canonicalArtifacts)
         else { return nil }
         let subject = authorization.subjectID
         let grantRevision = authorization.moderatorGrantRevision
         let lease = reportMediaLease
         do {
-            let url = try await presentationMediaCache.localURL(for: video, retaining: lease)
+            let url = try await presentationMediaCache.localURL(for: artifact, retaining: lease)
             try Task.checkCancellation()
             guard url.isFileURL, canShowReviewQueue, subject == authorization.subjectID,
-                  grantRevision == authorization.moderatorGrantRevision, selectedReportID == report.id
+                  grantRevision == authorization.moderatorGrantRevision, selectedReportID == report.id,
+                  reportMediaLease === lease,
+                  reports.contains(where: { $0.id == report.id && $0.revision == report.revision && $0.wallpaperRevision == report.wallpaperRevision })
             else { return nil }
-            return url
+            return media(artifact, at: url)
         } catch { return nil }
     }
 
@@ -338,28 +340,47 @@ public final class CreatorModerationModel {
         }
     }
 
-    public func loadReviewVideo(for item: ModerationQueueItem) async -> URL? {
+    public func finishReview(_ item: ModerationQueueItem) {
+        guard selectedReviewID == item.id else { return }
+        selectedReviewID = nil
+        reviewMediaLease = CatalogMediaLease()
+    }
+
+    public func loadReviewMedia(for item: ModerationQueueItem) async -> CreatorReviewMedia? {
         guard canShowReviewQueue, let presentationMediaCache,
               queueItems.contains(where: { $0.id == item.id && $0.revision == item.revision }),
-              let video = item.canonicalArtifacts.first(where: { $0.role == .videoDefault })
+              let artifact = primaryArtifact(item.canonicalArtifacts)
         else { return nil }
         let subject = authorization.subjectID
         let grantRevision = authorization.moderatorGrantRevision
+        let lease = reviewMediaLease
         do {
-            let url = try await presentationMediaCache.localURL(for: video, retaining: reviewMediaLease)
+            let url = try await presentationMediaCache.localURL(for: artifact, retaining: lease)
             try Task.checkCancellation()
-            guard url.isFileURL, canShowReviewQueue,
+            guard url.isFileURL, canShowReviewQueue, selectedReviewID == item.id, reviewMediaLease === lease,
                   subject == authorization.subjectID,
                   grantRevision == authorization.moderatorGrantRevision,
                   queueItems.contains(where: {
                       $0.id == item.id && $0.revision == item.revision && $0.generation == item.generation
                   })
             else { return nil }
-            localArtifactURLs[video.id] = url
-            return url
+            localArtifactURLs[artifact.id] = url
+            return media(artifact, at: url)
         } catch {
             return nil
         }
+    }
+
+    private func primaryArtifact(_ artifacts: [CreatorCanonicalArtifact]) -> CreatorCanonicalArtifact? {
+        let primary = artifacts.filter { $0.role == .videoDefault || $0.role == .imageDefault }
+        return primary.count == 1 ? primary[0] : nil
+    }
+
+    private func media(_ artifact: CreatorCanonicalArtifact, at url: URL) -> CreatorReviewMedia {
+        if artifact.role == .imageDefault {
+            return .still(.init(url: url, width: artifact.width, height: artifact.height, byteCount: artifact.byteCount))
+        }
+        return .video(url)
     }
 
     public func moderate(

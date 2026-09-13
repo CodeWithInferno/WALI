@@ -3,6 +3,11 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
+# The explicit additive still protocol keeps the legacy video entry unchanged.
+if [[ "${WALI_MEDIA_KIND:-}" == still ]]; then
+  exec /opt/wali/bin/process-still
+fi
+
 readonly INPUT=/work/input/source.bin
 readonly OUTPUT=/work/output
 readonly POLICY=/opt/wali/policy/ffmpeg-policy.json
@@ -108,7 +113,7 @@ readonly FRAME_FILTER="fps=7000/${DURATION_MS},scale=384:224:force_original_aspe
 
 if ! ffmpeg -nostdin -hide_banner -loglevel error -i "$INPUT" -map 0:v:0 -an -sn -dn \
   -map_metadata -1 -map_chapters -1 -vf "$VIDEO_FILTER" -pix_fmt yuv420p10le \
-  -c:v libkvazaar -kvazaar-params preset=medium,qp=20 -tag:v hvc1 \
+  -c:v libkvazaar -kvazaar-params preset=ultrafast,qp=20,threads=4 -tag:v hvc1 \
   -colorspace bt709 -color_primaries bt709 -color_trc bt709 \
   -movflags +faststart -y "$OUTPUT/artifacts/video-default.mp4"; then
   emit_failure canonicalization_failed

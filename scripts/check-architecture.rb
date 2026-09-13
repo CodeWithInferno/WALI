@@ -38,6 +38,7 @@ class ArchitectureChecker
     "catalog_revocations" => "catalog_revocations",
     "marketplace_server_schema" => "server_schema",
     "catalog_public_api" => "public_api",
+    "catalog_acknowledgements" => "catalog_acknowledgements",
     "creator_public_api" => "public_api",
     "moderation_public_api" => "public_api",
     "catalog_signing_keys" => "signing_key_registry",
@@ -1539,7 +1540,7 @@ class ArchitectureChecker
     marketing = resolved_target_build_setting(target_name, configuration, "MARKETING_VERSION")
     build = resolved_target_build_setting(target_name, configuration, "CURRENT_PROJECT_VERSION")
     error("#{target_name} #{configuration} MARKETING_VERSION must be 0.1.0") unless marketing == "0.1.0"
-    error("#{target_name} #{configuration} CURRENT_PROJECT_VERSION must be 1") unless build == "1"
+    error("#{target_name} #{configuration} CURRENT_PROJECT_VERSION must be 4") unless build == "4"
 
     return unless configuration == "Development"
 
@@ -2141,6 +2142,17 @@ class ArchitectureChecker
       return
     end
     case id
+    when "catalog_acknowledgements"
+      expected = {
+        "encoding" => "json", "schema_version" => 1,
+        "maximum_entries" => 128, "maximum_bytes" => 262144,
+        "replay_retention_seconds" => 604800,
+        "subject_binding" => "authenticated_owner",
+        "scope" => "foreground_network_recovery_only",
+        "path_template" => "<foreground_application_support>/<bundle_id>/CatalogAcknowledgements/<project_sha256>.json"
+      }
+      require_exact_fields(details, expected.keys, "#{id} details")
+      expected.each { |key, value| error("#{id} #{key} changed without compatibility policy") unless details[key] == value }
     when "sqlite_schema"
       require_exact_fields(
         details,
@@ -2296,7 +2308,7 @@ class ArchitectureChecker
         %w[
           trust_model signature_required signature_algorithm digest_algorithm
           canonicalization maximum_body_bytes maximum_nesting minimum_artifacts
-          maximum_artifacts required_artifact_roles approved_host_policy
+          maximum_artifacts required_artifact_roles_by_media_kind approved_host_policy
           network_status schema_policy contract
         ],
         "#{id} details"
@@ -2310,13 +2322,14 @@ class ArchitectureChecker
       end
       error("catalog_manifest body bound is invalid") unless details["maximum_body_bytes"] == 65_536
       error("catalog_manifest nesting bound is invalid") unless details["maximum_nesting"] == 4
-      error("catalog_manifest minimum artifact bound is invalid") unless details["minimum_artifacts"] == 4
+      error("catalog_manifest minimum artifact bound is invalid") unless details["minimum_artifacts"] == 3
       error("catalog_manifest maximum artifact bound is invalid") unless details["maximum_artifacts"] == 7
-      validate_exact_string_set(
-        details["required_artifact_roles"],
-        %w[thumbnail poster preview video_default],
-        "catalog_manifest required artifact roles"
-      )
+      role_sets = details["required_artifact_roles_by_media_kind"]
+      require_exact_fields(role_sets, %w[video still], "catalog_manifest media kinds")
+      if role_sets.is_a?(Hash)
+        validate_exact_string_set(role_sets["video"], %w[thumbnail poster preview video_default], "catalog_manifest video roles")
+        validate_exact_string_set(role_sets["still"], %w[thumbnail poster image_default], "catalog_manifest still roles")
+      end
       unless details["approved_host_policy"] == "injected_exact_allowlist_no_redirects"
         error("catalog_manifest approved host policy is invalid")
       end
@@ -2326,7 +2339,7 @@ class ArchitectureChecker
       unless details["schema_policy"] == "reject_unknown_epoch_and_undeclared_revision"
         error("catalog_manifest schema policy is invalid")
       end
-      unless details["contract"] == "docs/api/catalog-v1.md"
+      unless details["contract"] == "docs/api/catalog-v2.md"
         error("catalog_manifest contract path is invalid")
       end
     when "catalog_revocations"

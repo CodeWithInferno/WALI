@@ -375,6 +375,16 @@ select is(pg_temp.finalize_curated('curated_publish_pipeline_02')->>'wallpaper_i
  'fresh matching rights snapshot finalizes through the existing publication transaction');
 select is((select license_id from wali.wallpapers where id=(pg_temp.fixture('prepared')->>'wallpaper_id')::uuid),
  'f2000000-0000-4000-8000-000000000001'::uuid,'published record retains the negotiated license');
+-- A genuine human publication satisfies an already-queued automatic job.
+insert into curated_fixture values ('automatic_job',public.wali_edge_claim_automatic_publication_v1()->'job');
+select ok(pg_temp.fixture('automatic_job')->>'id' is not null,'curated verified processing queued automatic publication');
+select lives_ok($$select public.wali_edge_prepare_automatic_publication_v1(
+ (pg_temp.fixture('automatic_job')->>'id')::uuid,(pg_temp.fixture('automatic_job')->>'lease_token')::uuid)$$,
+ 'automatic retry reconciles the actual human publication');
+select is((select count(*) from wali.automatic_publication_decisions),0::bigint,'reconciliation does not invent an extra system decision');
+select ok(public.wali_edge_finish_automatic_publication_v1(
+ (pg_temp.fixture('automatic_job')->>'id')::uuid,(pg_temp.fixture('automatic_job')->>'lease_token')::uuid,'completed',null),
+ 'human publication completes the existing automatic job');
 update wali.runtime_configuration set catalog_license_attestation_version=null;
 select is((select count(*) from public.catalog_wallpapers_v1 where id=(pg_temp.fixture('prepared')->>'wallpaper_id')::uuid),
  1::bigint,'published curated catalog survives admission rollback with Creator still disabled');

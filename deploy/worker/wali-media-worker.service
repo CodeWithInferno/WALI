@@ -61,7 +61,7 @@ Delegate=yes
 
 MemoryHigh=5G
 MemoryMax=6G
-CPUQuota=250%
+CPUQuota=400%
 TasksMax=256
 LimitNOFILE=8192
 LimitNPROC=512

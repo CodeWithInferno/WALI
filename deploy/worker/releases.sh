@@ -11,6 +11,54 @@ readonly SBOM_DIRECTORY=/usr/share/doc/wali-worker/sbom
 
 release_fail() { echo "release transaction: $1" >&2; exit 65; }
 
+# Opt-in repair deployment only: preserve the already active namespace. This
+# never makes a cold host runnable and never changes namespace-unit privileges.
+warm_namespace_mode=false
+warm_namespace_identity=
+
+warm_namespace_fingerprint() {
+  local started unit_digest dropins
+  [[ "$(systemctl show wali-podman-namespace.service -p ActiveState --value)" == active ]] || release_fail 'warm namespace is not active'
+  [[ "$(systemctl show wali-podman-namespace.service -p SubState --value)" == exited ]] || release_fail 'warm namespace is not ready'
+  dropins="$(systemctl show wali-podman-namespace.service -p DropInPaths --value)" || release_fail 'cannot inspect namespace drop-ins'
+  [[ -z "$dropins" ]] || release_fail 'unexpected namespace drop-in'
+  [[ "$(systemctl show wali-podman-namespace.service -p FragmentPath --value)" == /etc/systemd/system/wali-podman-namespace.service ]] || release_fail 'unexpected namespace unit path'
+  [[ "$(systemctl show wali-podman-namespace.service -p PartOf --value)" == wali-media-worker.service ]] || release_fail 'unexpected namespace ownership'
+  started="$(systemctl show wali-podman-namespace.service -p ExecMainStartTimestampMonotonic --value)"
+  [[ "$started" =~ ^[1-9][0-9]*$ ]] || release_fail 'namespace start identity is missing'
+  unit_digest="$(file_digest /etc/systemd/system/wali-podman-namespace.service)" || release_fail 'cannot hash namespace unit'
+  [[ "$unit_digest" =~ ^[a-f0-9]{64}$ ]] || release_fail 'invalid namespace hash'
+  printf '%s:%s\n' "$unit_digest" "$started"
+}
+assert_warm_namespace() {
+  $warm_namespace_mode || return 0
+  [[ -n "$warm_namespace_identity" && "$(warm_namespace_fingerprint)" == "$warm_namespace_identity" ]] || release_fail 'warm namespace identity changed; cold recovery is not authorized here'
+}
+validate_warm_release() {
+  local target=$1 baseline=$2 names jobs dropins
+  $warm_namespace_mode || return 0
+  # Reuse the complete snapshot contract, with byte-identical namespace/storage.
+  cmp -s "$RELEASE_BASE/$target/payload/namespace-unit" "$RELEASE_BASE/$baseline/payload/namespace-unit" || release_fail 'warm deployment cannot change namespace unit'
+  cmp -s "$RELEASE_BASE/$target/payload/storage" "$RELEASE_BASE/$baseline/payload/storage" || release_fail 'warm deployment cannot change Podman storage'
+  [[ "$(systemctl show wali-media-worker.service -p ActiveState --value)" == active ]] || release_fail 'warm deployment requires the existing active worker'
+  dropins="$(systemctl show wali-media-worker.service -p DropInPaths --value)" || release_fail 'cannot inspect worker drop-ins'
+  [[ -z "$dropins" ]] || release_fail 'unexpected worker drop-in'
+  jobs="$(systemctl list-jobs --no-legend --no-pager)" || release_fail 'cannot inspect pending systemd jobs'
+  [[ -z "$(awk '$2=="wali-media-worker.service" || $2=="wali-podman-namespace.service" {print $1}' <<<"$jobs")" ]] || release_fail 'WALI unit operation already pending'
+  warm_namespace_identity="$(warm_namespace_fingerprint)"
+  names="$(runuser -u wali-worker -- env -u DOCKER_CONFIG HOME=/var/lib/wali-worker XDG_RUNTIME_DIR=/run/wali-media-worker CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf podman ps --format '{{.Names}}')" || release_fail 'cannot inspect active sandbox state'
+  if grep -q '^wali-' <<<"$names"; then release_fail 'active WALI sandbox prevents deployment'; fi
+}
+start_wali_worker() {
+  if $warm_namespace_mode; then
+    assert_warm_namespace
+    systemctl --job-mode=ignore-requirements start wali-media-worker.service
+    assert_warm_namespace
+  else
+    systemctl start wali-media-worker.service
+  fi
+}
+
 validate_database_ca() {
   local environment=$1 ca=$2 count=0 bytes
   if [[ -e "$environment" || -L "$environment" ]]; then
@@ -174,6 +222,12 @@ set_release_link() {
   mv -Tf -- "$temporary" "$RELEASE_BASE/$name"
 }
 stop_wali_units() {
+  if $warm_namespace_mode; then
+    assert_warm_namespace
+    systemctl --job-mode=ignore-requirements stop wali-media-worker.service
+    assert_warm_namespace
+    return
+  fi
   local unit
   for unit in wali-media-worker.service wali-podman-namespace.service; do
     if systemctl cat "$unit" >/dev/null 2>&1; then systemctl stop "$unit"; fi
@@ -226,6 +280,9 @@ begin_transaction() {
   [[ ! -e "$TRANSACTION" ]] || release_fail 'unfinished transaction requires recovery'
   root="$(mktemp -d "$RELEASE_BASE/.pending.XXXXXX")"
   printf '%s\n' "$baseline" > "$root/baseline"
+  if $warm_namespace_mode; then
+    printf '%s\n' "$warm_namespace_identity" > "$root/warm-namespace"
+  fi
   release_link current > "$root/current"
   release_link previous > "$root/previous"
   for unit in wali-media-worker.service wali-podman-namespace.service; do
@@ -250,6 +307,10 @@ restore_transaction() {
   local baseline unit state value
   safe_tree "$TRANSACTION" || release_fail 'unsafe pending transaction'
   baseline="$(cat "$TRANSACTION/baseline")"
+  if [[ -f "$TRANSACTION/warm-namespace" ]]; then
+    warm_namespace_mode=true
+    warm_namespace_identity="$(cat "$TRANSACTION/warm-namespace")"
+  fi
   validate_release "$baseline"
   stop_wali_units
   install_snapshot "$baseline"
@@ -259,14 +320,18 @@ restore_transaction() {
   done
   systemctl daemon-reload
   for unit in wali-podman-namespace.service wali-media-worker.service; do
+    if $warm_namespace_mode && [[ "$unit" == wali-podman-namespace.service ]]; then assert_warm_namespace; continue; fi
     state="$(cat "$TRANSACTION/$unit.enabled")"
     if [[ "$state" == enabled ]]; then systemctl enable "$unit" >/dev/null; fi
     if [[ "$state" == disabled || "$state" == not-found ]]; then systemctl disable "$unit" >/dev/null 2>&1 || true; fi
     state="$(cat "$TRANSACTION/$unit.active")"
-    [[ "$state" != active ]] || systemctl start "$unit"
+    if [[ "$state" == active ]]; then
+      if [[ "$unit" == wali-media-worker.service ]]; then start_wali_worker; else systemctl start "$unit"; fi
+    fi
   done
   if [[ "$(cat "$TRANSACTION/wali-media-worker.service.active")" == active ]]; then
     /usr/local/sbin/wali-worker-verify --quick || return 1
+    assert_warm_namespace
   fi
   finish_transaction
 }
@@ -279,7 +344,8 @@ transaction_failure() {
   local restored=$?
   set -e
   if ((restored != 0)); then
-    systemctl stop wali-media-worker.service || true
+    if $warm_namespace_mode; then systemctl --job-mode=ignore-requirements stop wali-media-worker.service || true
+    else systemctl stop wali-media-worker.service || true; fi
     echo 'recovery failed; worker stopped and pending transaction retained for operator recovery' >&2
   fi
   ((status != 0)) || status=1
@@ -291,6 +357,7 @@ activate_release() {
   validate_release "$baseline"
   validate_file "$RELEASE_BASE/$target/wali-media-worker"
   snapshot_offline_trust "$RELEASE_BASE/$target/payload" current || release_fail 'offline trust expired before activation'
+  validate_warm_release "$target" "$baseline"
   begin_transaction "$baseline"
   trap transaction_failure EXIT ERR INT TERM
   stop_wali_units
@@ -298,8 +365,9 @@ activate_release() {
   set_release_link current "$target"
   systemctl daemon-reload
   systemctl enable wali-media-worker.service >/dev/null
-  systemctl start wali-media-worker.service
+  start_wali_worker
   /usr/local/sbin/wali-worker-verify --quick
+  assert_warm_namespace
   if [[ -f "$RELEASE_BASE/$baseline/wali-media-worker" ]]; then
     set_release_link previous "$baseline"
   else

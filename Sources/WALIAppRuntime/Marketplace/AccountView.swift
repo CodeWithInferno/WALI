@@ -84,8 +84,11 @@ struct AccountView: View {
                                 Text("Loading account…").foregroundStyle(.secondary)
                             }
                         }
-                        LabeledContent("Account ID", value: userID)
-                            .textSelection(.enabled)
+                        DisclosureGroup("Account Details") {
+                            LabeledContent("Account ID", value: userID)
+                                .font(.caption.monospaced())
+                                .textSelection(.enabled)
+                        }
                         HStack {
                             Button("Refresh", action: onRefresh)
                             Button("Sign Out", action: onSignOut)
@@ -366,7 +369,7 @@ struct AccountView: View {
     }
 
     private var deletionConfirmationSheet: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             Label("Delete Marketplace Account?", systemImage: "exclamationmark.triangle.fill")
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.red)
@@ -398,8 +401,8 @@ struct AccountView: View {
             }
         }
         .padding(24)
-        .frame(width: 460)
-        .background(.regularMaterial)
+        .frame(minWidth: 440, idealWidth: 480)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 

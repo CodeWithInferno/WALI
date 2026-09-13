@@ -28,6 +28,8 @@ public struct WALIAppRootView: View {
     @State private var browseSort: CatalogBrowseSort = .featured
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showsImporter = false
+    @State private var libraryShowsSaved = false
+    @State private var showsCatalogPreferences = false
     @State private var showsSettings = false
     @State private var showsPreview = false
     @State private var pendingDeletionID: UUID?
@@ -52,14 +54,23 @@ public struct WALIAppRootView: View {
             .navigationTitle(catalogPath.isEmpty ? route.title : "")
             .fileImporter(
                 isPresented: $showsImporter,
-                allowedContentTypes: [.movie],
+                allowedContentTypes: [.movie, .jpeg, .png],
                 allowsMultipleSelection: true,
                 onCompletion: handleImportResult
             )
             .sheet(isPresented: $showsSettings) {
-                WALISettingsView(preferences: model.snapshot.preferences, storage: model.snapshot.storage) { preferences in
+                WALISettingsView(preferences: model.snapshot.preferences, storage: model.snapshot.storage,
+                    catalogPreferences: marketplace.discovery, isSignedIn: marketplace.model.accountState != .signedOut,
+                    reloadCatalogPreferences: { marketplace.loadTaxonomy(); marketplace.loadPreferences() },
+                    saveCatalogPreferences: marketplace.savePreferences) { preferences in
                     actions.send(.updatePreferences(preferences))
                 }
+            }
+            .sheet(isPresented: $showsCatalogPreferences) {
+                CatalogPreferencesView(discovery: marketplace.discovery,
+                    isSignedIn: marketplace.model.accountState != .signedOut,
+                    onReload: { marketplace.loadTaxonomy(); marketplace.loadPreferences() },
+                    onSave: marketplace.savePreferences)
             }
             .sheet(isPresented: emailSignInPresented) {
                 EmailCodeSignInSheet(
@@ -128,6 +139,7 @@ public struct WALIAppRootView: View {
             .onChange(of: model.snapshot.wallpapers) { _, _ in synchronizeWallpaperSelection() }
             .onChange(of: model.settingsPresentationRequest) { _, _ in showsSettings = true }
             .onChange(of: marketplace.model.accountState) { _, _ in
+                catalogPath.removeAll()
                 reviewPath.removeAll()
                 reportPath.removeAll()
                 creatorPath.removeAll()
@@ -154,7 +166,7 @@ public struct WALIAppRootView: View {
             Group {
                 if !marketplace.isMarketplaceAvailable && route.isMarketplace {
                     MarketplaceUnavailableView()
-                } else if route.isMarketplace {
+                } else if route.isMarketplace || (route == .library && libraryShowsSaved) {
                     if let wallpaperID = catalogPath.last,
                        WALIMarketplaceDetailLayout.hidesDestinationNavigationHeader {
                         MarketplaceWallpaperDetailView(
@@ -170,11 +182,16 @@ public struct WALIAppRootView: View {
                                 guard let releaseID = marketplace.model.selectedDetail?.currentReleaseID,
                                       let itemID = UUID(uuidString: releaseID) else { return }
                                 route = .library
+                                libraryShowsSaved = false
                                 selectedWallpaperID = itemID
                             },
                             onFavorite: { marketplace.toggleFavorite() },
                             onSave: { marketplace.toggleSaved() },
-                            onReport: marketplace.reportSelectedWallpaper
+                            onReport: marketplace.reportSelectedWallpaper,
+                            installRecordingFailure: marketplace.discovery.installRecordingFailure,
+                            canRetryInstallRecord: marketplace.discovery.canRetryInstallRecord,
+                            isRetryingInstallRecord: marketplace.discovery.isRetryingInstallRecord,
+                            onRetryInstallRecord: marketplace.retryInstallRecording
                         )
                     } else {
                         content
@@ -287,10 +304,10 @@ public struct WALIAppRootView: View {
         Button {
             showsImporter = true
         } label: {
-            Label("Import Video", systemImage: "plus")
+            Label("Import Wallpaper", systemImage: "plus")
         }
         .buttonStyle(.borderless)
-        .help("Import Video… (⌘O)")
+        .help("Import Wallpaper… (⌘O)")
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -304,24 +321,52 @@ public struct WALIAppRootView: View {
             DiscoverView(
                 marketplace: marketplace.model,
                 onRetry: marketplace.loadHome,
-                onOpen: openCatalogWallpaper
+                onOpen: openCatalogWallpaper,
+                onChooseCategories: { showsCatalogPreferences = true }
             )
         case .browse:
             BrowseView(
                 marketplace: marketplace.model,
+                discovery: marketplace.discovery,
                 sort: $browseSort,
                 query: searchText,
                 onLoad: { sort in
                     if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        marketplace.loadBrowse(sort: sort)
+                        marketplace.loadBrowse(category: marketplace.discovery.selectedCategory,
+                            tags: marketplace.discovery.selectedTags.sorted(), sort: sort)
                     } else {
-                        marketplace.search(searchText)
+                        marketplace.search(searchText, category: marketplace.discovery.selectedCategory,
+                            tags: marketplace.discovery.selectedTags.sorted(), sort: sort)
                     }
                 },
                 onOpen: openCatalogWallpaper,
-                onLoadMore: marketplace.loadNextBrowsePage
+                onLoadMore: marketplace.loadNextBrowsePage,
+                onRetryTaxonomy: marketplace.loadTaxonomy
             )
         case .library:
+            VStack(spacing: 0) {
+                if let message = marketplace.discovery.installRecordingFailure {
+                    HStack {
+                        Text(message).font(.callout).foregroundStyle(.secondary)
+                        Spacer()
+                        if marketplace.discovery.canRetryInstallRecord {
+                            Button("Retry Count Update", action: marketplace.retryInstallRecording)
+                                .disabled(marketplace.discovery.isRetryingInstallRecord)
+                        }
+                    }.padding()
+                }
+                Picker("Library", selection: $libraryShowsSaved) {
+                    Text("Downloaded").tag(false)
+                    Text("Saved").tag(true)
+                }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 280).padding(.top, 12).padding(.bottom, 4)
+                if libraryShowsSaved {
+                    SavedCatalogLibraryView(discovery: marketplace.discovery,
+                        isSignedIn: marketplace.model.accountState != .signedOut, query: searchText,
+                        onLoad: { marketplace.loadSavedWallpapers() },
+                        onLoadMore: { marketplace.loadSavedWallpapers(loadMore: true) },
+                        onOpen: openCatalogWallpaper,
+                        onSignIn: { route = .account; marketplace.signIn() })
+                } else {
             LibrarySurface(
                 wallpapers: filteredWallpapers,
                 selectedID: $selectedWallpaperID,
@@ -336,6 +381,9 @@ public struct WALIAppRootView: View {
                 onPreparePreview: preparePresentation,
                 presentationRevisions: model.presentationRevisions
             )
+                }
+            }
+            .onChange(of: libraryShowsSaved) { _, _ in searchText = ""; catalogPath.removeAll() }
         case .downloads:
             DownloadsSurface(
                 transfers: model.snapshot.transfers,
@@ -387,7 +435,8 @@ public struct WALIAppRootView: View {
                         licenses: metadata.licenses,
                         accessState: marketplace.creatorContext.state,
                         lastFailureCode: marketplace.creatorContext.lastFailureCode,
-                        onAcceptTerms: marketplace.acceptCreatorTerms
+                        onAcceptTerms: marketplace.acceptCreatorTerms,
+                        onPublished: marketplace.refreshAfterPublication
                     ) { submission in
                         CreatorSubmissionEditor(
                             submission: submission,
@@ -496,7 +545,7 @@ public struct WALIAppRootView: View {
 
     private var keyboardCommands: some View {
         Group {
-            Button("Import Video") { showsImporter = true }
+            Button("Import Wallpaper") { showsImporter = true }
                 .keyboardShortcut("o", modifiers: .command)
             Button("Apply Selection") {
                 if let selectedWallpaper { apply(selectedWallpaper) }
@@ -558,7 +607,7 @@ public struct WALIAppRootView: View {
 
     private var libraryInspectorPresented: Binding<Bool> {
         Binding(
-            get: { route == .library && selectedWallpaper != nil },
+            get: { route == .library && !libraryShowsSaved && selectedWallpaper != nil },
             set: { presented in
                 if !presented { selectedWallpaperID = nil }
             }
