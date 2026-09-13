@@ -28,6 +28,37 @@ struct WorkerBookmarkOperations: Sendable {
         let url = try URL(resolvingBookmarkData: data,
                           options: [.withoutUI, .withoutMounting],
                           relativeTo: nil, bookmarkDataIsStale: &stale)
+        #if WALI_APP_STORE
+        if stale {
+            // Temporary native diagnostic only. The original stale result is
+            // still returned and rejected; no media work may use this probe.
+            let started = url.startAccessingSecurityScopedResource()
+            defer { if started { url.stopAccessingSecurityScopedResource() } }
+            let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.wali.transcoder", category: "StoreMediaGrant")
+            let capturedID = URL.resourceValues(forKeys: [.fileResourceIdentifierKey], fromBookmarkData: data)?.fileResourceIdentifier as? NSObject
+            let currentID = (try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]))?.fileResourceIdentifier as? NSObject
+            let identityPresent = capturedID != nil && currentID != nil
+            let identityMatches = identityPresent && capturedID == currentID
+            logger.error("Store stale scope probe; started=\(started, privacy: .public) identity_present=\(identityPresent, privacy: .public) identity_matches=\(identityMatches, privacy: .public)")
+            if started {
+                do {
+                    var repeatedStale = false
+                    let repeated = try URL(resolvingBookmarkData: data, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &repeatedStale)
+                    defer { repeated.stopAccessingSecurityScopedResource() }
+                    let repeatedMatches = repeated.standardizedFileURL == url.standardizedFileURL
+                    let renewedData = try url.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: nil, relativeTo: nil)
+                    var renewedStale = false
+                    let renewed = try URL(resolvingBookmarkData: renewedData, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &renewedStale)
+                    defer { renewed.stopAccessingSecurityScopedResource() }
+                    let renewedMatches = renewed.standardizedFileURL == url.standardizedFileURL
+                    logger.error("Store stale resolution probe; repeated_stale=\(repeatedStale, privacy: .public) repeated_matches=\(repeatedMatches, privacy: .public) renewed_stale=\(renewedStale, privacy: .public) renewed_matches=\(renewedMatches, privacy: .public)")
+                } catch {
+                    let failure = error as NSError
+                    logger.error("Store stale resolution probe failed; code=\(failure.code, privacy: .public)")
+                }
+            }
+        }
+        #endif
         return (url, stale)
     }, start: { $0.startAccessingSecurityScopedResource() }, stop: { $0.stopAccessingSecurityScopedResource() },
         resolutionStartsAccess: true)
