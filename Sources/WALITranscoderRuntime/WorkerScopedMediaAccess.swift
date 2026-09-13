@@ -1,6 +1,5 @@
 import Darwin
 import Foundation
-import OSLog
 import WALIWire
 
 enum WorkerGrantError: LocalizedError {
@@ -23,51 +22,71 @@ struct WorkerBookmarkOperations: Sendable {
     var stop: @Sendable (URL) -> Void
     /// Resolving an implicit bookmark acquires a scope before returning its URL.
     var resolutionStartsAccess = false
+    var renew: (@Sendable (Data, URL, Bool) throws -> (url: URL, stale: Bool))? = nil
     static let system = Self(resolve: { data in
         var stale = false
         let url = try URL(resolvingBookmarkData: data,
                           options: [.withoutUI, .withoutMounting],
                           relativeTo: nil, bookmarkDataIsStale: &stale)
-        #if WALI_APP_STORE
-        if stale {
-            // Temporary native diagnostic only. The original stale result is
-            // still returned and rejected; no media work may use this probe.
-            let started = url.startAccessingSecurityScopedResource()
-            defer { if started { url.stopAccessingSecurityScopedResource() } }
-            let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.wali.transcoder", category: "StoreMediaGrant")
-            let capturedID = URL.resourceValues(forKeys: [.fileResourceIdentifierKey], fromBookmarkData: data)?.fileResourceIdentifier as? NSObject
-            let currentID = (try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]))?.fileResourceIdentifier as? NSObject
-            let identityPresent = capturedID != nil && currentID != nil
-            let identityMatches = identityPresent && capturedID == currentID
-            logger.error("Store stale scope probe; started=\(started, privacy: .public) identity_present=\(identityPresent, privacy: .public) identity_matches=\(identityMatches, privacy: .public)")
-            if started {
-                do {
-                    var repeatedStale = false
-                    let repeated = try URL(resolvingBookmarkData: data, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &repeatedStale)
-                    defer { repeated.stopAccessingSecurityScopedResource() }
-                    let repeatedMatches = repeated.standardizedFileURL == url.standardizedFileURL
-                    let renewedData = try url.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: nil, relativeTo: nil)
-                    var renewedStale = false
-                    let renewed = try URL(resolvingBookmarkData: renewedData, options: [.withoutUI, .withoutMounting], relativeTo: nil, bookmarkDataIsStale: &renewedStale)
-                    defer { renewed.stopAccessingSecurityScopedResource() }
-                    let renewedMatches = renewed.standardizedFileURL == url.standardizedFileURL
-                    logger.error("Store stale resolution probe; repeated_stale=\(repeatedStale, privacy: .public) repeated_matches=\(repeatedMatches, privacy: .public) renewed_stale=\(renewedStale, privacy: .public) renewed_matches=\(renewedMatches, privacy: .public)")
-                } catch {
-                    let failure = error as NSError
-                    logger.error("Store stale resolution probe failed; code=\(failure.code, privacy: .public)")
-                }
-            }
-        }
-        #endif
         return (url, stale)
     }, start: { $0.startAccessingSecurityScopedResource() }, stop: { $0.stopAccessingSecurityScopedResource() },
-        resolutionStartsAccess: true)
+        resolutionStartsAccess: true, renew: renewIdentifiedBookmark)
+
+    /// Caller holds received scope. The returned URL owns one implicit scope;
+    /// a failure here releases it before leaving. No renewed bytes are retained.
+    private static func renewIdentifiedBookmark(_ data: Data, _ url: URL, _ isDirectory: Bool) throws -> (url: URL, stale: Bool) {
+        let keys: Set<URLResourceKey> = [.fileResourceIdentifierKey, .volumeIdentifierKey]
+        guard let recorded = URL.resourceValues(forKeys: keys, fromBookmarkData: data),
+              let fileID = recorded.fileResourceIdentifier as? NSObject, !(fileID is NSNull),
+              let volumeID = recorded.volumeIdentifier as? NSObject, !(volumeID is NSNull),
+              url.isFileURL, url.resolvingSymlinksInPath().standardizedFileURL == url.standardizedFileURL else {
+            throw WorkerGrantError.identityMismatch
+        }
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { throw WorkerGrantError.scopeDenied }
+        defer { Darwin.close(descriptor) }
+        var before = stat()
+        guard fstat(descriptor, &before) == 0,
+              (before.st_mode & S_IFMT) == (isDirectory ? S_IFDIR : S_IFREG) else {
+            throw WorkerGrantError.invalidFile
+        }
+        let current = try url.resourceValues(forKeys: keys)
+        guard let currentFileID = current.fileResourceIdentifier as? NSObject,
+              let currentVolumeID = current.volumeIdentifier as? NSObject,
+              fileID.isEqual(currentFileID), volumeID.isEqual(currentVolumeID) else {
+            throw WorkerGrantError.identityMismatch
+        }
+        let renewedData = try url.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: keys, relativeTo: nil)
+        guard !renewedData.isEmpty, renewedData.count <= StoreImportGrant.maximumBookmarkBytes else {
+            throw WorkerGrantError.missingGrant
+        }
+        var stale = false
+        let renewed = try URL(resolvingBookmarkData: renewedData, options: [.withoutUI, .withoutMounting],
+                              relativeTo: nil, bookmarkDataIsStale: &stale)
+        var transferImplicitAccess = false
+        defer { if !transferImplicitAccess { renewed.stopAccessingSecurityScopedResource() } }
+        guard !stale else { throw WorkerGrantError.staleGrant }
+        guard renewed.isFileURL, renewed.standardizedFileURL == url.standardizedFileURL else {
+            throw WorkerGrantError.identityMismatch
+        }
+        let fresh = try renewed.resourceValues(forKeys: keys)
+        var after = stat()
+        guard let freshFileID = fresh.fileResourceIdentifier as? NSObject,
+              let freshVolumeID = fresh.volumeIdentifier as? NSObject,
+              fileID.isEqual(freshFileID), volumeID.isEqual(freshVolumeID),
+              lstat(renewed.path, &after) == 0,
+              before.st_dev == after.st_dev, before.st_ino == after.st_ino,
+              (after.st_mode & S_IFMT) == (isDirectory ? S_IFDIR : S_IFREG) else {
+            throw WorkerGrantError.identityMismatch
+        }
+        transferImplicitAccess = true
+        return (renewed, false)
+    }
 }
 
 /// The worker holds only the input file and exact attempt directory. It never
 /// derives a library/root URL. All acquired scopes and descriptors close once.
 final class WorkerScopedMediaAccess: @unchecked Sendable {
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.wali.transcoder", category: "StoreMediaGrant")
     let sourceURL: URL
     let stagingDirectoryURL: URL
     private let operations: WorkerBookmarkOperations
@@ -90,7 +109,7 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
         var scopes: [URL] = []
         var descriptors: [Int32] = []
         do {
-            let source = try resolve(value.request.sourceBookmark, expected: value.request.sourceURL, stage: "source", operations: operations)
+            let source = try resolve(value.request.sourceBookmark, expected: value.request.sourceURL, isDirectory: false, operations: operations)
             scopes.append(source)
             let input = Darwin.open(source.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
             guard input >= 0 else { throw WorkerGrantError.scopeDenied }
@@ -104,7 +123,7 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
             if writable >= 0 { Darwin.close(writable); throw WorkerGrantError.sourceWritable }
             guard errno == EACCES || errno == EPERM || errno == EROFS else { throw WorkerGrantError.scopeDenied }
 
-            let staging = try resolve(value.stagingBookmark, expected: value.request.stagingDirectoryURL, stage: "staging", operations: operations)
+            let staging = try resolve(value.stagingBookmark, expected: value.request.stagingDirectoryURL, isDirectory: true, operations: operations)
             scopes.append(staging)
             guard staging.resolvingSymlinksInPath().standardizedFileURL == staging.standardizedFileURL,
                   !source.standardizedFileURL.path.hasPrefix(staging.standardizedFileURL.path + "/") else { throw WorkerGrantError.identityMismatch }
@@ -125,38 +144,29 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
         }
     }
 
-    private static func resolve(_ data: Data, expected: URL, stage: String, operations: WorkerBookmarkOperations) throws -> URL {
-        let resolved: (url: URL, stale: Bool)
-        do {
-            resolved = try operations.resolve(data)
-        } catch {
-            #if WALI_APP_STORE
-            let failure = error as NSError
-            let domain = [NSCocoaErrorDomain, NSPOSIXErrorDomain, NSOSStatusErrorDomain].contains(failure.domain)
-                ? failure.domain : "other"
-            logger.error("Store grant resolve failed; stage=\(stage, privacy: .public) domain=\(domain, privacy: .public) code=\(failure.code, privacy: .public)")
-            #endif
-            throw error
-        }
+    private static func resolve(_ data: Data, expected: URL, isDirectory: Bool, operations: WorkerBookmarkOperations) throws -> URL {
+        let resolved = try operations.resolve(data)
         // Resolve with implicit access so private-container metadata is available.
         // Transfer that temporary acquisition to one explicit attempt acquisition;
         // stale, mismatched and denied grants must release the resolver's scope too.
         defer {
             if operations.resolutionStartsAccess { operations.stop(resolved.url) }
         }
-        #if WALI_APP_STORE
-        if resolved.stale || resolved.url.standardizedFileURL != expected.standardizedFileURL {
-            let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL.path + "/"
-            // Fixed stage and booleans only: never record paths or grant material.
-            let matches = resolved.url.standardizedFileURL == expected.standardizedFileURL
-            let resolvedInWorkerHome = resolved.url.standardizedFileURL.path.hasPrefix(home)
-            let expectedInWorkerHome = expected.standardizedFileURL.path.hasPrefix(home)
-            logger.error("Store grant resolution; stage=\(stage, privacy: .public) stale=\(resolved.stale, privacy: .public) matches=\(matches, privacy: .public) resolved_in_worker_home=\(resolvedInWorkerHome, privacy: .public) expected_in_worker_home=\(expectedInWorkerHome, privacy: .public)")
-        }
-        #endif
-        guard !resolved.stale else { throw WorkerGrantError.staleGrant }
         guard resolved.url.isFileURL, resolved.url.standardizedFileURL == expected.standardizedFileURL else {
             throw WorkerGrantError.identityMismatch
+        }
+        if resolved.stale {
+            guard operations.resolutionStartsAccess, let renew = operations.renew else { throw WorkerGrantError.staleGrant }
+            guard operations.start(resolved.url) else { throw WorkerGrantError.scopeDenied }
+            defer { operations.stop(resolved.url) }
+            let fresh = try renew(data, resolved.url, isDirectory)
+            defer { operations.stop(fresh.url) }
+            guard !fresh.stale else { throw WorkerGrantError.staleGrant }
+            guard fresh.url.isFileURL, fresh.url.standardizedFileURL == expected.standardizedFileURL else {
+                throw WorkerGrantError.identityMismatch
+            }
+            guard operations.start(fresh.url) else { throw WorkerGrantError.scopeDenied }
+            return fresh.url
         }
         guard operations.start(resolved.url) else { throw WorkerGrantError.scopeDenied }
         return resolved.url

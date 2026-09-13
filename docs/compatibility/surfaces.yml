@@ -906,6 +906,9 @@ surfaces:
         maximum_source_bookmark_bytes: 262144
         maximum_staging_bookmark_bytes: 262144
         staging_scope: exact_job_uuid_and_generation_directory
+        transient_identity_properties: [fileResourceIdentifier, volumeIdentifier]
+        stale_transient_policy: one_identity_bound_in_memory_renewal
+        renewal_policy_adr: docs/adr/0030-identity-bound-store-bookmark-renewal.md
       worker_handshake:
         protocol_version: 2
         message_version: 2
