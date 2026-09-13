@@ -1,4 +1,6 @@
 begin;
+-- Match the restricted-role fixture used by tests020/022; rolled back below.
+grant wali_worker to postgres with set true;
 set local search_path=public,extensions;
 select no_plan();
 select has_table('wali','account_deletion_finalization_jobs','automatic authority has its own private job');
