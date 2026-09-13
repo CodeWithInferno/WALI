@@ -83,7 +83,10 @@ def validate_target(project):
         "Supabase test-project label mismatch",
     )
     require(
-        details["Config"]["Image"].startswith("public.ecr.aws/supabase/postgres:"),
+        details["Config"]["Image"].startswith((
+            "public.ecr.aws/supabase/postgres:",
+            "ghcr.io/supabase/postgres:",
+        )),
         "unexpected local test database image",
     )
     return details["Id"]

@@ -2,6 +2,7 @@
 """Credential-free checks of local target rejection and unconditional cleanup."""
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import unittest
@@ -77,6 +78,50 @@ class HarnessTests(unittest.TestCase):
             renewal.validate_target("wali-release-ci-local")
         self.assertEqual(checked.call_count, 1)
 
+
+    @patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "CI": "true", "GITHUB_RUN_ID": "1"}, clear=True)
+    def test_ci_accepts_supabase_cli_official_database_mirrors(self):
+        for registry in ["public.ecr.aws", "ghcr.io"]:
+            with self.subTest(registry=registry):
+                details = {
+                    "Id": "synthetic-container-id", "State": {"Running": True},
+                    "Config": {"Labels": {"com.supabase.cli.project": "wali-marketplace-local"},
+                               "Image": registry + "/supabase/postgres:17.6.1.165"},
+                }
+                with patch.object(renewal, "checked", side_effect=[
+                    '"unix:///var/run/docker.sock"', json.dumps(details)
+                ]):
+                    self.assertEqual(renewal.validate_target("wali-marketplace-local"), "synthetic-container-id")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_foreign_and_lookalike_database_images_remain_rejected(self):
+        for image in ["example.invalid/supabase/postgres:17.6.1.165",
+                      "ghcr.io.example.invalid/supabase/postgres:17.6.1.165",
+                      "ghcr.io/supabase/postgres-other:17.6.1.165"]:
+            with self.subTest(image=image):
+                details = {
+                    "Id": "synthetic-container-id", "State": {"Running": True},
+                    "Config": {"Labels": {"com.supabase.cli.project": "wali-release-ci-local"},
+                               "Image": image},
+                }
+                with patch.object(renewal, "checked", side_effect=[
+                    '"unix:///var/run/docker.sock"', json.dumps(details)
+                ]):
+                    with self.assertRaises(renewal.FixtureError):
+                        renewal.validate_target("wali-release-ci-local")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_official_image_does_not_bypass_project_label(self):
+        details = {
+            "Id": "synthetic-container-id", "State": {"Running": True},
+            "Config": {"Labels": {"com.supabase.cli.project": "another-project"},
+                       "Image": "ghcr.io/supabase/postgres:17.6.1.165"},
+        }
+        with patch.object(renewal, "checked", side_effect=[
+            '"unix:///var/run/docker.sock"', json.dumps(details)
+        ]):
+            with self.assertRaises(renewal.FixtureError):
+                renewal.validate_target("wali-release-ci-local")
 
 if __name__ == "__main__":
     unittest.main()
