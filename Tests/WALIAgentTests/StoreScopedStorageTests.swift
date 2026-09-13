@@ -74,6 +74,76 @@ final class StoreScopedStorageTests: XCTestCase {
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: group.appendingPathComponent("Presentation").path).isEmpty)
     }
 
+    func testPresentationCacheReopensWithoutReplacingExistingDirectoryOrBytes() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = try LibraryPaths(root: root.appendingPathComponent("Library"))
+        let group = root.appendingPathComponent("Group")
+        try FileManager.default.createDirectory(at: group, withIntermediateDirectories: true)
+        _ = try StorePresentationCache(paths: paths, groupRoot: group)
+        let directory = group.appendingPathComponent("Presentation")
+        let retained = directory.appendingPathComponent("existing-preview.mov")
+        let bytes = Data([1, 7, 9])
+        try bytes.write(to: retained)
+        let before = try FileManager.default.attributesOfItem(atPath: directory.path)
+
+        let reopened = try StorePresentationCache(paths: paths, groupRoot: group)
+        let after = try FileManager.default.attributesOfItem(atPath: directory.path)
+        XCTAssertEqual(try Data(contentsOf: retained), bytes)
+        for key in [FileAttributeKey.systemFileNumber, .ownerAccountID, .posixPermissions] {
+            XCTAssertEqual(before[key] as? NSNumber, after[key] as? NSNumber)
+        }
+        XCTAssertEqual(after[.posixPermissions] as? NSNumber, 0o700)
+        XCTAssertTrue(try reopened.project(AgentSnapshot(revision: .init(rawValue: 0))).items.isEmpty)
+    }
+
+    func testCatalogQuarantineReopensWithoutReplacingAcceptedBytes() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let first = try StoreSharedDirectories.quarantine(in: root)
+        let source = first.appendingPathComponent("accepted-source.mp4")
+        let bytes = Data([2, 4, 8])
+        try bytes.write(to: source)
+        let before = try FileManager.default.attributesOfItem(atPath: first.path)
+
+        XCTAssertEqual(try StoreSharedDirectories.quarantine(in: root), first)
+        XCTAssertEqual(try Data(contentsOf: source), bytes)
+        let after = try FileManager.default.attributesOfItem(atPath: first.path)
+        for key in [FileAttributeKey.systemFileNumber, .ownerAccountID, .posixPermissions] {
+            XCTAssertEqual(before[key] as? NSNumber, after[key] as? NSNumber)
+        }
+        XCTAssertEqual(after[.posixPermissions] as? NSNumber, 0o700)
+    }
+
+    func testSharedDirectoryReopenRejectsAFileOrSymlinkWithoutChangingItsTarget() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).resolvingSymlinksInPath()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = try LibraryPaths(root: root.appendingPathComponent("Library"))
+        let group = root.appendingPathComponent("Group")
+        let outside = root.appendingPathComponent("Outside")
+        try FileManager.default.createDirectory(at: group, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let sentinel = outside.appendingPathComponent("keep")
+        try Data([3, 6]).write(to: sentinel)
+        for name in ["Presentation", "CatalogQuarantine"] {
+            let child = group.appendingPathComponent(name)
+            let prepare = {
+                if name == "Presentation" { _ = try StorePresentationCache(paths: paths, groupRoot: group) }
+                else { _ = try StoreSharedDirectories.quarantine(in: group) }
+            }
+            try Data([5]).write(to: child)
+            XCTAssertThrowsError(try prepare())
+            XCTAssertEqual(try Data(contentsOf: child), Data([5]))
+            try FileManager.default.removeItem(at: child)
+            try FileManager.default.createSymbolicLink(at: child, withDestinationURL: outside)
+            XCTAssertThrowsError(try prepare())
+            XCTAssertEqual(try Data(contentsOf: sentinel), Data([3, 6]))
+            XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: child.path), outside.path)
+            try FileManager.default.removeItem(at: child)
+        }
+    }
+
     func testPresentationDemandRebuildsOlderItemsAndRejectsStaleOrOversizedRequests() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).resolvingSymlinksInPath()
         defer { try? FileManager.default.removeItem(at: root) }

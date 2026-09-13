@@ -270,6 +270,8 @@ the manual acceptance result.
 | Lifetime | Window close preserves consented playback and accepted imports; explicit Quit from either UI stops all WALI processes without respawn |
 | Login/upgrade | Disabled/enabled login preference; logout/login; interrupted upgrade; no stale service or cross-channel data access |
 | Imports/recovery | Scoped grants after foreground exit, cancellation, crash/reboot, missing/revoked source, bounded disk failure |
+| Shared directories | Relaunch reuses real Presentation/CatalogQuarantine directories without replacing contents, ownership or permissions; files and symlinks are rejected |
+| Foreground visibility | Occlusion/minimize/hide pauses polling without removing ready navigation, import or authentication sheets; returning resumes polling; initial consent and registration failures still gate readiness |
 | Resource budget | Same hardware/media/topology baseline; duration, median/p95 CPU/memory/energy where required by ARCHITECTURE.md |
 
 Missing topology/hardware or an unperformed case remains open. Do not downgrade

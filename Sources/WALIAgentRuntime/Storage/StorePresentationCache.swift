@@ -17,10 +17,27 @@ public enum StoreSharedDirectories {
     }
 
     public static func quarantine(fileManager: FileManager = .default) throws -> URL {
-        let directory = try root(fileManager: fileManager).appendingPathComponent("CatalogQuarantine", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        try ContentStorage.requireDirectoryWithoutSymlink(directory)
+        try quarantine(in: root(fileManager: fileManager), fileManager: fileManager)
+    }
+
+    static func quarantine(in root: URL, fileManager: FileManager = .default) throws -> URL {
+        try ContentStorage.requireDirectoryWithoutSymlink(root)
+        let directory = root.appendingPathComponent("CatalogQuarantine", isDirectory: true)
+        try prepareDirectory(directory, fileManager: fileManager)
         return directory
+    }
+
+    /// Reopening a shared directory preserves its contents and permissions.
+    /// An existing file or symlink never becomes an accepted directory.
+    static func prepareDirectory(_ directory: URL, fileManager: FileManager = .default) throws {
+        try ContentStorage.requireDirectoryWithoutSymlink(directory.deletingLastPathComponent())
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        } catch let error as CocoaError where error.code == .fileWriteFileExists {
+            // Another launch or the foreground may already have created it.
+            // Validate the existing object below without replacing it.
+        }
+        try ContentStorage.requireDirectoryWithoutSymlink(directory)
     }
 }
 
@@ -57,8 +74,7 @@ public final class StorePresentationCache: @unchecked Sendable {
         let root = try groupRoot ?? StoreSharedDirectories.root()
         try ContentStorage.requireDirectoryWithoutSymlink(root)
         directory = root.appendingPathComponent("Presentation", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        try ContentStorage.requireDirectoryWithoutSymlink(directory)
+        try StoreSharedDirectories.prepareDirectory(directory)
     }
 
     public func project(_ snapshot: AgentSnapshot) throws -> AgentSnapshot {
