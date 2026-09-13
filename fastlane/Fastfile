@@ -236,7 +236,7 @@ platform :mac do
         derived_data_path: File.join(output, "DerivedData"), output_directory: File.join(output, "candidate"),
         cloned_source_packages_path: File.join(WALI_ROOT, ".build", "store", "DerivedData", "SourcePackages"),
         output_name: "WALI.pkg", buildlog_path: File.join(output, "logs"), export_method: "app-store",
-        installer_cert_name: installer, skip_package_pkg: false, skip_package_ipa: true,
+        installer_cert_name: installer, skip_package_pkg: false,
         disable_package_automatic_updates: true, skip_package_dependencies_resolution: true, xcodebuild_formatter: "",
         xcargs: "ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO -onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution " + arguments.map { |key, value| "#{key}=#{Shellwords.escape(value)}" }.join(" ")
       )
