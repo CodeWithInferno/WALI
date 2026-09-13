@@ -114,8 +114,11 @@ public enum StoreWorkerRequestFactory {
               !source.url.standardizedFileURL.path.hasPrefix(request.stagingDirectoryURL.standardizedFileURL.path + "/") else {
             throw StorageError.pathEscapesStore
         }
-        let sourceGrant = try source.url.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: nil, relativeTo: nil)
-        let stagingGrant = try request.stagingDirectoryURL.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: nil, relativeTo: nil)
+        // ADR 0030 permits one in-memory renewal only when these recorded
+        // identities still match the resource under the received scoped access.
+        let identityKeys: Set<URLResourceKey> = [.fileResourceIdentifierKey, .volumeIdentifierKey]
+        let sourceGrant = try source.url.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: identityKeys, relativeTo: nil)
+        let stagingGrant = try request.stagingDirectoryURL.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: identityKeys, relativeTo: nil)
         let result = StoreTranscoderRequest(request: TranscoderRequest(
             jobID: request.jobID, attemptGeneration: request.attemptGeneration,
             sourceBookmark: sourceGrant, sourceURL: source.url,
