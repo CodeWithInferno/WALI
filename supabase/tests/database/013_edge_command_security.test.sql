@@ -27,7 +27,8 @@ select results_eq(
          'wali.encode_catalog_cursor(timestamp with time zone,uuid,numeric,text)',
          'wali.decode_catalog_cursor(text)',
          'wali.catalog_rating_limit()',
-         'wali.catalog_public_counts(uuid)'
+         'wali.catalog_public_counts(uuid)',
+         'wali.creator_is_blocked(uuid)'
        )$$,
   array[0::bigint],
   'internal wali functions are not executable through Data API roles'

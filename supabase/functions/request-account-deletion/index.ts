@@ -1,4 +1,6 @@
 import { EdgeError, success } from "../_shared/errors.ts";
+import { DELETION_POLICY_VERSION } from "../_shared/account-deletion.ts";
+import { softDeleteAndVerifyIdentity } from "../_shared/identity-deletion.ts";
 import { enforceRateLimit } from "../_shared/rate-limit.ts";
 import {
   type EndpointDependencies,
@@ -23,8 +25,10 @@ export async function handleRequestAccountDeletion(
   dependencies: EndpointDependencies,
 ): Promise<Response> {
   let requestID = UNKNOWN_REQUEST_ID;
+  let apiVersion = API_VERSION;
   try {
     const body = await readBoundedJSON(request, 8_192);
+    if (body.api_version === "account.v2") apiVersion = "account.v2";
     if (body.operation === "status") {
       requireExactKeys(body, [
         "api_version",
@@ -53,7 +57,10 @@ export async function handleRequestAccountDeletion(
       }
       return success(API_VERSION, requestID, data);
     }
-    if (body.operation === "finalize_identity") {
+    if (
+      body.operation === "finalize_identity" ||
+      body.operation === "retry_automatic"
+    ) {
       requireExactKeys(body, [
         "api_version",
         "request_id",
@@ -75,6 +82,21 @@ export async function handleRequestAccountDeletion(
         20,
         3_600,
       );
+      if (body.operation === "retry_automatic") {
+        const data = await dependencies.database.rpc<unknown>(
+          "wali_edge_retry_automatic_account_deletion_v1",
+          {
+            actor_id: auth.actorID,
+            actor_aal: auth.assuranceLevel,
+            deletion_id: deletionID,
+            expected_revision: expectedRevision,
+          },
+        );
+        if (!validDeletionStatus(data, deletionID)) {
+          throw new EdgeError("temporarily_unavailable", 503, true);
+        }
+        return success(API_VERSION, requestID, data, 202);
+      }
       const prepared = await dependencies.database.rpc<unknown>(
         "wali_edge_prepare_account_identity_deletion_v1",
         {
@@ -118,8 +140,11 @@ export async function handleRequestAccountDeletion(
       "idempotency_key",
       "expected_profile_revision",
       "confirmation",
+      ...(apiVersion === "account.v2"
+        ? ["status_capability_hash", "policy_version"]
+        : []),
     ]);
-    const envelope = requireEnvelope(body, API_VERSION);
+    const envelope = requireEnvelope(body, apiVersion);
     requestID = envelope.requestID;
     const auth = await dependencies.authenticate(request);
     requireFreshAAL2(auth, dependencies.now());
@@ -127,6 +152,12 @@ export async function handleRequestAccountDeletion(
     if (requirePlainText(body.confirmation, 14, 14) !== "DELETE MY WALI") {
       throw new EdgeError("invalid_request", 400);
     }
+    if (
+      apiVersion === "account.v2" &&
+      (typeof body.status_capability_hash !== "string" ||
+        !/^[a-f0-9]{64}$/.test(body.status_capability_hash) ||
+        body.policy_version !== DELETION_POLICY_VERSION)
+    ) throw new EdgeError("invalid_request", 400);
     await enforceRateLimit(
       dependencies.database,
       auth.actorID,
@@ -135,12 +166,21 @@ export async function handleRequestAccountDeletion(
       86_400,
     );
     const data = await dependencies.database.rpc<unknown>(
-      "wali_edge_request_account_deletion_v1",
+      apiVersion === "account.v2"
+        ? "wali_edge_request_account_deletion_v2"
+        : "wali_edge_request_account_deletion_v1",
       {
         actor_id: auth.actorID,
         request_id: requestID,
         idempotency_key: envelope.idempotencyKey,
         expected_profile_revision: expectedRevision,
+        ...(apiVersion === "account.v2"
+          ? {
+            actor_aal: auth.assuranceLevel,
+            status_capability_hash: body.status_capability_hash,
+            policy_version: DELETION_POLICY_VERSION,
+          }
+          : {}),
       },
     );
     if (
@@ -163,9 +203,9 @@ export async function handleRequestAccountDeletion(
       marked.auth_identity_status !== "sessions_revoked" ||
       typeof marked.revision !== "number"
     ) throw new EdgeError("temporarily_unavailable", 503, true);
-    return success(API_VERSION, requestID, marked, 202);
+    return success(apiVersion, requestID, marked, 202);
   } catch (error) {
-    return safeFailure(API_VERSION, requestID, error);
+    return safeFailure(apiVersion, requestID, error);
   }
 }
 
@@ -200,58 +240,6 @@ function validDeletionStatus(
       .includes(value.status) &&
     typeof value.auth_identity_status === "string" &&
     Number.isSafeInteger(value.revision);
-}
-
-async function softDeleteAndVerifyIdentity(
-  userID: string,
-  dependencies: EndpointDependencies,
-): Promise<void> {
-  const endpoint = new URL(
-    `/auth/v1/admin/users/${userID}`,
-    dependencies.supabaseURL,
-  );
-  const headers = {
-    authorization: `Bearer ${dependencies.serviceRoleKey}`,
-    apikey: dependencies.serviceRoleKey,
-  };
-  let deletion: Response;
-  try {
-    deletion = await dependencies.fetcher(endpoint, {
-      method: "DELETE",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ should_soft_delete: true }),
-      redirect: "error",
-    });
-  } catch {
-    throw new EdgeError("temporarily_unavailable", 503, true);
-  }
-  if (!(deletion.ok || deletion.status === 404)) {
-    throw new EdgeError("temporarily_unavailable", 503, true);
-  }
-  const verificationEndpoint = new URL(
-    `/auth/v1/admin/users/${userID}`,
-    dependencies.supabaseURL,
-  );
-  let verification: Response;
-  try {
-    verification = await dependencies.fetcher(verificationEndpoint, {
-      method: "GET",
-      headers,
-      redirect: "error",
-    });
-  } catch {
-    throw new EdgeError("temporarily_unavailable", 503, true);
-  }
-  if (verification.status === 404) return;
-  if (!verification.ok) {
-    throw new EdgeError("temporarily_unavailable", 503, true);
-  }
-  const user = await verification.json().catch(() => null);
-  if (
-    !isObject(user) || typeof user.deleted_at !== "string" || !user.deleted_at
-  ) {
-    throw new EdgeError("temporarily_unavailable", 503, true);
-  }
 }
 
 if (import.meta.main) {

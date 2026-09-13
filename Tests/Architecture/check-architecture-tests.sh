@@ -2247,6 +2247,16 @@ expect_marketplace_failure \
     "${marketplace_new_table_inventory_fixture}" \
     "[MKT-DATA-INVENTORY]"
 
+marketplace_unknown_privacy_function_fixture="$(new_marketplace_fixture unknown-privacy-function)"
+mkdir -p "${marketplace_unknown_privacy_function_fixture}/supabase/migrations"
+printf '%s\n' \
+    'create function public.wali_edge_delete_arbitrary_account_v1() returns void language sql as $$ select null $$;' \
+    > "${marketplace_unknown_privacy_function_fixture}/supabase/migrations/001_invalid.sql"
+expect_marketplace_failure \
+    "marketplace privacy additions keep unknown authority denied" \
+    "${marketplace_unknown_privacy_function_fixture}" \
+    "[MKT-API-ALLOWLIST]"
+
 if (( failure_count > 0 )); then
     printf 'Architecture policy fixture failures: %s; passes: %s\n' "${failure_count}" "${pass_count}" >&2
     exit 1

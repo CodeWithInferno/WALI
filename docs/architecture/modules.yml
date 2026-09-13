@@ -542,6 +542,10 @@ modules:
       - product_shaped_catalog_gateway
       - supabase_auth_and_catalog_adapter
       - shared_foreground_email_session_admission
+      - subject_bound_private_creator_preferences
+      - anonymous_creator_filter_before_media_hydration
+      - apple_authorization_binding_before_session_admission
+      - isolated_signed_out_deletion_receipt_keychain
       - bounded_catalog_dto_mapping
       - create_exclusive_verified_download
       - public_catalog_cache

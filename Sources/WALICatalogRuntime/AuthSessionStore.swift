@@ -75,11 +75,15 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
     private nonisolated let auth: AuthClient
     private nonisolated let storage: CatalogCheckedAuthStorage
     private nonisolated let authority: CatalogAuthAuthority
+    typealias AppleAttempt = @Sendable (String, String, String) async throws -> CatalogEmailSessionCandidate
     private let nativeAppleEnabled: Bool
+    private let appleAttempt: AppleAttempt
 
-    init(auth: AuthClient, storage: CatalogCheckedAuthStorage, environment: CatalogEnvironment) {
+    init(auth: AuthClient, storage: CatalogCheckedAuthStorage, environment: CatalogEnvironment, appleAttempt: AppleAttempt? = nil) {
         self.auth = auth
         self.storage = storage
+        let attempt = SupabaseAppleAttempt(environment: environment, clientID: Bundle.main.bundleIdentifier)
+        self.appleAttempt = appleAttempt ?? { try await attempt.signIn(idToken: $0, nonce: $1, authorizationCode: $2) }
         nativeAppleEnabled = environment.authenticationMethod == .nativeApple
         let factory: CatalogAuthAuthority.AttemptFactory?
         if environment.authenticationMethod == .emailOTP {
@@ -140,46 +144,38 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
     public func detachEmailSignIn(ownerID: UUID) async { await authority.detachEmailSignIn(ownerID: ownerID) }
 
     @discardableResult
-    public func signInWithApple(idToken: String, nonce: String) async throws -> CatalogAuthState {
+    public func signInWithApple(idToken: String, nonce: String, authorizationCode: String) async throws -> CatalogAuthState {
         guard !idToken.isEmpty,
               idToken.utf8.count <= 16_384,
-              (16...256).contains(nonce.utf8.count)
+              (16...256).contains(nonce.utf8.count),
+              (1...4096).contains(authorizationCode.utf8.count)
         else {
             throw CatalogRequestError.invalidRequest
         }
         guard nativeAppleEnabled else { throw CatalogEmailAuthError.unavailable }
         return try await authority.withSessionTransition(replacingEmail: true) {
-            try await self.performAppleSignIn(idToken: idToken, nonce: nonce)
+            try await self.performAppleSignIn(idToken: idToken, nonce: nonce, authorizationCode: authorizationCode)
         }
     }
 
-    private func performAppleSignIn(idToken: String, nonce: String) async throws -> CatalogAuthState {
+    private func performAppleSignIn(idToken: String, nonce: String, authorizationCode: String) async throws -> CatalogAuthState {
         do {
-            try storage.beginReplacement()
-            let session = try await auth.signInWithIdToken(
-                credentials: OpenIDConnectCredentials(
-                    provider: .apple,
-                    idToken: idToken,
-                    nonce: nonce
-                )
-            )
-            guard let state = Self.activeState(from: session), auth.currentSession == session else {
-                throw CatalogRemoteError(
-                    code: "authentication_failed",
-                    safeMessage: nil,
-                    retryable: false
-                )
-            }
-            return state
+            let candidate = try await appleAttempt(idToken, nonce, authorizationCode)
+            return try await SupabaseSharedSession(auth: auth, storage: storage).admit(candidate)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            throw CatalogRemoteError(
-                code: "authentication_failed",
-                safeMessage: nil,
-                retryable: false
-            )
+            throw CatalogRemoteError(code: "authentication_failed", safeMessage: nil, retryable: true)
         }
+    }
+
+    func appleCredentialBinding() async -> (accountID: String, appleUserID: String)? {
+        guard nativeAppleEnabled, let session = try? await validatedSession(),
+              let identities = session.user.identities, identities.count <= 16 else { return nil }
+        let apples = identities.filter { $0.provider == "apple" && $0.userId == session.user.id }
+        guard apples.count == 1, case let .string(subject)? = apples[0].identityData?["sub"],
+              (1...256).contains(subject.utf8.count) else { return nil }
+        return (session.user.id.uuidString.lowercased(), subject)
     }
 
     public func signOut() async throws { try await authority.signOut() }

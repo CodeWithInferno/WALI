@@ -211,6 +211,11 @@ public final class MarketplaceCoordinator {
 
     public let model: WALIMarketplaceModel
     public let discovery = CatalogDiscoveryModel()
+    public let creatorBlocking: CreatorBlockingModel
+    private var selectedCreatorID: String?
+    private var blockedReportTarget: (id: String, currentReleaseID: String, creatorID: String)?
+    private var creatorBlockActionTask: Task<Void, Never>?
+    private var creatorBlockReloadTask: Task<Void, Never>?
     public let isMarketplaceAvailable: Bool
     public let authenticationMethod: CatalogAuthenticationMethod
     let emailSignIn = EmailCodeSignInModel()
@@ -290,6 +295,8 @@ public final class MarketplaceCoordinator {
     private var selectedInstallMedia: (wallpaperID: String, releaseID: String, revision: UInt64, kind: CatalogMediaKind)?
     private var retryableInstall: (detail: WALICatalogDetailPresentation, kind: CatalogMediaKind)?
     private var reportTask: Task<Void, Never>?
+    public let deletionReceipts: AccountDeletionReceiptModel?
+    private let requiresDeletionReceipt: Bool
     private var accountTask: Task<Void, Never>?
     private var authenticationTask: Task<Void, Never>?
     private var accountExportPollTask: Task<Void, Never>?
@@ -347,7 +354,10 @@ public final class MarketplaceCoordinator {
         authenticationMethod: CatalogAuthenticationMethod = .nativeApple,
         gateway: (any CatalogGateway)? = nil,
         reportGateway: (any CatalogReportGateway)? = nil,
+        creatorBlocking: CreatorBlockingModel? = nil,
         accountGateway: (any AccountPrivacyGateway)? = nil,
+        deletionReceiptStore: AccountDeletionReceiptStore? = nil,
+        requiresDeletionReceipt: Bool = false,
         creatorGateway: (any CreatorStudioGateway)? = nil,
         creatorAuthorizationGateway: (any CreatorAuthorizationGateway)? = nil,
         creatorUploadTransport: (any CreatorResumableUploadTransport)? = nil,
@@ -369,9 +379,15 @@ public final class MarketplaceCoordinator {
         self.model = model
         self.isMarketplaceAvailable = isMarketplaceAvailable
         self.authenticationMethod = isMarketplaceAvailable ? authenticationMethod : .disabled
-        self.gateway = isMarketplaceAvailable ? gateway : nil
+        self.creatorBlocking = creatorBlocking ?? CreatorBlockingModel(gateway: nil, anonymousStore: UserDefaultsAnonymousCreatorBlocks())
+        self.gateway = isMarketplaceAvailable ? gateway.map { base in
+            if let creatorBlocking { return CreatorBlockingCatalogGateway(base: base, blocking: creatorBlocking) as any CatalogGateway }
+            return base
+        } : nil
         self.reportGateway = isMarketplaceAvailable ? reportGateway : nil
         self.accountGateway = isMarketplaceAvailable ? accountGateway : nil
+        self.deletionReceipts = deletionReceiptStore.map { AccountDeletionReceiptModel(store: $0) }
+        self.requiresDeletionReceipt = requiresDeletionReceipt
         self.creatorGateway = isMarketplaceAvailable ? creatorGateway : nil
         self.creatorAuthorizationGateway = isMarketplaceAvailable ? creatorAuthorizationGateway : nil
         self.moderationGateway = isMarketplaceAvailable ? moderationGateway : nil
@@ -394,6 +410,7 @@ public final class MarketplaceCoordinator {
         self.installHandler = isMarketplaceAvailable ? installHandler : nil
         self.securityHandler = isMarketplaceAvailable ? securityHandler : nil
         self.creatorRequestTimeout = creatorRequestTimeout
+        creatorBlocking?.onInvalidation = { [weak self] in self?.invalidateCreatorCatalogPresentation() }
         moderatorAccess?.onVerified = { [weak self] in
             guard let self, case let .signedIn(subjectID) = model.accountState else { return }
             loadCreatorContext(for: subjectID)
@@ -439,7 +456,10 @@ public final class MarketplaceCoordinator {
             authenticationMethod: environment.authenticationMethod,
             gateway: gateway,
             reportGateway: gateway,
+            creatorBlocking: CreatorBlockingModel(gateway: gateway, anonymousStore: UserDefaultsAnonymousCreatorBlocks()),
             accountGateway: gateway,
+            deletionReceiptStore: gateway.makeAccountDeletionReceiptStore(),
+            requiresDeletionReceipt: true,
             creatorGateway: gateway,
             creatorAuthorizationGateway: gateway,
             creatorUploadTransport: uploadTransport,
@@ -481,7 +501,10 @@ public final class MarketplaceCoordinator {
     }
 
     public func stop() {
+        deletionReceipts?.setVisible(false)
         acceptsAuthenticationResults = false
+        creatorBlockActionTask?.cancel()
+        creatorBlockReloadTask?.cancel()
         pendingDeletionSignOut = nil
         detachEmailFlow()
         Self.logger.info("Marketplace lifecycle stopped")
@@ -696,6 +719,57 @@ public final class MarketplaceCoordinator {
         }
     }
 
+    public var canBlockSelectedCreator: Bool {
+        guard let selectedCreatorID else { return false }
+        return selectedCreatorID != creatorBlocking.subjectID && !creatorBlocking.isWorking
+    }
+
+    public func blockSelectedCreator() {
+        guard canBlockSelectedCreator, let creatorID = selectedCreatorID else { return }
+        if let detail = model.selectedDetail {
+            blockedReportTarget = (detail.id, detail.currentReleaseID, creatorID)
+        }
+        creatorBlockActionTask?.cancel()
+        creatorBlockActionTask = Task { [weak self] in
+            guard let self else { return }
+            do { try await creatorBlocking.setBlocked(creatorID: creatorID, desired: true) }
+            catch is CancellationError { return }
+            catch { model.actionState = .failed(message: creatorBlocking.failureMessage ?? "That creator couldn’t be blocked. Try again.") }
+        }
+    }
+
+    public func canReportHiddenWallpaper(_ wallpaperID: String) -> Bool {
+        guard let blockedReportTarget, blockedReportTarget.id == wallpaperID else { return false }
+        return creatorBlocking.blockedCreatorIDs.contains(blockedReportTarget.creatorID)
+    }
+
+    private func invalidateCreatorCatalogPresentation() {
+        if let detail = model.selectedDetail, let creatorID = selectedCreatorID,
+           creatorBlocking.blockedCreatorIDs.contains(creatorID) {
+            blockedReportTarget = (detail.id, detail.currentReleaseID, creatorID)
+        }
+        let reloadSaved = discovery.savedState != .idle
+        homeTask?.cancel(); browseTask?.cancel(); detailTask?.cancel(); savedTask?.cancel()
+        actionTask?.cancel(); installTask?.cancel()
+        homeGeneration &+= 1; browseGeneration &+= 1; detailGeneration &+= 1; savedGeneration &+= 1
+        homeMediaLease = CatalogMediaLease(); browseMediaLease = CatalogMediaLease()
+        searchMediaLease = CatalogMediaLease(); detailMediaLease = CatalogMediaLease(); savedMediaLease = CatalogMediaLease()
+        model.homeSections = []; model.homeState = .idle
+        model.browseItems = []; model.searchItems = []; model.browseNextCursor = nil; model.searchNextCursor = nil
+        isLoadingMore = false; model.browsePageError = nil
+        model.selectedDetail = nil; model.detailState = .failed(message: "Creator preferences changed. Refresh this wallpaper to continue."); detailTargetID = nil; selectedCreatorID = nil
+        selectedInstallMedia = nil; retryableInstall = nil
+        if model.catalogInstall?.canCancel == true { model.catalogInstall?.phase = .cancelled }
+        discovery.savedItems = []; discovery.savedNextCursor = nil; discovery.isLoadingSavedPage = false
+        creatorBlockReloadTask?.cancel()
+        creatorBlockReloadTask = Task { [weak self] in
+            await Task.yield()
+            guard let self, !Task.isCancelled, acceptsAuthenticationResults else { return }
+            refreshCatalogSurfaces()
+            if reloadSaved { loadSavedWallpapers() }
+        }
+    }
+
     public func loadHome() {
         homeTask?.cancel()
         homeGeneration &+= 1
@@ -872,12 +946,14 @@ public final class MarketplaceCoordinator {
     }
 
     public func loadDetail(wallpaperID: String) {
+        if blockedReportTarget?.id != wallpaperID { blockedReportTarget = nil }
         detailTask?.cancel()
         detailTargetID = wallpaperID
         detailGeneration &+= 1
         let generation = detailGeneration
         Self.logger.info("Wallpaper detail requested; generation=\(generation, privacy: .public)")
         model.selectedDetail = nil
+        selectedCreatorID = nil
         selectedInstallMedia = nil
         detailMediaLease = CatalogMediaLease()
         model.detailState = .loading
@@ -890,6 +966,7 @@ public final class MarketplaceCoordinator {
                 let detail = try await gateway.detail(wallpaperID: wallpaperID)
                 try Task.checkCancellation()
                 guard let self, generation == self.detailGeneration else { return }
+                self.selectedCreatorID = detail.summary.creator.id
                 self.selectedInstallMedia = (detail.id, detail.summary.currentReleaseID, detail.summary.revision, detail.media.kind)
                 self.model.selectedDetail = self.presentationDetail(detail)
                 self.model.detailState = .ready
@@ -982,7 +1059,7 @@ public final class MarketplaceCoordinator {
                 model.authenticationState = .idle
                 if case .report = action { model.reportState = .idle }
                 else if action != nil { model.actionState = .idle }
-                model.accountState = .signedIn(userID: state.userID)
+                model.accountState = .signedIn(userID: state.userID); creatorBlocking.updateSubject(state.userID)
                 if discovery.preferences?.userID != state.userID { loadPreferences() }
                 retryInstallRecording()
                 loadAccountProfile(for: state.userID)
@@ -1278,7 +1355,7 @@ public final class MarketplaceCoordinator {
                 try await authStore.signOut()
                 try Task.checkCancellation()
                 clearSubjectBoundState()
-                model.accountState = .signedOut
+                model.accountState = .signedOut; creatorBlocking.updateSubject(nil)
                 refreshCatalogSurfaces()
                 model.authenticationState = .idle
             } catch is CancellationError {
@@ -1457,6 +1534,10 @@ public final class MarketplaceCoordinator {
             model.accountDeletionState = .failed(message: "Account details are unavailable. Refresh and try again.")
             return
         }
+        guard !requiresDeletionReceipt || deletionReceipts != nil else {
+            model.accountDeletionState = .failed(message: "Secure deletion status storage is unavailable. Restart WALI and try again.")
+            return
+        }
         guard confirmation == "DELETE MY WALI" else {
             model.accountDeletionState = .failed(message: "Enter DELETE MY WALI exactly to continue.")
             return
@@ -1594,11 +1675,18 @@ public final class MarketplaceCoordinator {
         accountTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let snapshot = try await accountGateway.requestAccountDeletion(
-                    expectedProfileRevision: profile.revision,
-                    confirmation: confirmation,
-                    idempotencyKey: key
-                )
+                let snapshot: AccountDeletionSnapshot
+                if let deletionReceipts {
+                    let receipt = try await deletionReceipts.prepare(subjectID: profile.userID, revision: profile.revision, key: key)
+                    try Task.checkCancellation()
+                    guard accountSubjectMatchesCurrentProfile(profile.userID) else { return }
+                    snapshot = try await accountGateway.requestAccountDeletion(receipt: receipt, confirmation: confirmation)
+                    deletionReceipts.refresh()
+                } else {
+                    guard !requiresDeletionReceipt else { throw AccountDeletionReceiptError.storageUnavailable }
+                    snapshot = try await accountGateway.requestAccountDeletion(expectedProfileRevision: profile.revision,
+                        confirmation: confirmation, idempotencyKey: key)
+                }
                 try Task.checkCancellation()
                 guard accountSubjectMatchesCurrentProfile,
                       accountSubjectMatchesCurrentProfile(snapshot.subjectID)
@@ -1625,7 +1713,8 @@ public final class MarketplaceCoordinator {
                 )
             } catch {
                 guard accountSubjectMatchesCurrentProfile else { return }
-                model.accountDeletionState = .failed(message: "Account deletion could not be requested. Try again.")
+                deletionReceipts?.refresh()
+                model.accountDeletionState = .failed(message: "The request could not be confirmed. Check Deletion Requests on This Mac before trying again.")
             }
         }
     }
@@ -1803,8 +1892,10 @@ public final class MarketplaceCoordinator {
             signIn(resuming: .report)
             return
         }
+        let reportTarget = model.selectedDetail.map { (id: $0.id, currentReleaseID: $0.currentReleaseID) }
+            ?? blockedReportTarget.map { (id: $0.id, currentReleaseID: $0.currentReleaseID) }
         guard reportGateway != nil,
-              let selected = model.selectedDetail
+              let selected = reportTarget
         else {
             model.reportState = .failed(message: "That report could not be prepared.")
             return
@@ -1881,9 +1972,9 @@ public final class MarketplaceCoordinator {
         guard let state, state.expiresAt > .now else {
             if previousUserID != nil {
                 clearSubjectBoundState()
-                model.accountState = .signedOut
+                model.accountState = .signedOut; creatorBlocking.updateSubject(nil)
                 refreshCatalogSurfaces()
-            } else { model.accountState = .signedOut }
+            } else { model.accountState = .signedOut; creatorBlocking.updateSubject(nil) }
             return
         }
         if let deletion = pendingDeletionSignOut,
@@ -1897,7 +1988,7 @@ public final class MarketplaceCoordinator {
         let changedSubject = previousUserID != nil && previousUserID != state.userID
         let reloadSavedForNewSubject = changedSubject && discovery.savedState != .idle
         if changedSubject { clearSubjectBoundState() }
-        model.accountState = .signedIn(userID: state.userID)
+        model.accountState = .signedIn(userID: state.userID); creatorBlocking.updateSubject(state.userID)
         if changedSubject { refreshCatalogSurfaces() }
         if reloadSavedForNewSubject { loadSavedWallpapers() }
         if discovery.preferences?.userID != state.userID { loadPreferences() }
@@ -1915,12 +2006,13 @@ public final class MarketplaceCoordinator {
                   currentUserID == state.userID
             else { return }
             clearSubjectBoundState()
-            model.accountState = .signedOut
+            model.accountState = .signedOut; creatorBlocking.updateSubject(nil)
             refreshCatalogSurfaces()
         }
     }
 
     private func clearSubjectBoundState() {
+        blockedReportTarget = nil
         preferencesTask?.cancel()
         savedTask?.cancel()
         recordTask?.cancel()
@@ -1945,6 +2037,7 @@ public final class MarketplaceCoordinator {
         detailGeneration &+= 1
         detailTargetID = nil
         model.selectedDetail = nil
+        selectedCreatorID = nil
         selectedInstallMedia = nil
         model.detailState = .idle
         browseTask?.cancel()
@@ -2022,7 +2115,7 @@ public final class MarketplaceCoordinator {
                       profile.id == expectedUserID
                 else {
                     clearSubjectBoundState()
-                    model.accountState = .signedOut
+                    model.accountState = .signedOut; creatorBlocking.updateSubject(nil)
                     return
                 }
                 model.accountProfile = WALIAccountProfilePresentation(
@@ -2289,7 +2382,7 @@ public final class MarketplaceCoordinator {
                     return
                 }
                 clearSubjectBoundState()
-                model.accountState = .signedOut
+                model.accountState = .signedOut; creatorBlocking.updateSubject(nil)
                 refreshCatalogSurfaces()
                 model.authenticationState = .succeeded(message: Self.signedOutDeletionNotice(snapshot.status))
             } catch is CancellationError {

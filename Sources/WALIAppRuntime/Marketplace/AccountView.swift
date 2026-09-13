@@ -13,6 +13,8 @@ struct AccountView: View {
     let profileState: WALIAccountPrivacyLoadState
     let exportState: WALIAccountExportPresentation
     let deletionState: WALIAccountDeletionPresentation
+    let deletionReceipts: AccountDeletionReceiptModel?
+    let creatorBlocking: CreatorBlockingModel?
     let moderatorAccess: ModeratorAccessModel?
     let hasModeratorRole: Bool
     let isModerationUnlocked: Bool
@@ -27,6 +29,8 @@ struct AccountView: View {
     let onVerifyDeletionMFA: (String) -> Void
     let onCancelDeletionMFA: () -> Void
     private let legalLinks = MarketplaceLegalLinks()
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var showsBlockedCreators = false
     @State private var showsDeletionConfirmation = false
     @State private var deletionConfirmation = ""
     @State private var mfaCode = ""
@@ -39,6 +43,12 @@ struct AccountView: View {
         .font(.body)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityIdentifier("WALI.Marketplace.Account")
+        .onAppear { deletionReceipts?.setVisible(scenePhase == .active) }
+        .onChange(of: scenePhase) { _, phase in deletionReceipts?.setVisible(phase == .active) }
+        .onDisappear { deletionReceipts?.setVisible(false) }
+        .sheet(isPresented: $showsBlockedCreators) {
+            if let creatorBlocking { BlockedCreatorsView(model: creatorBlocking) }
+        }
         .sheet(isPresented: $showsDeletionConfirmation) {
             deletionConfirmationSheet
         }
@@ -117,6 +127,17 @@ struct AccountView: View {
                     }
                 }
 
+                if let deletionReceipts, !deletionReceipts.receipts.isEmpty || deletionReceipts.errorMessage != nil {
+                    AccountDeletionReceiptView(model: deletionReceipts)
+                }
+
+                if creatorBlocking != nil {
+                    Section("Catalog Privacy") {
+                        Button("Blocked Creators", systemImage: "person.crop.circle.badge.xmark") { showsBlockedCreators = true }
+                        Text("Hide a creator’s catalog content without removing existing wallpapers from your Library.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
                 if hasModeratorRole, let moderatorAccess, let profile {
                     Section("Review Access") {
                         ModeratorAccessView(
@@ -146,7 +167,7 @@ struct AccountView: View {
 
                 if case .signedIn = account {
                     Section("Delete Account") {
-                        Text("Removes or anonymizes your marketplace account data and sign-in identity. Required security, legal, copyright, and immutable public-release records may be retained under policy. Local wallpapers remain on this Mac.")
+                        Text("Removes or anonymizes your marketplace account data and sign-in identity. Limited records may be retained when required by the applicable policy. Local wallpapers remain on this Mac. You can check an accepted request here after sign-out, while pending and for 30 days after completion.")
                             .foregroundStyle(.secondary)
                         deletionStatus
 

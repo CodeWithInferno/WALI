@@ -25,6 +25,8 @@ class MarketplaceContractChecker
     docs/api/catalog-v1.md
     docs/api/catalog-v2.md
     docs/api/creator-v1.md
+    docs/api/creator-blocking-v1.md
+    docs/api/account-privacy-v2.md
     docs/api/moderation-v1.md
     docs/security/marketplace-threat-model.md
     docs/security/data-inventory.yml
@@ -53,6 +55,9 @@ class MarketplaceContractChecker
     wali.processing_attempts wali.classification_runs wali.moderation_reviews
     wali.moderation_actions wali.reports wali.copyright_cases
     wali.catalog_revocations wali.favorites wali.saved_wallpapers
+    wali.creator_blocks wali.creator_block_preferences wali.apple_authorizations
+    wali.account_deletion_finalization_jobs wali.account_deletion_status_receipts
+    wali.account_deletion_dispatch_state wali.account_deletion_object_intents
     wali.creator_follows wali.engagement_events wali.wallpaper_stats_hourly
     wali.install_receipts wali.wallpaper_stats_daily wali.ranking_snapshots
     wali.quality_assessments
@@ -80,6 +85,7 @@ class MarketplaceContractChecker
     creator_metadata_v1 creator_processing_status_v1 my_creator_submissions_v1
     moderation_queue_v1 moderation_reports_v1 moderation_metadata_v1
     account_operation_references_v1
+    set_creator_block_v1 my_creator_blocks_v1 my_hidden_interactions_v1
   ]).freeze
   EDGE_BOUNDARY_PUBLIC_FUNCTIONS = Set.new(%w[
     record_install_v1 wali_edge_take_rate_limit_v1
@@ -101,6 +107,13 @@ class MarketplaceContractChecker
     wali_edge_claim_automatic_publication_v1 wali_edge_prepare_automatic_publication_v1
     wali_edge_finalize_automatic_publication_v1 wali_edge_finish_automatic_publication_v1
     wali_edge_retry_publication_v1 wali_edge_retry_processing_v1
+    wali_edge_begin_apple_authorization_v1 wali_edge_complete_apple_authorization_v1
+    wali_edge_cancel_apple_authorization_v1 wali_edge_request_account_deletion_v2
+    wali_edge_begin_account_deletion_dispatch_v1 wali_edge_end_account_deletion_dispatch_v1
+    wali_edge_claim_account_deletion_v1 wali_edge_prepare_automatic_account_deletion_v1
+    wali_edge_checkpoint_account_apple_revocation_v1 wali_edge_authorize_account_identity_deletion_v1
+    wali_edge_finalize_automatic_account_deletion_v1 wali_edge_retry_account_deletion_v1
+    wali_edge_account_deletion_receipt_v1 wali_edge_retry_automatic_account_deletion_v1
   ]).freeze
   MANIFEST_ROOT_KEYS = %w[
     schema key_id wallpaper_id release_id edition issued_at artifacts

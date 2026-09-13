@@ -1,10 +1,10 @@
 # 0019: Private creator blocking for marketplace viewers
 
-- status: proposed
+- status: accepted
 - date: 2026-09-09
 - owner_role: catalog_maintainer
-- accepted_by: pending
-- approval_reference: explicit project-owner approval required for schema and privacy boundary
+- accepted_by: project_owner
+- approval_reference: owner reply "Approve these privacy changes" to call_iEZMKltIq60K30S3aWTn4SjK on 2026-09-13; exact private creator-blocking scope in privacy SCOPE v3
 - related: [0011](0011-supabase-marketplace-control-plane.md), [0012](0012-signed-remote-catalog-releases.md), [0018](0018-sandboxed-mac-app-store-distribution.md)
 
 ## Context
@@ -19,7 +19,7 @@ A viewer's block relationship is private account data. Adding a persistent
 relation, authenticated operations, and personalized catalog filtering requires
 explicit approval under [GOVERNANCE.md](../../GOVERNANCE.md). Approval of the
 Store sandbox in ADR 0018 did not approve this separate marketplace boundary.
-This proposal adds to ADRs 0011 and 0012 without superseding their authorization,
+This decision adds to ADRs 0011 and 0012 without superseding their authorization,
 remote-media validation, publication, or local installation rules.
 
 ## Decision
@@ -221,3 +221,13 @@ clear error. No destructive production rollback is authorized by this ADR.
   ranking events, exports belonging to another account, and notifications.
 - Staging native journey and final production source/schema checks before
   advertising blocking in either distribution or Store review metadata.
+
+## Implementation record, 2026-09-13
+
+Migration013 and [the v1 contract](../api/creator-blocking-v1.md) implement the
+three approved RPCs. `my_creator_blocks_v1` has an optional
+`selected_creator_id default null`; exact lookup includes an inactive outgoing
+revision and returns at most one row. This preserves truthful optimistic
+concurrency without adding an incoming projection or fourth RPC. The current
+source uses sorted profile locks before the viewer preference lock to fence
+account cleanup. This record is not hosted activation or Store acceptance proof.

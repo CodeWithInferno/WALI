@@ -965,6 +965,12 @@ func validCleanupTarget(bucket, objectPath string) bool {
 		return exportPathPattern.MatchString(objectPath) && len(parts) == 4 && jobIDPattern.MatchString(parts[1]) && jobIDPattern.MatchString(parts[2])
 	case "processing-private":
 		return immutablePathPattern.MatchString(objectPath)
+	case "catalog-public":
+		// Only the database's exact, currently leased deletion intent can
+		// supply this target. Keep the digest directories canonical as well.
+		parts := strings.Split(objectPath, "/")
+		return immutablePathPattern.MatchString(objectPath) && len(parts) == 5 &&
+			parts[1] == parts[3][:2] && parts[2] == parts[3][2:4]
 	case "moderation-private":
 		return moderationPathPattern.MatchString(objectPath)
 	default:

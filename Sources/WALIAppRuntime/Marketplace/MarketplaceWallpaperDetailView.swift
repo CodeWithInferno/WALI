@@ -21,12 +21,15 @@ struct MarketplaceWallpaperDetailView: View {
     let onFavorite: () -> Void
     let onSave: () -> Void
     let onReport: (CatalogReportKind, String) -> Void
+    var canReportHiddenWallpaper = false
+    var onBlockCreator: (() -> Void)? = nil
     var installRecordingFailure: String? = nil
     var canRetryInstallRecord = false
     var isRetryingInstallRecord = false
     var onRetryInstallRecord: () -> Void = {}
 
     @State private var showsReportSheet = false
+    @State private var showsBlockConfirmation = false
 
     var body: some View {
         Group {
@@ -51,6 +54,12 @@ struct MarketplaceWallpaperDetailView: View {
                 onReport(kind, detail)
             }
             .interactiveDismissDisabled(marketplace.reportState == .working)
+        }
+        .confirmationDialog("Block this creator?", isPresented: $showsBlockConfirmation, titleVisibility: .visible) {
+            Button("Block Creator", role: .destructive) { onBlockCreator?() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Their catalog content will be hidden from Discover, Browse and Saved. Existing wallpapers stay in your Library. You can unblock them in Account.")
         }
         .onChange(of: marketplace.reportState) { _, state in
             if case .succeeded = state { showsReportSheet = false }
@@ -295,6 +304,11 @@ struct MarketplaceWallpaperDetailView: View {
                     Button(detail.isSaved ? "Remove from Saved" : "Save Wallpaper", systemImage: detail.isSaved ? "bookmark.fill" : "bookmark", action: onSave)
                         .help(detail.isSaved ? "Remove from Saved" : "Save Wallpaper")
                     Button("Copy Wallpaper ID", systemImage: "doc.on.doc") { copyIdentifier(detail.id) }
+                    if onBlockCreator != nil {
+                        Button("Block Creator", systemImage: "person.crop.circle.badge.xmark") { showsBlockConfirmation = true }
+                            .help("Hide this creator’s catalog content")
+                            .accessibilityIdentifier("WALI.Wallpaper.BlockCreator")
+                    }
                     Button("Report", systemImage: "exclamationmark.bubble") {
                         marketplace.reportState = .idle
                         showsReportSheet = true
@@ -335,7 +349,17 @@ struct MarketplaceWallpaperDetailView: View {
 
     @ViewBuilder
     private var loadingContent: some View {
-        switch marketplace.detailState {
+        if canReportHiddenWallpaper {
+            ContentUnavailableView {
+                Label("Creator Blocked", systemImage: "person.crop.circle.badge.xmark")
+            } description: {
+                Text("This creator’s catalog content is hidden. Existing wallpapers stay in your Library. Manage blocked creators in Account.")
+            } actions: {
+                Button("Report Wallpaper", systemImage: "exclamationmark.bubble") {
+                    marketplace.reportState = .idle; showsReportSheet = true
+                }
+            }
+        } else { switch marketplace.detailState {
         case .idle, .loading:
             ProgressView("Loading wallpaper…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -357,7 +381,7 @@ struct MarketplaceWallpaperDetailView: View {
             }
         default:
             ContentUnavailableView("Wallpaper Unavailable", systemImage: "photo.badge.exclamationmark")
-        }
+        } }
     }
 
     private func copyIdentifier(_ id: String) {

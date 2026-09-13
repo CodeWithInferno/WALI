@@ -512,6 +512,9 @@ surfaces:
   # durable leased jobs, protected publication_worker.v1 scheduling and required
   # metadata/rights draft before completion. Human moderation keeps AAL2.
   # Contract: docs/api/automatic-publication-v1.md; original rows stay readable.
+  # ADR0019/0029 add private migrations202609130013–015. Exact contracts are
+  # docs/api/creator-blocking-v1.md and docs/api/account-privacy-v2.md.
+  # Rollback preserves existing block enforcement and deletion checkpoints.
   - id: marketplace_server_schema
     kind: server_schema
     owner_role: catalog_maintainer
@@ -540,11 +543,19 @@ surfaces:
       unknown_newer_policy: reject_before_write
       contract: docs/adr/0014-marketplace-schema-and-rls.md
 
+
   # ADR0022 changes direct foreground auth to email_otp without changing this API
   # version, account IDs, IPC, or persisted library/session namespaces. The compiled
   # public configuration contract is docs/release/production-configuration.md.
   # Native account recovery reads the existing server-owned request IDs through
   # account_operation_references_v1; see docs/api/catalog-v1.md.
+  # Private creator pages use100 items and10,000 active blocks, independently of
+  # the unchanged50-item public catalog page. A stale viewer generation restarts
+  # private paging; native metadata admission fails closed on refresh failure.
+  # account.v2 adds consent-bound automation; apple_authorization.v1 binds native
+  # Apple credentials; account_deletion_receipt.v1 is a1KiB request/4KiB response
+  # capability with pending-lifetime access then30days after actual completion.
+  # account_deletion_worker.v1 is a separate scheduler capability, never a user API.
   - id: catalog_public_api
     kind: public_api
     owner_role: catalog_maintainer

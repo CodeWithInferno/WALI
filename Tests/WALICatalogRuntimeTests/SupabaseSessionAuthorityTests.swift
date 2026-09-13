@@ -497,3 +497,40 @@ private final class SDKFunctionsCaptureProtocol: URLProtocol, @unchecked Sendabl
     static func request(for name: String) -> URLRequest? { requests.withLock { $0.removeValue(forKey: name) } }
     static func install(_ scenario: SDKRetryScenario?, for name: String) { scenarios.withLock { $0[name] = scenario } }
 }
+
+extension SupabaseSessionAuthorityTests {
+    func testAppleBindingFailurePreservesExistingAccountAndNeverAdmitsCandidate() async throws {
+        let fixture = try SDKSessionFixture()
+        let baseEnvironment = try SDKSessionFixture.environment()
+        let environment = try CatalogEnvironment(supabaseURL: baseEnvironment.supabaseURL, publishableKey: baseEnvironment.publishableKey,
+            approvedCDNHosts: baseEnvironment.approvedCDNHosts, signingKeyID: baseEnvironment.signingKeyID,
+            signingPublicKey: baseEnvironment.signingPublicKey, authenticationMethod: .nativeApple)
+        let store = AuthSessionStore(auth: fixture.auth, storage: try XCTUnwrap(fixture.shared.storage), environment: environment,
+            appleAttempt: { _, _, _ in throw CatalogEmailAuthError.admissionFailed })
+        do { _ = try await store.signInWithApple(idToken: "local-token", nonce: "local-nonce-long-enough", authorizationCode: "local-code"); XCTFail("Unbound Apple login was accepted") }
+        catch { }
+        let current = await store.currentState()
+        XCTAssertEqual(current?.userID, fixture.original.user.id.uuidString.lowercased())
+        XCTAssertEqual(fixture.auth.currentSession?.accessToken, fixture.original.accessToken)
+        await fixture.auth.stopAutoRefresh()
+    }
+
+    func testAppleCandidateAdmitsOnlyAfterBindingCompletes() async throws {
+        let fixture = try SDKSessionFixture()
+        let baseEnvironment = try SDKSessionFixture.environment()
+        let environment = try CatalogEnvironment(supabaseURL: baseEnvironment.supabaseURL, publishableKey: baseEnvironment.publishableKey,
+            approvedCDNHosts: baseEnvironment.approvedCDNHosts, signingKeyID: baseEnvironment.signingKeyID,
+            signingPublicKey: baseEnvironment.signingPublicKey, authenticationMethod: .nativeApple)
+        let started = SDKTestSignal(), release = SDKTestSignal()
+        let store = AuthSessionStore(auth: fixture.auth, storage: try XCTUnwrap(fixture.shared.storage), environment: environment,
+            appleAttempt: { _, _, _ in await started.signal(); await release.wait(); return fixture.candidate })
+        let login = Task { try await store.signInWithApple(idToken: "local-token", nonce: "local-nonce-long-enough", authorizationCode: "local-code") }
+        await started.wait()
+        XCTAssertEqual(fixture.auth.currentSession?.accessToken, fixture.original.accessToken)
+        await release.signal()
+        let admitted = try await login.value
+        XCTAssertEqual(admitted.userID, fixture.admitted.user.id.uuidString.lowercased())
+        XCTAssertEqual(fixture.auth.currentSession?.accessToken, fixture.admitted.accessToken)
+        await fixture.auth.stopAutoRefresh()
+    }
+}

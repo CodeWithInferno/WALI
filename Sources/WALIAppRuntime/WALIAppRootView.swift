@@ -188,6 +188,8 @@ public struct WALIAppRootView: View {
                             onFavorite: { marketplace.toggleFavorite() },
                             onSave: { marketplace.toggleSaved() },
                             onReport: marketplace.reportSelectedWallpaper,
+                            canReportHiddenWallpaper: marketplace.canReportHiddenWallpaper(wallpaperID),
+                            onBlockCreator: blockSelectedCreatorAction,
                             installRecordingFailure: marketplace.discovery.installRecordingFailure,
                             canRetryInstallRecord: marketplace.discovery.canRetryInstallRecord,
                             isRetryingInstallRecord: marketplace.discovery.isRetryingInstallRecord,
@@ -218,6 +220,11 @@ public struct WALIAppRootView: View {
             \.waliOverlayLeadingBleed,
             WALIChromeLayout.overlayLeadingBleed(columnVisibility: columnVisibility)
         )
+    }
+
+    private var blockSelectedCreatorAction: (() -> Void)? {
+        guard marketplace.canBlockSelectedCreator else { return nil }
+        return { marketplace.blockSelectedCreator() }
     }
 
     private var emailSignInPresented: Binding<Bool> {
@@ -406,6 +413,8 @@ public struct WALIAppRootView: View {
                 profileState: marketplace.model.accountProfileState,
                 exportState: marketplace.model.accountExportState,
                 deletionState: marketplace.model.accountDeletionState,
+                deletionReceipts: marketplace.deletionReceipts,
+                creatorBlocking: marketplace.creatorBlocking,
                 moderatorAccess: marketplace.moderatorAccess,
                 hasModeratorRole: marketplace.creatorContext.moderationModel?.authorization.moderatorGrantRevision != nil,
                 isModerationUnlocked: marketplace.creatorContext.moderationModel?.canShowReviewQueue == true,
