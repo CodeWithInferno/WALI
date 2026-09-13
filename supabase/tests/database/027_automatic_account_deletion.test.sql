@@ -165,6 +165,8 @@ select throws_ok($$insert into wali.release_artifacts(release_id,role,artifact_d
  'P0001','WALI_ARTIFACT_DELETION_FENCED','deletion admitted first rejects a new reference');
 insert into deletion_test_values values('public_cleanup',to_jsonb((select cleanup_id from wali.account_deletion_object_intents where digest=repeat('2',64))));
 select is(wali.worker_begin_cleanup((select (value#>>'{}')::uuid from deletion_test_values where name='public_cleanup'),'public-cleanup-fixture',statement_timestamp()+interval '1 minute')->>'disposition','started','worker obtains the exact public-object lease');
+-- Simulate the Storage API transaction; keep its delete guard and worker RLS enabled.
+set local storage.allow_delete_query = 'true';
 select set_config('request.jwt.claims','{"role":"wali_storage_worker","worker_id":"wrong-worker"}',true);
 set local role wali_storage_worker;
 delete from storage.objects where bucket_id='catalog-public' and name='sha256/22/22/'||repeat('2',64)||'/poster.jpg';
@@ -174,6 +176,7 @@ select set_config('request.jwt.claims','{"role":"wali_storage_worker","worker_id
 set local role wali_storage_worker;
 delete from storage.objects where bucket_id='catalog-public' and name='sha256/22/22/'||repeat('2',64)||'/poster.jpg';
 reset role;
+set local storage.allow_delete_query = 'false';
 select set_config('request.jwt.claims','{"role":"service_role"}',true);
 select is((select count(*) from storage.objects where bucket_id='catalog-public' and name='sha256/22/22/'||repeat('2',64)||'/poster.jpg'),0::bigint,'only matching leased public object is removed');
 select ok(wali.worker_complete_cleanup((select (value#>>'{}')::uuid from deletion_test_values where name='public_cleanup'),'public-cleanup-fixture'),'absence is verified before completion');
