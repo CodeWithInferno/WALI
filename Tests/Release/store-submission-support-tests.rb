@@ -28,7 +28,7 @@ export_options = lambda do |settings = resolved|
 end
 expected_profiles = resolved.to_h { |entry| [entry.fetch("buildSettings").fetch("PRODUCT_BUNDLE_IDENTIFIER"), entry.fetch("buildSettings").fetch("PROVISIONING_PROFILE_SPECIFIER")] }
 options = export_options.call
-raise "Missing exact manual Store export mapping" unless options == {"method" => "app-store", "signingStyle" => "manual", "teamID" => team, "signingCertificate" => identity, "provisioningProfiles" => expected_profiles}
+raise "Missing exact manual Store export mapping" unless options == {method: "app-store", signingStyle: "manual", teamID: team, signingCertificate: identity, provisioningProfiles: expected_profiles}
 reject_case("missing export target") { export_options.call(resolved.drop(1)) }
 raise "Repeated identical Xcode record changes export" unless export_options.call(resolved + [resolved.first]) == options
 duplicate = Marshal.load(Marshal.dump(resolved.first))

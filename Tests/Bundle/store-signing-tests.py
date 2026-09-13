@@ -67,6 +67,13 @@ class StoreSigningTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 package_policy.validate_installer_signature(malformed, self.team)
 
+    def test_mac_app_store_installer_status_is_supported(self):
+        valid = 'Status: signed by a developer certificate issued by Apple (Development)\nCertificate Chain:\n 1. 3rd Party Mac Developer Installer: Fixture (TESTTEAM01)\n'
+        package_policy.validate_installer_signature(valid, self.team)
+        for malformed in [valid.replace('3rd Party Mac Developer Installer:', 'Apple Development:'), valid.replace('3rd Party Mac Developer Installer:', 'Developer ID Installer:'), valid.replace('TESTTEAM01', 'OTHERTEAM1'), valid.replace('(Development)', '(untrusted)'), valid.replace('(Development)', '(Development) but expired')]:
+            with self.subTest(status=malformed), self.assertRaises(ValueError):
+                package_policy.validate_installer_signature(malformed, self.team)
+
     def test_release_rejects_coverage_sections_and_runtime(self):
         policy.validate_no_coverage_instrumentation('  sectname __text\n  sectname __swift5_types\n', '_main\n')
         for section in ('__llvm_prf_cnts', '__llvm_prf_data', '__llvm_prf_names', '__llvm_covmap', '__llvm_covfun'):

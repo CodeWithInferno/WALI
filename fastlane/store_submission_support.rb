@@ -29,8 +29,8 @@ module WALIStoreSubmissionSupport
       raise "Missing or unresolved Store export profile for #{target}" unless profile.is_a?(String) && profile == profile.strip && profile.length.between?(1, 256) && !profile.match?(/[[:cntrl:]]|\$[({]/)
       [identifier, profile]
     end
-    {"method" => "app-store", "signingStyle" => "manual", "teamID" => team,
-     "signingCertificate" => identity, "provisioningProfiles" => profiles}
+    {method: "app-store", signingStyle: "manual", teamID: team,
+     signingCertificate: identity, provisioningProfiles: profiles}
   end
 
   def delivery_options(upload:)
