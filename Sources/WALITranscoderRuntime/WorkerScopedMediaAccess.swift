@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OSLog
 import WALIWire
 
 enum WorkerGrantError: LocalizedError {
@@ -35,6 +36,7 @@ struct WorkerBookmarkOperations: Sendable {
 /// The worker holds only the input file and exact attempt directory. It never
 /// derives a library/root URL. All acquired scopes and descriptors close once.
 final class WorkerScopedMediaAccess: @unchecked Sendable {
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.wali.transcoder", category: "StoreMediaGrant")
     let sourceURL: URL
     let stagingDirectoryURL: URL
     private let operations: WorkerBookmarkOperations
@@ -93,7 +95,18 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
     }
 
     private static func resolve(_ data: Data, expected: URL, stage: String, operations: WorkerBookmarkOperations) throws -> URL {
-        let resolved = try operations.resolve(data)
+        let resolved: (url: URL, stale: Bool)
+        do {
+            resolved = try operations.resolve(data)
+        } catch {
+            #if WALI_APP_STORE
+            let failure = error as NSError
+            let domain = [NSCocoaErrorDomain, NSPOSIXErrorDomain, NSOSStatusErrorDomain].contains(failure.domain)
+                ? failure.domain : "other"
+            logger.error("Store grant resolve failed; stage=\(stage, privacy: .public) domain=\(domain, privacy: .public) code=\(failure.code, privacy: .public)")
+            #endif
+            throw error
+        }
         // Resolve with implicit access so private-container metadata is available.
         // Transfer that temporary acquisition to one explicit attempt acquisition;
         // stale, mismatched and denied grants must release the resolver's scope too.
@@ -104,11 +117,10 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
         if resolved.stale || resolved.url.standardizedFileURL != expected.standardizedFileURL {
             let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true).standardizedFileURL.path + "/"
             // Fixed stage and booleans only: never record paths or grant material.
-            NSLog("Store grant resolution stage=%@ stale=%d matches=%d resolved_in_worker_home=%d expected_in_worker_home=%d",
-                  stage, resolved.stale ? 1 : 0,
-                  resolved.url.standardizedFileURL == expected.standardizedFileURL ? 1 : 0,
-                  resolved.url.standardizedFileURL.path.hasPrefix(home) ? 1 : 0,
-                  expected.standardizedFileURL.path.hasPrefix(home) ? 1 : 0)
+            let matches = resolved.url.standardizedFileURL == expected.standardizedFileURL
+            let resolvedInWorkerHome = resolved.url.standardizedFileURL.path.hasPrefix(home)
+            let expectedInWorkerHome = expected.standardizedFileURL.path.hasPrefix(home)
+            logger.error("Store grant resolution; stage=\(stage, privacy: .public) stale=\(resolved.stale, privacy: .public) matches=\(matches, privacy: .public) resolved_in_worker_home=\(resolvedInWorkerHome, privacy: .public) expected_in_worker_home=\(expectedInWorkerHome, privacy: .public)")
         }
         #endif
         guard !resolved.stale else { throw WorkerGrantError.staleGrant }
