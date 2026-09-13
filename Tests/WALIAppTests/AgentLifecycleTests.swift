@@ -172,6 +172,7 @@ final class StoreWindowPollingTests: XCTestCase {
         coordinator.windowDidAppear(firstWindow)
         coordinator.windowDidAppear(secondWindow)
         await fulfillment(of: [firstPoll], timeout: 2)
+        XCTAssertEqual(coordinator.backgroundState, .ready)
 
         let remainingWindowPoll = expectation(description: "Remaining window continues polling")
         probe.nextPoll = remainingWindowPoll
@@ -179,6 +180,8 @@ final class StoreWindowPollingTests: XCTestCase {
         await fulfillment(of: [remainingWindowPoll], timeout: 2)
 
         coordinator.windowDidDisappear(secondWindow)
+        XCTAssertEqual(coordinator.backgroundState, .ready,
+            "Occlusion pauses polling without removing the foreground root")
         let stoppedAt = probe.calls
         try await Task.sleep(for: .milliseconds(80))
         XCTAssertEqual(probe.calls, stoppedAt)
@@ -186,8 +189,76 @@ final class StoreWindowPollingTests: XCTestCase {
         let resumed = expectation(description: "Reopened window refreshes")
         probe.nextPoll = resumed
         coordinator.windowDidAppear(reopenedWindow)
+        XCTAssertEqual(coordinator.backgroundState, .ready,
+            "The ready content branch must stay mounted, preserving its route, importer and authentication sheets")
         await fulfillment(of: [resumed], timeout: 2)
+        XCTAssertEqual(coordinator.backgroundState, .ready)
         XCTAssertGreaterThan(probe.calls, stoppedAt)
+    }
+
+    func testInitialConsentAndApprovalRecoveryStillGateForegroundReadiness() async throws {
+        let suite = "WALI.WindowTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let registration = RecordingRegistration()
+        registration.status = .requiresApproval
+        let lifecycle = AgentLifecycleController(
+            registrations: [registration], defaults: defaults, requiresExplicitConsent: true
+        )
+        let probe = SnapshotPollingProbe()
+        let coordinator = WALIAppCoordinator(
+            lifecycle: lifecycle, snapshotRequest: { probe.snapshot() }
+        )
+        let window = UUID()
+        defer { coordinator.windowDidDisappear(window) }
+        coordinator.windowDidAppear(window)
+        XCTAssertEqual(coordinator.backgroundState, .needsConsent)
+        XCTAssertEqual(probe.calls, 0)
+
+        coordinator.allowBackgroundPlayback()
+        XCTAssertEqual(coordinator.backgroundState, .starting)
+        try await waitUntil { coordinator.backgroundState == .needsApproval }
+        XCTAssertEqual(probe.calls, 0)
+        XCTAssertEqual(registration.registrations, 0)
+
+        registration.status = .enabled
+        let resumed = expectation(description: "Approved service provides its first snapshot")
+        probe.nextPoll = resumed
+        coordinator.start()
+        XCTAssertEqual(coordinator.backgroundState, .starting,
+            "Retry from an actual approval error still shows startup")
+        await fulfillment(of: [resumed], timeout: 2)
+        XCTAssertEqual(coordinator.backgroundState, .ready)
+    }
+
+    func testInitialRegistrationFailureDoesNotExposeReadyContent() async throws {
+        let suite = "WALI.WindowTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let lifecycle = AgentLifecycleController(
+            registrations: nil, defaults: defaults, requiresExplicitConsent: true
+        )
+        lifecycle.allowBackgroundPlayback()
+        let probe = SnapshotPollingProbe()
+        let coordinator = WALIAppCoordinator(
+            lifecycle: lifecycle, snapshotRequest: { probe.snapshot() }
+        )
+        let window = UUID()
+        defer { coordinator.windowDidDisappear(window) }
+        coordinator.windowDidAppear(window)
+        XCTAssertEqual(coordinator.backgroundState, .starting)
+        try await waitUntil {
+            coordinator.backgroundState == .failed(AgentLifecycleError.missingConfiguration.localizedDescription)
+        }
+        XCTAssertEqual(probe.calls, 0)
+    }
+
+    private func waitUntil(_ predicate: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !predicate(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(predicate(), "Expected the bounded lifecycle transition")
     }
 }
 

@@ -126,14 +126,7 @@ public struct CatalogInstallPreparer: Sendable {
               let root = fileManager.containerURL(forSecurityApplicationGroupIdentifier: expected) else {
             throw CatalogDownloadError.destinationUnavailable
         }
-        let directory = root.appendingPathComponent("CatalogQuarantine", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        let values = try directory.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard values.isDirectory == true, values.isSymbolicLink != true,
-              directory.resolvingSymlinksInPath().deletingLastPathComponent() == root.resolvingSymlinksInPath() else {
-            throw CatalogDownloadError.destinationUnavailable
-        }
-        return directory
+        return try storeQuarantineDirectory(in: root, fileManager: fileManager)
         #else
         let base = try fileManager.url(
             for: .applicationSupportDirectory,
@@ -148,6 +141,29 @@ public struct CatalogInstallPreparer: Sendable {
             .appendingPathComponent("CatalogQuarantine", isDirectory: true)
         #endif
     }
+
+    #if WALI_APP_STORE
+    static func storeQuarantineDirectory(in root: URL, fileManager: FileManager = .default) throws -> URL {
+        var rootStatus = stat()
+        guard lstat(root.path, &rootStatus) == 0, (rootStatus.st_mode & S_IFMT) == S_IFDIR else {
+            throw CatalogDownloadError.destinationUnavailable
+        }
+        let directory = root.appendingPathComponent("CatalogQuarantine", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        } catch let error as CocoaError where error.code == .fileWriteFileExists {
+            // The foreground and agent reopen the same existing handoff directory.
+            // Accept only a real directory below; never replace it or change its mode.
+        }
+        var directoryStatus = stat()
+        guard lstat(directory.path, &directoryStatus) == 0,
+              (directoryStatus.st_mode & S_IFMT) == S_IFDIR,
+              directory.resolvingSymlinksInPath().deletingLastPathComponent() == root.resolvingSymlinksInPath() else {
+            throw CatalogDownloadError.destinationUnavailable
+        }
+        return directory
+    }
+    #endif
 
     public func discard(quarantineReference: UUID) {
         for suffix in ["mp4", "png"] {

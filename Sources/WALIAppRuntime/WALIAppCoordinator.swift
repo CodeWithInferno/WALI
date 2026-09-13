@@ -113,7 +113,13 @@ public final class WALIAppCoordinator: WALIUIActionHandling {
             backgroundState = .needsConsent
             return
         }
+        #if WALI_APP_STORE
+        // Visibility restarts polling, not the ready foreground's lifetime.
+        // Keep its navigation and presented authentication/import sheets mounted.
+        if backgroundState != .ready { backgroundState = .starting }
+        #else
         backgroundState = .starting
+        #endif
         #if !WALI_APP_STORE
         if quitObserver == nil {
             quitObserver = DistributedNotificationCenter.default().addObserver(
