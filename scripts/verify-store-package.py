@@ -17,7 +17,15 @@ def require(condition, message):
 
 def validate_installer_signature(output, team):
     require(re.fullmatch(r'[A-Z0-9]{10}', team or ''), 'expected package team is required')
-    require(re.search(r'Status: signed by (a certificate trusted by macOS|a developer certificate issued by Apple for distribution)', output), 'package signature must be trusted by macOS')
+    # pkgutil calls Mac Installer Distribution certificates '(Development)'.
+    # The exact Store installer class/team check below still applies.
+    statuses = re.findall(r'^[ \t]*Status: (.+)$', output, re.MULTILINE)
+    accepted = {
+        'signed by a certificate trusted by macOS',
+        'signed by a developer certificate issued by Apple for distribution',
+        'signed by a developer certificate issued by Apple (Development)',
+    }
+    require(len(statuses) == 1 and statuses[0] in accepted, 'Apple-verified package signature is required')
     leaf = re.search(r'^\s*1\. (.+)$', output, re.MULTILINE)
     require(leaf and leaf[1].startswith('3rd Party Mac Developer Installer:') and leaf[1].endswith(f'({team})'), 'package installer certificate class/team mismatch')
 

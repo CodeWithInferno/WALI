@@ -230,13 +230,23 @@ platform :mac do
       sh("/usr/bin/ruby", File.join(WALI_ROOT, "scripts", "check-store-graph.rb"), WALI_ROOT)
       arguments = {"WALI_STORE_DEVELOPMENT_TEAM" => team, "WALI_STORE_CODE_SIGN_IDENTITY" => identity, "CODE_SIGNING_ALLOWED" => "YES", "CODE_SIGNING_REQUIRED" => "YES", "ONLY_ACTIVE_ARCH" => "NO"}
       %w[MARKETING_VERSION CURRENT_PROJECT_VERSION].each { |key| arguments[key] = ENV[key] unless ENV[key].to_s.empty? }
+      settings_json, _diagnostics, settings_status = Open3.capture3(
+        "/usr/bin/xcrun", "xcodebuild", "-project", File.join(WALI_ROOT, "WALIStore.xcodeproj"),
+        "-configuration", "AppStore", "-alltargets", "-showBuildSettings", "-json",
+        "-clonedSourcePackagesDirPath", File.join(WALI_ROOT, ".build", "store", "DerivedData", "SourcePackages"),
+        "-disableAutomaticPackageResolution", "-onlyUsePackageVersionsFromResolvedFile",
+        "ENABLE_CODE_COVERAGE=NO", "CLANG_COVERAGE_MAPPING=NO",
+        *arguments.map { |key, value| "#{key}=#{value}" }
+      )
+      UI.user_error!("Cannot resolve AppStore export signing profiles") unless settings_status.success?
+      export_options = WALIStoreSubmissionSupport.archive_export_options(JSON.parse(settings_json), team: team, identity: identity)
       build_mac_app(
         project: File.join(WALI_ROOT, "WALIStore.xcodeproj"), scheme: "WALI", configuration: "AppStore",
         destination: "generic/platform=macOS", archive_path: File.join(output, "WALI.xcarchive"),
         derived_data_path: File.join(output, "DerivedData"), output_directory: File.join(output, "candidate"),
         cloned_source_packages_path: File.join(WALI_ROOT, ".build", "store", "DerivedData", "SourcePackages"),
-        output_name: "WALI.pkg", buildlog_path: File.join(output, "logs"), export_method: "app-store",
-        installer_cert_name: installer, skip_package_pkg: false, skip_package_ipa: true,
+        output_name: "WALI", buildlog_path: File.join(output, "logs"), export_method: "app-store", export_options: export_options,
+        installer_cert_name: installer, skip_package_pkg: false,
         disable_package_automatic_updates: true, skip_package_dependencies_resolution: true, xcodebuild_formatter: "",
         xcargs: "ENABLE_CODE_COVERAGE=NO CLANG_COVERAGE_MAPPING=NO -onlyUsePackageVersionsFromResolvedFile -disableAutomaticPackageResolution " + arguments.map { |key, value| "#{key}=#{Shellwords.escape(value)}" }.join(" ")
       )

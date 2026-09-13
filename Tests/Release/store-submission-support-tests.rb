@@ -16,6 +16,35 @@ def reject_case(name)
   raise "Accepted #{name}"
 end
 
+team = "ABCDEFGHIJ"
+identity = "3rd Party Mac Developer Application: Fixture (#{team})"
+resolved = %w[WALI WALIAgent WALITranscoder].map do |target|
+  {"target" => target, "buildSettings" => {"PRODUCT_BUNDLE_IDENTIFIER" => "com.wali.store.#{target}",
+    "DEVELOPMENT_TEAM" => team, "CODE_SIGN_STYLE" => "Manual", "CODE_SIGN_IDENTITY" => identity,
+    "PROVISIONING_PROFILE_SPECIFIER" => "Store #{target} Fixture"}}
+end
+export_options = lambda do |settings = resolved|
+  WALIStoreSubmissionSupport.archive_export_options(settings, team: team, identity: identity)
+end
+expected_profiles = resolved.to_h { |entry| [entry.fetch("buildSettings").fetch("PRODUCT_BUNDLE_IDENTIFIER"), entry.fetch("buildSettings").fetch("PROVISIONING_PROFILE_SPECIFIER")] }
+options = export_options.call
+raise "Missing exact manual Store export mapping" unless options == {method: "app-store", signingStyle: "manual", teamID: team, signingCertificate: identity, provisioningProfiles: expected_profiles}
+reject_case("missing export target") { export_options.call(resolved.drop(1)) }
+raise "Repeated identical Xcode record changes export" unless export_options.call(resolved + [resolved.first]) == options
+duplicate = Marshal.load(Marshal.dump(resolved.first))
+duplicate.fetch("buildSettings")["PROVISIONING_PROFILE_SPECIFIER"] = "Other Store Profile"
+reject_case("conflicting export target") { export_options.call(resolved + [duplicate]) }
+{"PRODUCT_BUNDLE_IDENTIFIER" => "com.wali.debug.WALI", "DEVELOPMENT_TEAM" => "OTHERTEAM1", "CODE_SIGN_STYLE" => "Automatic", "CODE_SIGN_IDENTITY" => "Developer ID Application: Fixture", "PROVISIONING_PROFILE_SPECIFIER" => "$(UNRESOLVED_PROFILE)"}.each do |field, value|
+  mutation = Marshal.load(Marshal.dump(resolved))
+  mutation.first.fetch("buildSettings")[field] = value
+  reject_case("wrong export #{field}") { export_options.call(mutation) }
+end
+["", " leading space", "line\nbreak", nil].each do |profile|
+  mutation = Marshal.load(Marshal.dump(resolved))
+  mutation.first.fetch("buildSettings")["PROVISIONING_PROFILE_SPECIFIER"] = profile
+  reject_case("invalid export profile") { export_options.call(mutation) }
+end
+
 Dir.mktmpdir("wali-store-submission-fixtures-") do |root|
   package = File.join(root, "WALI.pkg")
   File.write(package, "signed-package-fixture")

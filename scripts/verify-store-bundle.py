@@ -23,6 +23,19 @@ def plist(path):
     return plistlib.loads(path.read_bytes())
 
 
+def verify_code_signature(bundle, identifier, team):
+    # Bind the trusted Apple code signature to the caller's selected team and ID.
+    requirement = f'anchor apple generic and identifier "{identifier}" and certificate leaf[subject.OU] = "{team}"'
+    run('/usr/bin/codesign', '--verify', '--strict', '--test-requirement', '=' + requirement, str(bundle))
+
+
+def signing_leaf_certificate(bundle):
+    with tempfile.TemporaryDirectory(prefix='wali-store-cert-') as temporary:
+        prefix = str(Path(temporary) / 'certificate-')
+        run('/usr/bin/codesign', '-d', '--extract-certificates=' + prefix, str(bundle))
+        return Path(prefix + '0').read_bytes()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('app', type=Path)
@@ -76,18 +89,13 @@ def main():
         linked = run('/usr/bin/otool', '-L', str(executable)).decode()
         require('/PrivateFrameworks/' not in linked, f'{bundle.name}: private framework dependency')
         if args.signed:
-            # Bind the trusted Apple code signature to the caller's selected team and ID.
-            requirement = f'anchor apple generic and identifier "{identifier}" and certificate leaf[subject.OU] = "{args.team}"'
-            run('/usr/bin/codesign', '--verify', '--strict', '--test-requirement', requirement, str(bundle))
+            verify_code_signature(bundle, identifier, args.team)
             metadata = json.loads(run('/usr/bin/ruby', str(root / 'scripts/inspect-signature-metadata.rb'), str(bundle)))
             expected = plist(root / 'Config' / f'Store-{bundle.stem}.entitlements')
             expected = {k: [group if item == '$(WALI_APP_GROUP_IDENTIFIER)' else item for item in v] if isinstance(v, list) else v for k, v in expected.items()}
             profile_path = bundle / 'Contents/embedded.provisionprofile'
             profile = plistlib.loads(run('/usr/bin/security', 'cms', '-D', '-i', str(profile_path))) if profile_path.is_file() else None
-            with tempfile.TemporaryDirectory(prefix='wali-store-cert-') as temporary:
-                prefix = str(Path(temporary) / 'certificate-')
-                run('/usr/bin/codesign', '-d', '--extract-certificates', prefix, str(bundle))
-                leaf = Path(prefix + '0').read_bytes()
+            leaf = signing_leaf_certificate(bundle)
             validate_signature(metadata, configuration=args.configuration, identifier=identifier, team=args.team,
                                expected=expected, profile=profile, leaf_certificate=leaf)
             signed_teams.add(metadata['team_identifier'])
