@@ -30,8 +30,11 @@ nonterminal operator gate and must never be shown as completed.
 6. From a dedicated admin/operator session with fresh AAL2, call
    `request-account-deletion` using `operation=finalize_identity`, the deletion
    receipt, its expected revision, and a unique idempotency key. The Edge
-   executor soft-deletes the provider identity, verifies the provider result,
-   then atomically marks the receipt completed. The user-facing app must only
+   executor sends `DELETE /auth/v1/admin/users/{id}` with the JSON body
+   `{"should_soft_delete":true}` and `Content-Type: application/json`, verifies
+   the provider result, then atomically marks the receipt completed. The option
+   belongs in the body: Supabase Auth defaults to hard deletion when it is absent;
+   a query-string flag does not select soft deletion. The user-facing app must only
    learn completion from a later authenticated status response.
 7. On timeout or retryable provider failure, keep the receipt at
    `awaiting_auth_cleanup`; retry the same logical operation with the same

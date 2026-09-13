@@ -207,7 +207,7 @@ async function softDeleteAndVerifyIdentity(
   dependencies: EndpointDependencies,
 ): Promise<void> {
   const endpoint = new URL(
-    `/auth/v1/admin/users/${userID}?should_soft_delete=true`,
+    `/auth/v1/admin/users/${userID}`,
     dependencies.supabaseURL,
   );
   const headers = {
@@ -218,7 +218,8 @@ async function softDeleteAndVerifyIdentity(
   try {
     deletion = await dependencies.fetcher(endpoint, {
       method: "DELETE",
-      headers,
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ should_soft_delete: true }),
       redirect: "error",
     });
   } catch {
