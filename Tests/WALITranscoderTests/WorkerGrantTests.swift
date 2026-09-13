@@ -63,6 +63,71 @@ final class WorkerGrantTests: XCTestCase {
         XCTAssertEqual(probe.counts.1, 0)
     }
 
+    func testImplicitResolutionAccessIsBalancedWithExplicitAttemptAccess() throws {
+        let fixture = try fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        // POSIX read-only mode isolates lifetime accounting in this hostless fixture.
+        // Signed native acceptance must prove sandbox attenuation on writable input.
+        XCTAssertEqual(chmod(fixture.source.path, mode_t(0o400)), 0)
+        let probe = ScopeProbe()
+        let operations = WorkerBookmarkOperations(resolve: { data in
+            probe.start()
+            return (data == Data([1]) ? fixture.source : fixture.staging, false)
+        }, start: { _ in probe.start(); return true }, stop: { _ in probe.stop() },
+            resolutionStartsAccess: true)
+        let lease = try WorkerScopedMediaAccess.open(fixture.request, operations: operations)
+        XCTAssertEqual(probe.counts.0, 4)
+        XCTAssertEqual(probe.counts.1, 2, "Each resolver-owned access ends after explicit attempt access is acquired")
+        lease.close()
+        lease.close()
+        XCTAssertEqual(probe.counts.0, probe.counts.1)
+    }
+
+    func testImplicitResolutionAccessClosesWhenGrantIsStaleOrMismatched() throws {
+        let fixture = try fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        for stale in [true, false] {
+            let probe = ScopeProbe()
+            let operations = WorkerBookmarkOperations(resolve: { _ in
+                probe.start()
+                return (stale ? fixture.source : fixture.staging, stale)
+            }, start: { _ in probe.start(); return true }, stop: { _ in probe.stop() },
+                resolutionStartsAccess: true)
+            XCTAssertThrowsError(try WorkerScopedMediaAccess.open(fixture.request, operations: operations)) { error in
+                if stale {
+                    guard case WorkerGrantError.staleGrant = error else { return XCTFail("Unexpected grant error: \(error)") }
+                } else {
+                    guard case WorkerGrantError.identityMismatch = error else { return XCTFail("Unexpected grant error: \(error)") }
+                }
+            }
+            XCTAssertEqual(probe.counts.0, 1)
+            XCTAssertEqual(probe.counts.1, 1)
+        }
+    }
+
+    func testImplicitResolutionDoesNotBypassExplicitScopeDenialOrWritableSource() throws {
+        let fixture = try fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        for granted in [false, true] {
+            let probe = ScopeProbe()
+            let operations = WorkerBookmarkOperations(resolve: { _ in
+                probe.start()
+                return (fixture.source, false)
+            }, start: { _ in
+                if granted { probe.start() }
+                return granted
+            }, stop: { _ in probe.stop() }, resolutionStartsAccess: true)
+            XCTAssertThrowsError(try WorkerScopedMediaAccess.open(fixture.request, operations: operations)) { error in
+                if granted {
+                    guard case WorkerGrantError.sourceWritable = error else { return XCTFail("Unexpected grant error: \(error)") }
+                } else {
+                    guard case WorkerGrantError.scopeDenied = error else { return XCTFail("Unexpected grant error: \(error)") }
+                }
+            }
+            XCTAssertEqual(probe.counts.0, probe.counts.1)
+        }
+    }
+
     private func fixture() throws -> (root: URL, source: URL, staging: URL, request: StoreTranscoderRequest) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

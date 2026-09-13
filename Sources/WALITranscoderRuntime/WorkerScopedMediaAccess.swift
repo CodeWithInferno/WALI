@@ -20,13 +20,16 @@ struct WorkerBookmarkOperations: Sendable {
     var resolve: @Sendable (Data) throws -> (url: URL, stale: Bool)
     var start: @Sendable (URL) -> Bool
     var stop: @Sendable (URL) -> Void
+    /// Resolving an implicit bookmark acquires a scope before returning its URL.
+    var resolutionStartsAccess = false
     static let system = Self(resolve: { data in
         var stale = false
         let url = try URL(resolvingBookmarkData: data,
-                          options: [.withoutUI, .withoutMounting, .withoutImplicitStartAccessing],
+                          options: [.withoutUI, .withoutMounting],
                           relativeTo: nil, bookmarkDataIsStale: &stale)
         return (url, stale)
-    }, start: { $0.startAccessingSecurityScopedResource() }, stop: { $0.stopAccessingSecurityScopedResource() })
+    }, start: { $0.startAccessingSecurityScopedResource() }, stop: { $0.stopAccessingSecurityScopedResource() },
+        resolutionStartsAccess: true)
 }
 
 /// The worker holds only the input file and exact attempt directory. It never
@@ -55,7 +58,6 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
         var descriptors: [Int32] = []
         do {
             let source = try resolve(value.request.sourceBookmark, expected: value.request.sourceURL, operations: operations)
-            guard operations.start(source) else { throw WorkerGrantError.scopeDenied }
             scopes.append(source)
             let input = Darwin.open(source.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
             guard input >= 0 else { throw WorkerGrantError.scopeDenied }
@@ -70,7 +72,6 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
             guard errno == EACCES || errno == EPERM || errno == EROFS else { throw WorkerGrantError.scopeDenied }
 
             let staging = try resolve(value.stagingBookmark, expected: value.request.stagingDirectoryURL, operations: operations)
-            guard operations.start(staging) else { throw WorkerGrantError.scopeDenied }
             scopes.append(staging)
             guard staging.resolvingSymlinksInPath().standardizedFileURL == staging.standardizedFileURL,
                   !source.standardizedFileURL.path.hasPrefix(staging.standardizedFileURL.path + "/") else { throw WorkerGrantError.identityMismatch }
@@ -93,10 +94,17 @@ final class WorkerScopedMediaAccess: @unchecked Sendable {
 
     private static func resolve(_ data: Data, expected: URL, operations: WorkerBookmarkOperations) throws -> URL {
         let resolved = try operations.resolve(data)
+        // Resolve with implicit access so private-container metadata is available.
+        // Transfer that temporary acquisition to one explicit attempt acquisition;
+        // stale, mismatched and denied grants must release the resolver's scope too.
+        defer {
+            if operations.resolutionStartsAccess { operations.stop(resolved.url) }
+        }
         guard !resolved.stale else { throw WorkerGrantError.staleGrant }
         guard resolved.url.isFileURL, resolved.url.standardizedFileURL == expected.standardizedFileURL else {
             throw WorkerGrantError.identityMismatch
         }
+        guard operations.start(resolved.url) else { throw WorkerGrantError.scopeDenied }
         return resolved.url
     }
 
