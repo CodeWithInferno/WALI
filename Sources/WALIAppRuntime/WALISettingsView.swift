@@ -5,12 +5,21 @@ import WALIUI
 public struct WALISettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: WALIPreferencesPresentation
+    @State private var showsCatalogPreferences = false
+    private let catalogPreferences: CatalogDiscoveryModel?
+    private let isSignedIn: Bool
+    private let reloadCatalogPreferences: () -> Void
+    private let saveCatalogPreferences: ([String], String, Bool) -> Void
     private let storage: WALIStoragePresentation
     let onSave: (WALIPreferencesPresentation) -> Void
 
     public init(
         preferences: WALIPreferencesPresentation,
         storage: WALIStoragePresentation = .init(),
+        catalogPreferences: CatalogDiscoveryModel? = nil,
+        isSignedIn: Bool = false,
+        reloadCatalogPreferences: (() -> Void)? = nil,
+        saveCatalogPreferences: (([String], String, Bool) -> Void)? = nil,
         onSave: @escaping (WALIPreferencesPresentation) -> Void
     ) {
         var initial = preferences
@@ -18,6 +27,10 @@ public struct WALISettingsView: View {
         initial.lockScreenContinuityEnabled = false
         #endif
         _draft = State(initialValue: initial)
+        self.catalogPreferences = catalogPreferences
+        self.isSignedIn = isSignedIn
+        self.reloadCatalogPreferences = reloadCatalogPreferences ?? {}
+        self.saveCatalogPreferences = saveCatalogPreferences ?? { _, _, _ in }
         self.storage = storage
         self.onSave = onSave
     }
@@ -42,8 +55,8 @@ public struct WALISettingsView: View {
                     }
 
                     Picker("Fit", selection: $draft.contentFit) {
-                        Text("Fill Display").tag(WALIContentFitPreference.fill)
-                        Text("Fit Entire Video").tag(WALIContentFitPreference.fit)
+                        Text("Fill Screen").tag(WALIContentFitPreference.fill)
+                        Text("Fit to Screen").tag(WALIContentFitPreference.fit)
                         Text("Stretch to Fill").tag(WALIContentFitPreference.stretch)
                         Text("Center at Native Size").tag(WALIContentFitPreference.center)
                     }
@@ -74,9 +87,11 @@ public struct WALISettingsView: View {
                         Text("Only WALI Lock Screen Helper needs Full Disk Access. WALI, WALI Agent, previews, downloads, and desktop playback do not receive it.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("Use a signed Development or Release build. Ad-hoc Debug builds cannot authenticate the helper and must not be granted Full Disk Access.")
+                        #if DEBUG
+                        Text("This Debug build cannot authenticate the helper and must not be granted Full Disk Access.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        #endif
                         HStack {
                             Button("Show Helper in Finder") { revealLockScreenHelper() }
                                 .buttonStyle(.link)
@@ -89,6 +104,12 @@ public struct WALISettingsView: View {
 
                 #endif
 
+                if catalogPreferences != nil {
+                    Section("Discover") {
+                        Button("Choose Categories and Content Rating…") { showsCatalogPreferences = true }
+                        Text("Preferences are saved with your WALI account.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Section("Storage") {
                     LabeledContent("Used", value: storage.usedBytes.formatted(.byteCount(style: .file)))
                     if let limit = storage.limitBytes, limit > 0 {
@@ -99,7 +120,7 @@ public struct WALISettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("WALI stores prepared copies locally and keeps your original videos untouched.")
+                        Text("WALI stores prepared copies locally and keeps your original files untouched.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -124,8 +145,15 @@ public struct WALISettingsView: View {
             }
             .padding(16)
         }
-        .frame(width: 520, height: 580)
+        .frame(minWidth: 480, idealWidth: 520, minHeight: 480, idealHeight: 580)
+        .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Settings")
+        .sheet(isPresented: $showsCatalogPreferences) {
+            if let catalogPreferences {
+                CatalogPreferencesView(discovery: catalogPreferences, isSignedIn: isSignedIn,
+                    onReload: reloadCatalogPreferences, onSave: saveCatalogPreferences)
+            }
+        }
         .accessibilityIdentifier("WALI.Settings")
     }
 

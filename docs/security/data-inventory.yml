@@ -90,7 +90,7 @@ stores:
     backup: encrypted_database_pitr
   - id: wali.user_preferences
     category: preferences
-    purpose: rating_locale_and_privacy_choices
+    purpose: explicit_category_interests_rating_locale_and_privacy_choices
     subjects: [account_holder]
     read_roles: [account_owner]
     write_roles: [account_owner]
@@ -248,9 +248,19 @@ stores:
     retention: release_lifetime_plus_seven_years_or_legal_hold
     deletion: preserve_minimum_legal_fact_anonymize_when_permitted
     backup: encrypted_database_pitr_and_protected_object_backup
+  - id: wali.worker_storage_auth_bindings
+    category: machine_authorization
+    purpose: bind_restricted_database_login_to_fixed_short_lived_storage_claims
+    subjects: []
+    read_roles: [private_storage_credential_issuer]
+    write_roles: [production_deployment_operator]
+    classification: restricted
+    retention: enabled_worker_lifetime
+    deletion: disable_then_remove_after_issued_token_expiry
+    backup: encrypted_database_pitr
   - id: wali.processing_attempts
     category: media_operations
-    purpose: lease_generation_and_reproducible_processing
+    purpose: lease_generation_and_reproducible_processing_with_bounded_first_lease_execution_deadline
     subjects: [creator]
     read_roles: [creator_safe_projection, worker, moderator, admin]
     write_roles: [processing_service]
@@ -368,6 +378,16 @@ stores:
     retention: thirty_days_after_expiry_unless_security_hold
     deletion: consume_or_expire_then_scheduled_delete_with_account_anonymization
     backup: database_pitr_short_window
+  - id: wali.wallpaper_download_totals
+    category: aggregate_metric
+    purpose: durable_total_of_unique_successful_install_acknowledgements
+    subjects: [creator]
+    read_roles: [public_eligible_catalog_projection]
+    write_roles: [install_receipt_consumption_trigger]
+    classification: public_aggregate
+    retention: wallpaper_lifetime
+    deletion: cascade_only_on_actual_wallpaper_deletion
+    backup: encrypted_database_pitr
   - id: wali.wallpaper_stats_hourly
     category: aggregate_metric
     purpose: operational_and_ranking_aggregation
@@ -603,7 +623,7 @@ stores:
     purpose: immutable_monotonic_trust_and_revocation_batches
     subjects: [creator]
     read_roles: [public_signed_projection]
-    write_roles: [offline_signing_operator_aal2]
+    write_roles: [offline_signing_operator_aal2, one_time_audited_deployment_bootstrap_adr0025]
     classification: public
     retention: permanent
     deletion: append_only
@@ -628,6 +648,29 @@ stores:
     retention: completed_seven_days_expired_one_day
     deletion: scheduled_expiry_after_audit_link
     backup: encrypted_database_pitr
+  # ADR0025 retains publication/rights history when account deletion anonymizes
+  # the uploader. Owner export nests whitelisted fields under each submission;
+  # lease tokens, private proof paths, and scheduler credentials are excluded.
+  - id: wali.automatic_publication_decisions
+    category: publication_audit
+    purpose: immutable_system_attributed_eligibility_and_rights_snapshot
+    subjects: [creator, rights_holder]
+    read_roles: [publication_service, account_owner_export_safe_projection]
+    write_roles: [automatic_publication_service]
+    classification: restricted
+    retention: release_lifetime_plus_seven_years_or_legal_hold
+    deletion: retain_minimum_publication_and_rights_fact_with_account_anonymization
+    backup: encrypted_database_pitr
+  - id: wali.automatic_publication_jobs
+    category: publication_control
+    purpose: durable_bounded_retry_and_exclusive_publication_lease
+    subjects: [creator]
+    read_roles: [publication_service, account_owner_export_safe_projection]
+    write_roles: [processing_completion_service, automatic_publication_service]
+    classification: restricted
+    retention: submission_lifetime_plus_publication_audit_window
+    deletion: retain_linked_terminal_state_and_reject_ineligible_deleted_accounts
+    backup: encrypted_database_pitr
   - id: wali.submission_tag_suggestions
     category: private_taxonomy_proposal
     purpose: separate_creator_and_model_tag_suggestions
@@ -640,7 +683,7 @@ stores:
     backup: encrypted_database_pitr
   - id: wali.staged_artifacts
     category: private_canonical_media
-    purpose: verified_outputs_awaiting_human_approval_and_promotion
+    purpose: verified_outputs_awaiting_bound_publication_decision_and_promotion
     subjects: [creator]
     read_roles: [worker, moderator_canonical_preview]
     write_roles: [worker_claim_service]

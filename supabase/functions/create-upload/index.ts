@@ -45,8 +45,14 @@ export async function handleCreateUpload(
     );
     const container = requireEnum(
       body.container_hint,
-      ["video/mp4", "video/quicktime"] as const,
+      ["video/mp4", "video/quicktime", "image/jpeg", "image/png"] as const,
     );
+    if (
+      (container === "image/jpeg" || container === "image/png") &&
+      byteCount > 134_217_728
+    ) {
+      throw new EdgeError("invalid_request", 400);
+    }
     const filename = singleFilename(
       requirePlainText(body.original_filename, 1, 255),
     );
@@ -55,8 +61,8 @@ export async function handleCreateUpload(
       dependencies.database,
       auth.actorID,
       "create_upload",
-      10,
-      86_400,
+      120,
+      3_600,
     );
     const reservation = await dependencies.database.rpc<unknown>(
       "wali_edge_create_upload_v1",

@@ -64,6 +64,7 @@ extension StoredArtifactMediaKind {
         switch self {
         case .hevcVideo: "mov"
         case .heicImage: "heic"
+        case .pngImage: "png"
         }
     }
 }

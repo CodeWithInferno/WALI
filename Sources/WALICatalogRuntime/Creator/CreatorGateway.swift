@@ -1,6 +1,7 @@
 import Foundation
 
 public protocol CreatorStudioGateway: Sendable {
+    func supportedUploadMediaTypes() async throws -> Set<CreatorUploadMediaType>
     func submissions(_ request: CreatorListRequest) async throws -> CreatorSubmissionPage
     func createUpload(_ request: CreatorUploadGrantRequest) async throws -> CreatorUploadSession
     func completeUpload(_ request: CreatorCompleteUploadRequest) async throws -> CreatorMutationResult
@@ -8,6 +9,22 @@ public protocol CreatorStudioGateway: Sendable {
     func processingStatus(submissionID: UUID, generation: UInt64) async throws -> CreatorProcessingStatus
     func submit(_ request: CreatorSubmitRequest) async throws -> CreatorMutationResult
     func withdraw(_ request: CreatorWithdrawRequest) async throws -> CreatorMutationResult
+    func retryProcessing(_ request: CreatorRetryProcessingRequest) async throws -> CreatorMutationResult
+    func retryPublication(_ request: CreatorRetryPublicationRequest) async throws -> CreatorMutationResult
+}
+
+public extension CreatorStudioGateway {
+    func supportedUploadMediaTypes() async throws -> Set<CreatorUploadMediaType> {
+        CreatorUploadMediaType.legacyVideo
+    }
+
+    func retryProcessing(_ request: CreatorRetryProcessingRequest) async throws -> CreatorMutationResult {
+        throw CreatorContractError.invalidRequest
+    }
+
+    func retryPublication(_ request: CreatorRetryPublicationRequest) async throws -> CreatorMutationResult {
+        throw CreatorContractError.invalidRequest
+    }
 }
 
 public protocol ModerationGateway: Sendable {

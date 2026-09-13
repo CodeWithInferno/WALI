@@ -1,4 +1,8 @@
 import Foundation
+import WALICatalog
+
+/// The catalog adapter exposes the existing signed media kind to its callers.
+public typealias CatalogMediaKind = WALICatalog.CatalogMediaKind
 
 public enum CatalogBrowseSort: String, Codable, Sendable, Hashable {
     case featured
@@ -42,6 +46,7 @@ public struct CatalogSearchRequest: Sendable, Hashable {
     public let query: String
     public let category: String?
     public let tags: [String]
+    public let sort: CatalogBrowseSort?
     public let ratingCeiling: String
     public let minimumDurationMilliseconds: UInt64?
     public let maximumDurationMilliseconds: UInt64?
@@ -53,6 +58,7 @@ public struct CatalogSearchRequest: Sendable, Hashable {
         category: String? = nil,
         tags: [String] = [],
         ratingCeiling: String = "mature",
+        sort: CatalogBrowseSort? = nil,
         minimumDurationMilliseconds: UInt64? = nil,
         maximumDurationMilliseconds: UInt64? = nil,
         cursor: String? = nil,
@@ -79,6 +85,7 @@ public struct CatalogSearchRequest: Sendable, Hashable {
         self.query = query
         self.category = category
         self.tags = tags
+        self.sort = sort
         self.ratingCeiling = ratingCeiling
         self.minimumDurationMilliseconds = minimumDurationMilliseconds
         self.maximumDurationMilliseconds = maximumDurationMilliseconds
@@ -94,6 +101,7 @@ public struct CatalogInteractionResult: Sendable, Hashable {
 }
 
 public struct CatalogInstallGrant: Sendable, Hashable {
+    public let mediaKind: CatalogMediaKind
     public let manifestBody: Data
     public let metadataBody: Data
     public let signatureBase64URL: String
@@ -107,8 +115,10 @@ public struct CatalogInstallGrant: Sendable, Hashable {
         signatureBase64URL: String,
         keyID: String,
         receipt: String,
-        expiresAt: Date
+        expiresAt: Date,
+        mediaKind: CatalogMediaKind = .video
     ) {
+        self.mediaKind = mediaKind
         self.manifestBody = manifestBody
         self.metadataBody = metadataBody
         self.signatureBase64URL = signatureBase64URL
@@ -365,6 +375,14 @@ public enum CatalogRequestError: String, Error, Sendable {
 }
 
 public protocol CatalogGateway: Sendable {
+    func categories() async throws -> [CatalogTaxonomySummary]
+    func tags() async throws -> [CatalogTaxonomySummary]
+    func savedWallpapers(cursor: String?) async throws -> CatalogPage
+    func catalogPreferences() async throws -> CatalogPreferences
+    func setCatalogPreferences(categoryIDs: [String], ratingCeiling: String,
+                               personalizationOptOut: Bool, expectedRevision: UInt64,
+                               idempotencyKey: String) async throws -> CatalogPreferences
+
     func home(locale: String, ratingCeiling: String) async throws -> CatalogHome
     func browse(_ request: CatalogBrowseRequest) async throws -> CatalogPage
     func search(_ request: CatalogSearchRequest) async throws -> CatalogSearchPage
@@ -384,6 +402,7 @@ public protocol CatalogGateway: Sendable {
     func requestInstall(
         wallpaperID: String,
         releaseID: String,
+        mediaKind: CatalogMediaKind,
         expectedWallpaperRevision: UInt64,
         idempotencyKey: String
     ) async throws -> CatalogInstallGrant
@@ -436,6 +455,16 @@ public extension AccountPrivacyGateway {
 }
 
 public extension CatalogGateway {
+    func categories() async throws -> [CatalogTaxonomySummary] { throw CatalogRequestError.notConfigured }
+    func tags() async throws -> [CatalogTaxonomySummary] { throw CatalogRequestError.notConfigured }
+    func savedWallpapers(cursor: String?) async throws -> CatalogPage { throw CatalogRequestError.notConfigured }
+    func catalogPreferences() async throws -> CatalogPreferences { throw CatalogRequestError.notConfigured }
+    func setCatalogPreferences(categoryIDs: [String], ratingCeiling: String,
+                               personalizationOptOut: Bool, expectedRevision: UInt64,
+                               idempotencyKey: String) async throws -> CatalogPreferences {
+        throw CatalogRequestError.notConfigured
+    }
+
     func securityState() async throws -> CatalogSecurityState {
         throw CatalogRequestError.notConfigured
     }
@@ -500,6 +529,7 @@ public actor DeterministicCatalogGateway: CatalogGateway {
     public func requestInstall(
         wallpaperID: String,
         releaseID: String,
+        mediaKind: CatalogMediaKind,
         expectedWallpaperRevision: UInt64,
         idempotencyKey: String
     ) async throws -> CatalogInstallGrant {

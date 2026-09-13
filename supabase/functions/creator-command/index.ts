@@ -19,7 +19,12 @@ import {
 } from "../_shared/validation.ts";
 
 const API_VERSION = "creator.v1";
-type Action = "accept_terms" | "save_draft" | "withdraw";
+type Action =
+  | "accept_terms"
+  | "save_draft"
+  | "withdraw"
+  | "retry_publication"
+  | "retry_processing";
 
 export async function handleCreatorCommand(
   request: Request,
@@ -39,7 +44,13 @@ export async function handleCreatorCommand(
     const auth = await dependencies.authenticate(request);
     const action = requireEnum(
       body.action,
-      ["accept_terms", "save_draft", "withdraw"] as const,
+      [
+        "accept_terms",
+        "save_draft",
+        "withdraw",
+        "retry_publication",
+        "retry_processing",
+      ] as const,
     );
     if (!isObject(body.payload)) throw new EdgeError("invalid_request", 400);
     await enforceRateLimit(
@@ -100,10 +111,44 @@ async function execute(
       },
     );
   }
-  if (action === "withdraw") {
+  if (action === "retry_processing") {
+    exactKeys(payload, ["submission_id", "expected_revision"]);
+    const submissionID = requireUUID(payload.submission_id);
+    const expectedRevision = requireRevision(payload.expected_revision);
+    if (expectedRevision < 1) throw new EdgeError("invalid_request", 400);
+    const result = await dependencies.database.rpc(
+      "wali_edge_retry_processing_v1",
+      {
+        actor_id: actorID,
+        request_id: requestID,
+        idempotency_key: idempotencyKey,
+        submission_id: submissionID,
+        expected_revision: expectedRevision,
+      },
+    );
+    if (
+      !isObject(result) ||
+      ![
+        "generation,revision,state,submission_id",
+        "generation,replayed,revision,state,submission_id",
+      ].includes(Object.keys(result).sort().join(",")) ||
+      ("replayed" in result && result.replayed !== true) ||
+      result.submission_id !== submissionID || result.state !== "processing" ||
+      !Number.isSafeInteger(result.revision) ||
+      (result.revision as number) <= expectedRevision ||
+      !Number.isSafeInteger(result.generation) ||
+      (result.generation as number) < 2
+    ) {
+      throw new EdgeError("temporarily_unavailable", 503, true);
+    }
+    return result;
+  }
+  if (action === "withdraw" || action === "retry_publication") {
     exactKeys(payload, ["submission_id", "expected_revision"]);
     return await dependencies.database.rpc(
-      "wali_edge_withdraw_submission_v1",
+      action === "withdraw"
+        ? "wali_edge_withdraw_submission_v1"
+        : "wali_edge_retry_publication_v1",
       {
         actor_id: actorID,
         request_id: requestID,
@@ -154,7 +199,7 @@ async function execute(
     source_url: payload.source_url === null
       ? null
       : requireHTTPSURL(payload.source_url),
-    attribution_text: optionalPlainText(payload.attribution_text, 1_000),
+    attribution_text: optionalPlainText(payload.attribution_text, 500),
     proof_object_ids: uuidArray(payload.proof_object_ids, 5),
     attests_rights: payload.attests_rights,
     creator_terms_version: requirePlainText(

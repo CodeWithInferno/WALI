@@ -255,7 +255,8 @@ private actor TranscodeTaskRegistry {
             attempt: MediaAttemptID(jobID: jobID, generation: generation),
             sourceURL: resolvedSourceURL,
             stagingDirectoryURL: request.stagingDirectoryURL,
-            sourceByteLimit: request.sourceByteLimit
+            sourceByteLimit: request.sourceByteLimit,
+            mediaKind: request.mediaKind
         )
         let result = try await MediaTranscoder().transcode(mediaRequest, progress: progress)
         return TranscoderOutput(
@@ -282,20 +283,29 @@ private actor TranscodeTaskRegistry {
         case .masterVideo: .masterVideo
         case .previewVideo: .previewVideo
         case .posterImage: .posterImage
+        case .masterImage: .masterImage
         }
     }
 
-    private static func wireClaim(_ inspection: MediaInspection) -> TranscoderMediaClaim {
-        TranscoderMediaClaim(
-            byteCount: inspection.byteCount,
-            pixelWidth: inspection.pixelSize.width,
-            pixelHeight: inspection.pixelSize.height,
-            duration: inspection.durationSeconds,
-            nominalFrameRate: inspection.nominalFrameRate,
-            hasAudio: inspection.hasAudio,
-            isHDR: inspection.isHDR,
-            videoCodec: inspection.videoCodec
-        )
+    private static func wireClaim(_ content: MediaInspectionContent) -> TranscoderMediaClaim {
+        switch content {
+        case .still(let inspection):
+            return .still(.init(byteCount: inspection.byteCount,
+                pixelWidth: inspection.pixelSize.width, pixelHeight: inspection.pixelSize.height,
+                frameCount: inspection.frameCount, bitsPerComponent: inspection.bitsPerComponent,
+                colorSpace: inspection.colorSpace, hasAlpha: inspection.hasAlpha))
+        case .video(let inspection):
+            return TranscoderMediaClaim(
+                byteCount: inspection.byteCount,
+                pixelWidth: inspection.pixelSize.width,
+                pixelHeight: inspection.pixelSize.height,
+                duration: inspection.durationSeconds,
+                nominalFrameRate: inspection.nominalFrameRate,
+                hasAudio: inspection.hasAudio,
+                isHDR: inspection.isHDR,
+                videoCodec: inspection.videoCodec
+            )
+        }
     }
 }
 
@@ -338,7 +348,7 @@ private final class TranscoderServiceEndpoint:
             stagingBookmark = nil
             #endif
         } catch {
-            reply(nil, error as NSError)
+            reply(nil, WALITranscoderServiceRunner.replyError(error))
             return
         }
 
@@ -348,7 +358,7 @@ private final class TranscoderServiceEndpoint:
                 let output = try await registry.transcode(request, stagingBookmark: stagingBookmark)
                 replyBox.reply(try TranscoderWireCodec.encodeOutput(output), nil)
             } catch {
-                replyBox.reply(nil, error as NSError)
+                replyBox.reply(nil, WALITranscoderServiceRunner.replyError(error))
             }
         }
     }
@@ -359,7 +369,7 @@ private final class TranscoderServiceEndpoint:
         withReply reply: @escaping (Data?, NSError?) -> Void
     ) {
         guard attemptGeneration > 0 else {
-            reply(nil, TranscoderWireError.invalidRequest as NSError)
+            reply(nil, WALITranscoderServiceRunner.replyError(TranscoderWireError.invalidRequest))
             return
         }
         let replyBox = TranscoderReplyBox(reply)
@@ -374,7 +384,7 @@ private final class TranscoderServiceEndpoint:
             do {
                 replyBox.reply(try TranscoderWireCodec.encodeProgress(progress), nil)
             } catch {
-                replyBox.reply(nil, error as NSError)
+                replyBox.reply(nil, WALITranscoderServiceRunner.replyError(error))
             }
         }
     }
@@ -385,7 +395,7 @@ private final class TranscoderServiceEndpoint:
         withReply reply: @escaping (NSError?) -> Void
     ) {
         guard attemptGeneration > 0 else {
-            reply(TranscoderWireError.invalidRequest as NSError)
+            reply(WALITranscoderServiceRunner.replyError(TranscoderWireError.invalidRequest))
             return
         }
         let replyBox = CancellationReplyBox(reply)
@@ -409,7 +419,7 @@ extension TranscoderServiceEndpoint: WALIStoreTranscoderXPCProtocol {
         do {
             let value = try StoreTranscoderWireCodec.decodeHandshake(from: request)
             reply(try StoreTranscoderWireCodec.encodeHandshake(value), nil)
-        } catch { reply(nil, error as NSError) }
+        } catch { reply(nil, WALITranscoderServiceRunner.replyError(error)) }
     }
 
     func shutdown(withReply reply: @escaping (NSError?) -> Void) {
@@ -547,6 +557,16 @@ private enum TranscoderClientValidator {
 
 /// Starts the authenticated embedded XPC service and yields to libdispatch.
 public enum WALITranscoderServiceRunner {
+    static func replyError(_ error: Error) -> NSError {
+        let bridged = error as NSError
+        guard let description = (error as? LocalizedError)?.errorDescription else { return bridged }
+        // Swift's lazy NSError description provider does not survive XPC
+        // serialization. Store the guidance in the transported userInfo itself.
+        var userInfo = bridged.userInfo
+        userInfo[NSLocalizedDescriptionKey] = description
+        return NSError(domain: bridged.domain, code: bridged.code, userInfo: userInfo)
+    }
+
     public static func run() {
         let delegate = TranscoderListenerDelegate()
         let listener = NSXPCListener.service()

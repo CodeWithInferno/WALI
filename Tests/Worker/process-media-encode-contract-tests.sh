@@ -20,7 +20,7 @@ fail() {
 grep -q 'libkvazaar' "$PROCESS" || fail "process-media must encode with libkvazaar"
 grep -q 'yuv420p10le' "$PROCESS" || fail "process-media must produce 10-bit 4:2:0"
 grep -q 'scale=min(7680' "$PROCESS" || fail "process-media must keep up to 8K long edge"
-grep -q 'kvazaar-params preset=medium,qp=' "$PROCESS" || fail "process-media must pass comma-separated Kvazaar quality params"
+grep -q 'kvazaar-params preset=ultrafast,qp=20,threads=4 -tag:v' "$PROCESS" || fail "process-media must use the reviewed comma-separated ultrafast/QP20/four-thread master profile"
 if grep -q 'libopenh264' "$PROCESS"; then
   fail "process-media must not use OpenH264 for catalog video"
 fi

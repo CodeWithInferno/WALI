@@ -30,7 +30,7 @@ select results_eq(
 );
 
 select results_eq(
-  $$select count(*)::bigint from cron.job where jobname like 'wali_%'$$,
+  $$select count(*)::bigint from cron.job where starts_with(jobname, 'wali_')$$,
   array[6::bigint],
   'six maintenance schedules are installed'
 );

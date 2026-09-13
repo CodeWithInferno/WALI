@@ -24,6 +24,11 @@ enum LibraryRecordFactory {
         sourceDigest: ContentDigest,
         artifacts storedArtifacts: [StoredArtifact]
     ) throws -> CommittedLibraryRecord {
+        if storedArtifacts.contains(where: { $0.role == .masterImage }) {
+            return try makeStillRecord(itemID: itemID, displayName: proposedName,
+                sourceFileName: sourceFileName, sourceDigest: sourceDigest,
+                artifacts: storedArtifacts, origin: nil)
+        }
         guard let master = storedArtifacts.first(where: { $0.role == .masterVideo }),
               let preview = storedArtifacts.first(where: { $0.role == .previewVideo }),
               let poster = storedArtifacts.first(where: { $0.role == .posterImage })
@@ -81,6 +86,12 @@ enum LibraryRecordFactory {
         origin: CatalogLibraryOriginSnapshot,
         artifacts storedArtifacts: [StoredArtifact]
     ) throws -> CommittedLibraryRecord {
+        if storedArtifacts.contains(where: { $0.role == .masterImage }) {
+            guard let itemID = UUID(uuidString: origin.releaseID) else { throw LibraryRecordFactoryError.incompleteArtifactSet }
+            return try makeStillRecord(itemID: itemID, displayName: proposedName,
+                sourceFileName: "catalog-\(origin.releaseID).png", sourceDigest: sourceDigest,
+                artifacts: storedArtifacts, origin: origin)
+        }
         guard let itemUUID = UUID(uuidString: origin.releaseID),
               let master = storedArtifacts.first(where: { $0.role == .masterVideo }),
               let preview = storedArtifacts.first(where: { $0.role == .previewVideo }),
@@ -138,6 +149,20 @@ enum LibraryRecordFactory {
         from record: CommittedLibraryRecord,
         preserving existing: EngineLibraryItem? = nil
     ) throws -> EngineLibraryItem {
+        if record.mediaKind == .still {
+            guard let image = record.artifacts.first(where: { $0.role == .masterImage }),
+                  image.mediaKind == .pngImage, image.durationSeconds == nil,
+                  let posterURL = record.posterURL,
+                  let id = UUID(uuidString: record.item.id.rawValue) else {
+                throw LibraryRecordFactoryError.incompleteArtifactSet
+            }
+            return EngineLibraryItem(id: id, name: existing?.name ?? record.item.displayName,
+                createdAt: record.importedAt, mediaContent: .still(imageURL: image.objectURL),
+                pixelWidth: Int(image.pixelSize.width), pixelHeight: Int(image.pixelSize.height),
+                posterURL: posterURL, contentDigest: record.sourceDigest.value,
+                byteCount: record.artifacts.reduce(0) { $0 &+ $1.byteCount },
+                isFavorite: existing?.isFavorite ?? false)
+        }
         guard let master = record.artifacts.first(where: { $0.role == .masterVideo }),
               let masterURL = record.masterURL,
               let previewURL = record.previewURL,
@@ -165,6 +190,36 @@ enum LibraryRecordFactory {
         )
     }
 
+    private static func makeStillRecord(
+        itemID: UUID, displayName: String, sourceFileName: String,
+        sourceDigest: ContentDigest, artifacts stored: [StoredArtifact],
+        origin: CatalogLibraryOriginSnapshot?
+    ) throws -> CommittedLibraryRecord {
+        guard stored.count == 2,
+              Set(stored.map(\.role)) == StoredArtifactRole.required(for: .still),
+              let master = stored.first(where: { $0.role == .masterImage }),
+              let poster = stored.first(where: { $0.role == .posterImage }),
+              master.mediaKind == .pngImage, master.durationSeconds == nil,
+              poster.mediaKind == .heicImage, poster.durationSeconds == nil,
+              max(poster.pixelSize.width, poster.pixelSize.height) <= 1_920 else {
+            throw LibraryRecordFactoryError.incompleteArtifactSet
+        }
+        let variantID = try AssetVariantID(canonicalUUID())
+        let release = try AssetRelease(schema: .current,
+            id: AssetReleaseID(origin?.releaseID ?? canonicalUUID()),
+            assetID: AssetID(origin?.wallpaperID ?? canonicalUUID()), edition: origin?.edition ?? 1,
+            artifacts: stored.map(makeArtifact), posterArtifactID: poster.digest,
+            variants: [.init(id: variantID, qualityTier: .high,
+                rendererRequirement: .init(rendererID: .waliImage),
+                bindings: [.init(role: .waliPlayback, artifactID: master.digest)])],
+            defaultVariantID: variantID)
+        let item = try LibraryItem(schema: .current, id: LibraryItemID(itemID.uuidString.lowercased()),
+            releaseID: release.id, displayName: boundedName(displayName, maximumUTF8Bytes: LibraryItem.maximumDisplayNameUTF8Length),
+            origin: origin == nil ? .localImport : .catalog, catalogOrigin: origin)
+        return try CommittedLibraryRecord(item: item, release: release, sourceDigest: sourceDigest,
+            sourceFileName: boundedName(sourceFileName, maximumUTF8Bytes: 1_024), mediaKind: .still, artifacts: stored)
+    }
+
     private static func makeArtifact(_ stored: StoredArtifact) throws -> Artifact {
         let duration: MediaRational?
         if let seconds = stored.durationSeconds {
@@ -178,18 +233,23 @@ enum LibraryRecordFactory {
         } else {
             duration = nil
         }
+        let mediaType: MediaTypeID = switch stored.mediaKind {
+        case .hevcVideo: .waliVideoHEVC
+        case .heicImage: .waliImageHEIC
+        case .pngImage: .waliImagePNG
+        }
         return try Artifact(
             schema: .current,
             contentID: stored.digest,
             byteCount: stored.byteCount,
-            mediaType: stored.mediaKind == .hevcVideo ? .waliVideoHEVC : .waliImageHEIC,
+            mediaType: mediaType,
             // Every newly installed HEVC artifact reaches this point only after
             // ContentStorage has independently verified Aerial-compatible
             // SDR BT.709 Main10 bytes.
             characteristics: MediaCharacteristics(
                 pixelSize: stored.pixelSize,
                 duration: duration,
-                bitDepth: stored.mediaKind == .hevcVideo ? 10 : nil,
+                bitDepth: stored.mediaKind == .hevcVideo ? 10 : (stored.mediaKind == .pngImage ? 8 : nil),
                 dynamicRange: stored.mediaKind == .hevcVideo ? .sdr : nil
             )
         )

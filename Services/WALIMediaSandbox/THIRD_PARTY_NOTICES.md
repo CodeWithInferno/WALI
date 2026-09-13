@@ -35,7 +35,7 @@ Every built image includes `/opt/wali/share/media-compliance/`:
   source test-library notice; that test library is not a media runtime feature.
 - `build-context/` contains the exact `Containerfile`, WALI's Apache-2.0
   `LICENSE`, these notices, the checksum manifest, the LGPL patch, the media
-  policy, and both runtime scripts. These are the explicit source inputs
+  policies, the bounded image-header helper source, and runtime scripts. These are the explicit source inputs
   needed to rebuild the image. The recipe retains its pinned Debian image
   and package snapshot, compiler settings, dependency digests, and build-time
   source downloads.

@@ -24,13 +24,15 @@ public actor RuntimeStore {
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 state = try decoder.decode(RuntimeSnapshot.self, from: data)
+                try validateLoadedState()
+                try migrateLoadedStateIfNeeded()
             } catch let error as StorageError {
+                state = nil
                 throw error
             } catch {
+                state = nil
                 throw StorageError.corruptState(error.localizedDescription)
             }
-            try validateLoadedState()
-            try migrateLoadedStateIfNeeded()
         } else {
             state = RuntimeSnapshot()
             try persist()
@@ -118,7 +120,8 @@ public actor RuntimeStore {
         _ sourceURL: URL,
         under quarantineRoot: URL,
         expectedDigest: ContentDigest,
-        expectedByteCount: UInt64
+        expectedByteCount: UInt64,
+        mediaKind: WallpaperMediaKind = .video
     ) throws -> URL {
         try requireAcceptingImports()
         guard state != nil else { throw StorageError.stateNotOpened }
@@ -135,7 +138,8 @@ public actor RuntimeStore {
                 under: quarantineRoot,
                 into: directory,
                 expectedDigest: expectedDigest,
-                expectedByteCount: expectedByteCount
+                expectedByteCount: expectedByteCount,
+                mediaKind: mediaKind
             )
         } catch {
             try? FileManager.default.removeItem(at: directory)
@@ -168,7 +172,8 @@ public actor RuntimeStore {
     private func isAdoptedCatalogSource(_ source: URL) -> Bool {
         let directory = source.standardizedFileURL.deletingLastPathComponent()
         return directory.deletingLastPathComponent() == paths.staging.standardizedFileURL &&
-            directory.lastPathComponent.hasPrefix("catalog-source-") && source.lastPathComponent == "catalog-source.mp4"
+            directory.lastPathComponent.hasPrefix("catalog-source-") &&
+            ["catalog-source.mp4", "catalog-source.png"].contains(source.lastPathComponent)
     }
 
     private func retireCatalogJob(_ persisted: PersistedImportJob, in current: inout RuntimeSnapshot) throws {
@@ -195,7 +200,7 @@ public actor RuntimeStore {
         let directory = sourceURL.standardizedFileURL.deletingLastPathComponent()
         guard directory.deletingLastPathComponent() == paths.staging.standardizedFileURL,
               directory.lastPathComponent.hasPrefix("catalog-source-"),
-              sourceURL.lastPathComponent == "catalog-source.mp4"
+              ["catalog-source.mp4", "catalog-source.png"].contains(sourceURL.lastPathComponent)
         else { throw StorageError.pathEscapesStore }
         if FileManager.default.fileExists(atPath: directory.path) {
             try FileManager.default.removeItem(at: directory)
@@ -581,7 +586,7 @@ public actor RuntimeStore {
                 $0.generation == generation &&
                 $0.phase == .published
         }
-        guard Set(published.map(\.role)) == Set(StoredArtifactRole.allCases),
+        guard Set(published.map(\.role)) == StoredArtifactRole.required(for: record.mediaKind),
               Set(published.compactMap(\.verifiedDigest)) == Set(record.artifacts.map(\.digest))
         else {
             throw StorageError.missingPublishedArtifact

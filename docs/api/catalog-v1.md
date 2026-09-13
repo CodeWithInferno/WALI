@@ -1,6 +1,6 @@
 # Catalog API v1
 
-Status: accepted contract under ADRs 0011, 0012, 0014, 0016, and 0017. The transport
+Status: accepted contract under ADRs 0011, 0012, 0014, 0016, 0017, and 0025. The transport
 adapter may use Supabase PostgREST and Edge Functions, but this document—not a
 generated Supabase type—is the client compatibility boundary.
 
@@ -92,9 +92,9 @@ Shared `WallpaperSummaryV1` fields:
 | `current_release_id` | UUID |
 | `revision` | integer 0...9,007,199,254,740,991; logical wallpaper revision |
 | `published_at` | RFC 3339 UTC seconds |
-| `verified_install_count` | nonnegative integer, server aggregate |
-| `favorite_count` | nonnegative integer, server aggregate |
-| `save_count` | nonnegative integer, server aggregate |
+| `verified_install_count` | nonnegative completed install acknowledgement total, including publisher installs |
+| `favorite_count` | nonnegative current active favorites |
+| `save_count` | nonnegative current active saves |
 
 The `creator` identity is the accountable publishing account. Native labels say
 “Published by”; original authorship, rights holder, and required attribution
@@ -168,8 +168,9 @@ cursor, and at most 24 summaries. Section kinds are `editorial`, `trending`,
 ### `catalog_search_v1(query, filters, cursor, limit)`
 
 Visitor-readable. Query is NFC plain text, 1...200 characters. Filters contain
-only `category_slug`, up to 10 tag slugs, `content_rating_ceiling`, and optional
-duration bounds inside 1...600,000 ms. Returns summaries, `next_cursor`, and a
+only `category_slug`, `tag_slugs` (at most 10 unique slugs), `content_rating_ceiling`,
+optional duration bounds inside 1...600,000 ms, and optional `sort` (`featured`,
+`trending`, `newest`, or `most_installed`). An omitted sort retains relevance order. Returns summaries, `next_cursor`, and a
 versioned `ranking_explanation` containing only formula/model revision IDs—not
 private scores or other users' behavior.
 
@@ -386,3 +387,58 @@ After sign-in/profile load, the app uses these existing server-owned references
 to refresh status and request a fresh, verified download grant. App restarts,
 reinstalls, and a lost request response do not require another export request.
 No second local database or durable cache of grants is introduced.
+
+## Explicit preferences and completed counts (ADR0025)
+
+`catalog_preferences_v1()` returns only the actual authenticated active account's
+`user_id`, sorted `category_ids` (at most 12 active category UUIDs),
+`rating_ceiling`, `personalization_opt_out`, and positive `revision`.
+`set_catalog_preferences_v1(category_ids, rating_ceiling,
+personalization_opt_out, expected_revision, idempotency_key)` atomically updates
+those fields, rejects duplicate/unknown/inactive categories, and replays the
+exact original response for the same command. Changed payloads conflict; stale
+revisions do not overwrite newer choices. Anonymous callers have no grant.
+Preferences are exported and deleted with the existing account preference row.
+
+The stored rating ceiling applies to all public catalog reads. Anonymous
+visitors default to Teen. Home/search may ask for a stricter ceiling, never a
+wider one. Browse retains its original five-argument signature. Browse/search
+cursors bind category/tag/sort/rating filters (and search text), so changing a
+filter starts a new page sequence.
+
+For You uses explicit categories as a strict constraint. With no explicit
+categories, up to 100 current saved wallpapers and 100 distinct completed
+wallpapers from the last 90 days supply deterministic category affinity (save 1,
+completed download 2, capped at 20 per category). Within equal affinity, publication
+time and ID break ties. Opt-out or no usable signal omits this section.
+Editorials preserve configured item order. Trending uses fresh trending-v1
+ranking scores; New uses publication time. An unavailable ranking is omitted,
+not replaced by a second New query. The response remains bounded to eight
+sections of 24 items.
+
+Displayed download totals count consumed one-use install receipts across an
+item's releases, only after the agent confirms verified local installation and
+the server accepts its acknowledgement. Requests, failures, and replayed commands
+do not add counts. Publisher self-installs count here while existing ranking
+eligibility still excludes them. Save/favorite counts reflect active records,
+including removals, immediately. Native Library reads `my_saved_wallpapers_v1`
+for Saved and agent state for Downloaded; account changes clear private views.
+The separate edition/project-bound foreground acknowledgement file preserves
+exact failed commands for bounded replay, as recorded in the compatibility
+surface `catalog_acknowledgements`. No authentication token or installed-library
+state is written there.
+
+## Versioned legal documents
+
+Public GET/HEAD `/functions/v1/catalog-legal/{creator-content-license|wallpaper-use-license}/2026-09-12`
+serves the exact immutable reviewed text without authentication or database
+access. Responses include the text SHA256 as ETag and support conditional 304;
+unknown versions return 404 and mutations return 405. The authoritative text is in
+`docs/legal`; `scripts/generate-catalog-legal.py` creates the endpoint bundle.
+
+Account export nests whitelisted automatic publication decisions and job state
+inside each existing owner `submissions` entry. The export root remains version1
+and is compatible with deployed workers. Decision snapshots include user-facing
+content, rights facts, policy/revision/generation and artifact digest; job state
+includes attempts and safe error code. Private proof paths, lease tokens and
+lease expiry are excluded. Evidence never crosses the submission owner boundary.

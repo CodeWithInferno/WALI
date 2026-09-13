@@ -35,7 +35,8 @@ intake:
 
 processing:
   maximum_creator_concurrent_attempts: 2
-  maximum_attempt_wall_seconds: 1800
+  # New video first-lease budget; legacy and still attempts remain1200s.
+  maximum_attempt_wall_seconds: 5400
   maximum_attempt_memory_bytes: 8589934592
   maximum_attempt_processes: 64
   maximum_scratch_bytes: 4294967296

@@ -38,6 +38,7 @@ Required IDs and kinds:
 - content store, preferences, URL schemes, catalog manifest, lock-screen
   manifest, and diagnostic export → their same-named singular kind;
 - `catalog_revocations` → `catalog_revocations`;
+- `catalog_acknowledgements` → `catalog_acknowledgements` (bounded foreground recovery only);
 - `marketplace_server_schema` → `server_schema`;
 - catalog/creator/moderation API entries → `public_api`;
 - `catalog_signing_keys` → `signing_key_registry`;
@@ -180,3 +181,28 @@ existing perform/envelope revision. It carries at most 32 unique item UUIDs and
 no caller path. The agent validates IDs against its committed snapshot and
 returns bounded group projection URLs. It does not grant foreground access to
 master media or authorize arbitrary filesystem requests.
+
+## Catalog acknowledgements
+
+The foreground stores schema version 1 only after the agent confirms verified
+installation. Records bind subject, wallpaper, release, one-use receipt, manifest
+digest, stable idempotency key and original receipt expiry. This format contains
+no authentication bearer or local library authority. Each bundle identifier and
+project host receives a separate private path. Atomic files are mode0600 inside
+mode0700 directories; readers reject unknown versions and oversized/duplicate
+records before writing. At most128 entries/256KiB are retained. Exact retries can
+recover lost successful responses for seven days after expiry; the server still
+rejects expired first-use receipts. Only the matching signed-in subject replays.
+
+## Still catalog extension (ADR0027)
+
+The catalog_manifest surface reads video1.0 and still2.0. Its current version is
+2.0; existing video manifests and signatures retain1.0. The exact
+required_artifact_roles_by_media_kind map contains video (thumbnail, poster,
+preview, video_default) and still (thumbnail, poster, image_default). The global
+artifact-count range is3–7, with exact kind-specific enforcement in each reader.
+The V2 reader contract is docs/api/catalog-v2.md. Native app/agent and private
+worker protocol3 rejects earlier protocol versions; local runtime snapshots are
+1.2, with declared legacy-video reads of1.0–1.1 and no writes after unknown newer
+schemas. These native implementations do not claim the broader envelope fixture
+gates are complete merely from focused media tests.

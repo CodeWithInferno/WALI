@@ -143,6 +143,9 @@ DEVELOPMENT_TEAM=YOUR_TEAM_ID bundle exec fastlane mac github_release \
 ```
 
 Select the actual reviewed tag; its version must match the packaged version.
+Stable tags use `vVERSION`; prereleases append a suffix such as `-beta.1`.
+Use a stable tag only once ADR 0022's broader release criteria and the exact
+candidate's acceptance are recorded. The same checks apply to both tag forms.
 The lane verifies source, tag target, CI, bundle bytes, signatures, Apple tickets,
 Gatekeeper, and package checksums. It creates a draft, uploads ZIP/DMG and
 checksums, release notes, project license, notices, full third-party license ZIP,

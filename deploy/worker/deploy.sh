@@ -9,8 +9,8 @@ readonly PROJECT_REF_PATTERN='^[a-z]{20}$'
 readonly HOST_BINDING_FILE=/etc/wali-worker/HOST_IS_DEDICATED
 
 usage() {
-  echo 'usage: deploy.sh [--dry-run] --environment staging|production --supabase-project-ref REF --worker-binary PATH --environment-file PATH --media-sbom PATH --verifier-sbom PATH [--classifier-sbom PATH] --cosign-key PATH [--database-ca PATH] [--offline-trust-root PATH --offline-trust-receipt PATH --offline-trust-receipt-sha256 HEX]' >&2
-  echo '       deploy.sh --rollback --environment staging|production --supabase-project-ref REF' >&2
+  echo 'usage: deploy.sh [--dry-run] [--preserve-warm-namespace] --environment staging|production --supabase-project-ref REF --worker-binary PATH --environment-file PATH --media-sbom PATH --verifier-sbom PATH [--classifier-sbom PATH] --cosign-key PATH [--database-ca PATH] [--offline-trust-root PATH --offline-trust-receipt PATH --offline-trust-receipt-sha256 HEX]' >&2
+  echo '       deploy.sh --rollback [--preserve-warm-namespace] --environment staging|production --supabase-project-ref REF' >&2
 }
 
 read_optional_env_value() {
@@ -138,6 +138,7 @@ offline_trust_root= offline_trust_receipt= offline_trust_receipt_sha256=
 database_ca=
 while (($#)); do
   case "$1" in
+    --preserve-warm-namespace) warm_namespace_mode=true; shift ;;
     --dry-run) dry_run=true; shift ;;
     --rollback) rollback_requested=true; shift ;;
     --environment)
@@ -213,6 +214,26 @@ elif [[ -n "$classifier_sbom" ]]; then
   exit 65
 fi
 
+# Auth mode is explicit and validated even for previews. Legacy previews may
+# omit a static token; the real deployment still requires it below.
+storage_auth_mode=static
+storage_auth_mode_count="$(grep -c '^WALI_STORAGE_AUTH_MODE=' "$environment_file" || true)"
+if [[ "$storage_auth_mode_count" != 0 ]]; then
+  storage_auth_mode="$(read_env_value WALI_STORAGE_AUTH_MODE "$environment_file")" || { echo 'WALI_STORAGE_AUTH_MODE is empty or duplicated' >&2; exit 65; }
+fi
+storage_worker_token=''
+storage_token_count="$(grep -c '^WALI_STORAGE_WORKER_TOKEN=' "$environment_file" || true)"
+if [[ "$storage_token_count" != 0 ]]; then
+  storage_worker_token="$(read_optional_env_value WALI_STORAGE_WORKER_TOKEN "$environment_file")" || { echo 'WALI_STORAGE_WORKER_TOKEN is invalid or duplicated' >&2; exit 65; }
+fi
+case "$storage_auth_mode" in
+  static) ;;
+  database_renewal)
+    [[ -z "$storage_worker_token" ]] || { echo 'database renewal cannot be mixed with a static Storage token' >&2; exit 65; }
+    ;;
+  *) echo 'WALI_STORAGE_AUTH_MODE is invalid' >&2; exit 65 ;;
+esac
+
 release_root="/opt/wali-worker/releases/<complete-snapshot-sha256>"
 if $dry_run; then
   printf 'would bind deployment to %s/%s\n' "$deployment_environment" "$supabase_project_ref"
@@ -229,12 +250,18 @@ if $dry_run; then
   if [[ -n "$offline_trust_root" ]]; then
     printf 'would use hash-bound, fresh offline trust inputs; dry-run does not verify image signatures\n'
   fi
+  if $warm_namespace_mode; then
+    printf 'would preserve the active namespace and use a guarded media-only stop/start with ignore-requirements; no cold recovery\n'
+  else
   printf 'would run systemctl restart wali-media-worker.service with its WALI namespace dependency\n'
+  fi
   exit
 fi
 
 storage_publishable_key="$(read_env_value WALI_STORAGE_PUBLISHABLE_KEY "$environment_file")" || { echo 'WALI_STORAGE_PUBLISHABLE_KEY is missing or duplicated' >&2; exit 65; }
-storage_worker_token="$(read_env_value WALI_STORAGE_WORKER_TOKEN "$environment_file")" || { echo 'WALI_STORAGE_WORKER_TOKEN is missing or duplicated' >&2; exit 65; }
+if [[ "$storage_auth_mode" == static ]]; then
+  storage_worker_token="$(read_env_value WALI_STORAGE_WORKER_TOKEN "$environment_file")" || { echo 'WALI_STORAGE_WORKER_TOKEN is missing or duplicated' >&2; exit 65; }
+fi
 if [[ "$database_url" =~ ^postgres(ql)?://wali_worker(:|@) ]]; then
   echo 'WALI_DATABASE_URL must use a dedicated LOGIN identity, not the NOLOGIN wali_worker role' >&2
   exit 65

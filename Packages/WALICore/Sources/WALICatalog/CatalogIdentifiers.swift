@@ -34,6 +34,7 @@ public enum CatalogArtifactRole: String, Codable, Sendable, CaseIterable {
     case thumbnail
     case poster
     case preview
+    case imageDefault = "image_default"
     case videoDefault = "video_default"
     case video1080p = "video_1080p"
     case video1440p = "video_1440p"
@@ -44,6 +45,7 @@ public enum CatalogArtifactRole: String, Codable, Sendable, CaseIterable {
         case .thumbnail: 0
         case .poster: 1
         case .preview: 2
+        case .imageDefault: 3
         case .videoDefault: 3
         case .video1080p: 4
         case .video1440p: 5

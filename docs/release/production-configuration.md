@@ -70,9 +70,11 @@ The foreground carries the auth/API fields. The agent carries only release
 mode, configuration digest, CDN and catalog trust; it has no Auth client, account
 token or publishable-key field. Runtime account ownership stays in the foreground.
 Archive, notarization and publication revalidate the source, actual signed
-bundle and receipts. Production publication rejects local-preview receipts and bare stable-version
-tags; the initial production release must use a prerelease tag such as
-`v0.1.0-beta.1` until the broader graduation criteria are accepted.
+bundle and receipts. Production publication rejects local-preview receipts. The
+release tag must match the packaged version, either `vVERSION` or
+`vVERSION-PRERELEASE`. Under ADR 0022, a stable tag is used only after the existing
+broader release criteria and exact candidate acceptance are recorded; supporting
+the stable tag format does not supply that evidence or waive any release gate.
 
 A release still requires verified custom SMTP and appropriate signup/existing
 account code templates; actual new/existing account delivery, refresh, cancel,

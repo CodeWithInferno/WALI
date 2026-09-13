@@ -258,6 +258,16 @@ async function signCanonicalArtifacts(
     ) {
       throw new EdgeError("temporarily_unavailable", 503, true);
     }
+    const still = isObject(item.media_facts) &&
+      item.media_facts.media_kind === "still";
+    if (
+      still && (item.canonical_artifacts.length !== 2 ||
+        item.canonical_artifacts.map((a: unknown) =>
+            isObject(a) ? a.role : null
+          ).sort().join(",") !== "image_default,poster")
+    ) {
+      throw new EdgeError("temporarily_unavailable", 503, true);
+    }
     for (const artifact of item.canonical_artifacts) {
       const expectedExtension = isObject(artifact) &&
           artifact.media_type === "image/jpeg"
@@ -276,24 +286,32 @@ async function signCanonicalArtifacts(
         !artifact.storage_path.includes(`/${artifact.sha256}/`) ||
         typeof artifact.byte_count !== "number" ||
         !Number.isSafeInteger(artifact.byte_count) || artifact.byte_count < 1 ||
-        artifact.byte_count > 2_147_483_648 ||
+        artifact.byte_count > (still ? 134_217_728 : 2_147_483_648) ||
         expectedExtension === null ||
         !artifact.storage_path.endsWith(`.${expectedExtension}`) ||
         (artifact.role !== "poster" && artifact.role !== "preview" &&
-          artifact.role !== "video_default") ||
+          artifact.role !== "video_default" &&
+          !(still && artifact.role === "image_default")) ||
         (artifact.role === "poster" &&
           !String(artifact.media_type).startsWith("image/")) ||
-        (artifact.role !== "poster" && artifact.media_type !== "video/mp4") ||
+        (artifact.role === "image_default" &&
+          artifact.media_type !== "image/png") ||
+        (artifact.role !== "poster" && artifact.role !== "image_default" &&
+          artifact.media_type !== "video/mp4") ||
         typeof artifact.width !== "number" ||
         !Number.isInteger(artifact.width) ||
         artifact.width < 1 || artifact.width > 7_680 ||
         typeof artifact.height !== "number" ||
         !Number.isInteger(artifact.height) ||
-        artifact.height < 1 || artifact.height > 4_320 ||
+        artifact.height < 1 || artifact.height > (still ? 7_680 : 4_320) ||
+        (still && artifact.width * artifact.height > 33_177_600) ||
+        (still && artifact.role === "poster" &&
+          (artifact.width > 1920 || artifact.height > 1920)) ||
         typeof artifact.duration_ms !== "number" ||
         !Number.isSafeInteger(artifact.duration_ms) ||
-        (artifact.role === "poster" && artifact.duration_ms !== 0) ||
-        (artifact.role !== "poster" &&
+        ((artifact.role === "poster" || artifact.role === "image_default") &&
+          artifact.duration_ms !== 0) ||
+        (artifact.role !== "poster" && artifact.role !== "image_default" &&
           (artifact.duration_ms < 1 || artifact.duration_ms > 600_000))
       ) {
         throw new EdgeError("temporarily_unavailable", 503, true);

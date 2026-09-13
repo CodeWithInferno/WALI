@@ -3,7 +3,7 @@ import WALIModel
 
 /// The compatibility version shared by the foreground app and background agent.
 public enum WALIProtocol {
-    public static let currentVersion: UInt16 = 2
+    public static let currentVersion: UInt16 = 3
     public static let maximumMessageBytes = 4 * 1_024 * 1_024
 }
 
@@ -254,6 +254,7 @@ public enum AgentPlaybackState: String, Codable, Sendable, Hashable {
     case idle
     case preparing
     case playing
+    case displaying
     case paused
     case suspended
     case failed
@@ -263,42 +264,39 @@ public struct AgentLibraryItem: Codable, Sendable, Hashable, Identifiable {
     public let id: UUID
     public let name: String
     public let createdAt: Date
-    public let duration: TimeInterval
+    public let mediaContent: AgentWallpaperMediaContent
     public let pixelWidth: Int
     public let pixelHeight: Int
-    public let masterURL: URL
-    public let previewURL: URL
     public let posterURL: URL
     public let contentDigest: String
     public let byteCount: UInt64
     public let isFavorite: Bool
 
-    public init(
-        id: UUID,
-        name: String,
-        createdAt: Date,
-        duration: TimeInterval,
-        pixelWidth: Int,
-        pixelHeight: Int,
-        masterURL: URL,
-        previewURL: URL,
-        posterURL: URL,
-        contentDigest: String,
-        byteCount: UInt64 = 0,
-        isFavorite: Bool = false
-    ) {
+    public init(id: UUID, name: String, createdAt: Date,
+                mediaContent: AgentWallpaperMediaContent, pixelWidth: Int, pixelHeight: Int,
+                posterURL: URL, contentDigest: String, byteCount: UInt64 = 0,
+                isFavorite: Bool = false) {
         self.id = id
         self.name = name
         self.createdAt = createdAt
-        self.duration = duration
+        self.mediaContent = mediaContent
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
-        self.masterURL = masterURL
-        self.previewURL = previewURL
         self.posterURL = posterURL
         self.contentDigest = contentDigest
         self.byteCount = byteCount
         self.isFavorite = isFavorite
+    }
+
+    /// Source compatibility for callers constructing a known video item.
+    public init(id: UUID, name: String, createdAt: Date, duration: TimeInterval,
+                pixelWidth: Int, pixelHeight: Int, masterURL: URL, previewURL: URL,
+                posterURL: URL, contentDigest: String, byteCount: UInt64 = 0,
+                isFavorite: Bool = false) {
+        self.init(id: id, name: name, createdAt: createdAt,
+                  mediaContent: .video(masterURL: masterURL, previewURL: previewURL, duration: duration),
+                  pixelWidth: pixelWidth, pixelHeight: pixelHeight, posterURL: posterURL,
+                  contentDigest: contentDigest, byteCount: byteCount, isFavorite: isFavorite)
     }
 }
 

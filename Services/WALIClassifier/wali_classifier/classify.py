@@ -144,7 +144,8 @@ def classify() -> dict[str, Any]:
     manifest = load_model_manifest(MANIFEST_PATH)
     result = _infer(request, taxonomy, manifest)
     return {
-        "schema_version": 1,
+        "schema_version": request.schema_version,
+        **({"media_kind": request.media_kind} if request.schema_version == 2 else {}),
         "attempt_id": request.attempt_id,
         "submission_id": request.submission_id,
         "generation": request.generation,

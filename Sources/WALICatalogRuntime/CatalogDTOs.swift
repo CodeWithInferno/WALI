@@ -58,7 +58,8 @@ public struct CatalogWallpaperSummary: Sendable, Hashable, Identifiable {
     public let primaryCategory: CatalogTaxonomySummary
     public let approvedTags: [CatalogTaxonomySummary]
     public let poster: CatalogArtifact
-    public let preview: CatalogArtifact
+    public let mediaKind: CatalogMediaKind
+    public let preview: CatalogArtifact?
     public let currentReleaseID: String
     public let revision: UInt64
     public let publishedAt: Date
@@ -75,13 +76,14 @@ public struct CatalogWallpaperSummary: Sendable, Hashable, Identifiable {
         primaryCategory: CatalogTaxonomySummary,
         approvedTags: [CatalogTaxonomySummary],
         poster: CatalogArtifact,
-        preview: CatalogArtifact,
+        preview: CatalogArtifact?,
         currentReleaseID: String,
         revision: UInt64,
         publishedAt: Date,
         verifiedInstallCount: UInt64,
         favoriteCount: UInt64,
-        saveCount: UInt64
+        saveCount: UInt64,
+        mediaKind: CatalogMediaKind = .video
     ) {
         self.id = id
         self.slug = slug
@@ -91,6 +93,7 @@ public struct CatalogWallpaperSummary: Sendable, Hashable, Identifiable {
         self.primaryCategory = primaryCategory
         self.approvedTags = approvedTags
         self.poster = poster
+        self.mediaKind = mediaKind
         self.preview = preview
         self.currentReleaseID = currentReleaseID
         self.revision = revision
@@ -132,6 +135,26 @@ public struct CatalogLicense: Sendable, Hashable {
     }
 }
 
+public enum CatalogWallpaperMedia: Sendable, Hashable {
+    case video(artifact: CatalogArtifact, durationMilliseconds: UInt64, frameRateNumerator: UInt32, frameRateDenominator: UInt32)
+    case still(artifact: CatalogArtifact)
+
+    public var kind: CatalogMediaKind {
+        switch self { case .video: .video; case .still: .still }
+    }
+    public var artifact: CatalogArtifact {
+        switch self { case let .video(artifact, _, _, _), let .still(artifact): artifact }
+    }
+    public var durationMilliseconds: UInt64? {
+        guard case let .video(_, duration, _, _) = self else { return nil }
+        return duration
+    }
+    public var framesPerSecond: Double? {
+        guard case let .video(_, _, numerator, denominator) = self else { return nil }
+        return Double(numerator) / Double(denominator)
+    }
+}
+
 public struct CatalogWallpaperDetail: Sendable, Hashable, Identifiable {
     public let summary: CatalogWallpaperSummary
     public let description: String
@@ -140,12 +163,9 @@ public struct CatalogWallpaperDetail: Sendable, Hashable, Identifiable {
     public let attributionText: String?
     public let sourceURL: URL?
     public let license: CatalogLicense
-    public let durationMilliseconds: UInt64
-    public let width: UInt32
-    public let height: UInt32
-    public let frameRateNumerator: UInt32
-    public let frameRateDenominator: UInt32
-    public let videoDefault: CatalogArtifact
+    public let media: CatalogWallpaperMedia
+    public var width: UInt32 { media.artifact.width }
+    public var height: UInt32 { media.artifact.height }
     public let related: [CatalogWallpaperSummary]
     public let isFavorite: Bool
     public let favoriteRevision: UInt64
@@ -153,10 +173,38 @@ public struct CatalogWallpaperDetail: Sendable, Hashable, Identifiable {
     public let savedRevision: UInt64
 
     public var id: String { summary.id }
-    public var framesPerSecond: Double {
-        Double(frameRateNumerator) / Double(frameRateDenominator)
-    }
+    public var framesPerSecond: Double? { media.framesPerSecond }
+    public var durationMilliseconds: UInt64? { media.durationMilliseconds }
 
+    public init(
+        summary: CatalogWallpaperSummary,
+        description: String,
+        edition: UInt64,
+        rightsHolder: String,
+        attributionText: String?,
+        sourceURL: URL?,
+        license: CatalogLicense,
+        media: CatalogWallpaperMedia,
+        related: [CatalogWallpaperSummary],
+        isFavorite: Bool,
+        favoriteRevision: UInt64,
+        isSaved: Bool,
+        savedRevision: UInt64
+    ) {
+        self.summary = summary
+        self.description = description
+        self.edition = edition
+        self.rightsHolder = rightsHolder
+        self.attributionText = attributionText
+        self.sourceURL = sourceURL
+        self.license = license
+        self.media = media
+        self.related = related
+        self.isFavorite = isFavorite
+        self.favoriteRevision = favoriteRevision
+        self.isSaved = isSaved
+        self.savedRevision = savedRevision
+    }
     public init(
         summary: CatalogWallpaperSummary,
         description: String,
@@ -177,24 +225,13 @@ public struct CatalogWallpaperDetail: Sendable, Hashable, Identifiable {
         isSaved: Bool,
         savedRevision: UInt64
     ) {
-        self.summary = summary
-        self.description = description
-        self.edition = edition
-        self.rightsHolder = rightsHolder
-        self.attributionText = attributionText
-        self.sourceURL = sourceURL
-        self.license = license
-        self.durationMilliseconds = durationMilliseconds
-        self.width = width
-        self.height = height
-        self.frameRateNumerator = frameRateNumerator
-        self.frameRateDenominator = frameRateDenominator
-        self.videoDefault = videoDefault
-        self.related = related
-        self.isFavorite = isFavorite
-        self.favoriteRevision = favoriteRevision
-        self.isSaved = isSaved
-        self.savedRevision = savedRevision
+        self.init(summary: summary, description: description, edition: edition,
+                  rightsHolder: rightsHolder, attributionText: attributionText, sourceURL: sourceURL,
+                  license: license,
+                  media: .video(artifact: videoDefault, durationMilliseconds: durationMilliseconds,
+                                frameRateNumerator: frameRateNumerator, frameRateDenominator: frameRateDenominator),
+                  related: related, isFavorite: isFavorite, favoriteRevision: favoriteRevision,
+                  isSaved: isSaved, savedRevision: savedRevision)
     }
 }
 
@@ -310,7 +347,8 @@ struct WallpaperSummaryDTO: Decodable, Sendable {
     let primaryCategory: TaxonomySummaryDTO
     let approvedTags: [TaxonomySummaryDTO]
     let poster: ArtifactSummaryDTO
-    let preview: ArtifactSummaryDTO
+    var mediaKind: String = "video"
+    let preview: ArtifactSummaryDTO?
     let currentReleaseID: String
     let revision: UInt64
     let publishedAt: String
@@ -320,6 +358,7 @@ struct WallpaperSummaryDTO: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id, slug, title, creator, poster, preview, revision
+        case mediaKind = "media_kind"
         case contentRating = "content_rating"
         case primaryCategory = "primary_category"
         case approvedTags = "approved_tags"
@@ -404,12 +443,7 @@ struct WallpaperDetailDTO: Decodable, Sendable {
     let attributionText: String?
     let sourceURL: URL?
     let license: LicenseDTO
-    let durationMilliseconds: UInt64
-    let width: UInt32
-    let height: UInt32
-    let frameRateNumerator: UInt32
-    let frameRateDenominator: UInt32
-    let videoDefault: ArtifactSummaryDTO
+    let media: CatalogMediaDTO
     let related: [WallpaperSummaryDTO]
     let isFavorite: Bool
     let favoriteRevision: UInt64
@@ -417,14 +451,10 @@ struct WallpaperDetailDTO: Decodable, Sendable {
     let savedRevision: UInt64
 
     enum CodingKeys: String, CodingKey {
-        case wallpaper, description, edition, license, width, height, related
+        case wallpaper, description, edition, license, media, related
         case rightsHolder = "rights_holder"
         case attributionText = "attribution_text"
         case sourceURL = "source_url"
-        case durationMilliseconds = "duration_ms"
-        case frameRateNumerator = "frame_rate_numerator"
-        case frameRateDenominator = "frame_rate_denominator"
-        case videoDefault = "video_default"
         case isFavorite = "is_favorite"
         case favoriteRevision = "favorite_revision"
         case isSaved = "is_saved"
@@ -449,4 +479,44 @@ struct CatalogFunctionErrorDTO: Decodable, Sendable {
     let code: String
     let message: String?
     let retryable: Bool
+}
+
+struct CatalogMediaDTO: Decodable, Sendable {
+    let kind: String
+    let width: UInt32
+    let height: UInt32
+    let artifact: ArtifactSummaryDTO
+    let durationMilliseconds: UInt64?
+    let frameRateNumerator: UInt32?
+    let frameRateDenominator: UInt32?
+
+    init(kind: String, width: UInt32, height: UInt32, artifact: ArtifactSummaryDTO,
+         durationMilliseconds: UInt64? = nil, frameRateNumerator: UInt32? = nil,
+         frameRateDenominator: UInt32? = nil) {
+        self.kind = kind; self.width = width; self.height = height; self.artifact = artifact
+        self.durationMilliseconds = durationMilliseconds; self.frameRateNumerator = frameRateNumerator
+        self.frameRateDenominator = frameRateDenominator
+    }
+
+    private struct Key: CodingKey {
+        var stringValue: String; var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+        init(_ value: String) { stringValue = value }
+    }
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: Key.self)
+        let kind = try c.decode(String.self, forKey: Key("kind"))
+        let common: Set<String> = ["kind", "width", "height", "artifact"]
+        let keys = kind == "video" ? common.union(["duration_ms", "frame_rate_numerator", "frame_rate_denominator"]) : common
+        guard ["video", "still"].contains(kind), Set(c.allKeys.map(\.stringValue)) == keys else {
+            throw CatalogMappingError.invalidResponse
+        }
+        self.init(kind: kind, width: try c.decode(UInt32.self, forKey: Key("width")),
+            height: try c.decode(UInt32.self, forKey: Key("height")),
+            artifact: try c.decode(ArtifactSummaryDTO.self, forKey: Key("artifact")),
+            durationMilliseconds: kind == "video" ? try c.decode(UInt64.self, forKey: Key("duration_ms")) : nil,
+            frameRateNumerator: kind == "video" ? try c.decode(UInt32.self, forKey: Key("frame_rate_numerator")) : nil,
+            frameRateDenominator: kind == "video" ? try c.decode(UInt32.self, forKey: Key("frame_rate_denominator")) : nil)
+    }
 }

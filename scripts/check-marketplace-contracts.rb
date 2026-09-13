@@ -23,6 +23,7 @@ class MarketplaceContractChecker
   REQUIRED_ADRS = %w[0011 0012 0013 0014 0015 0016 0017].freeze
   REQUIRED_CONTRACT_FILES = %w[
     docs/api/catalog-v1.md
+    docs/api/catalog-v2.md
     docs/api/creator-v1.md
     docs/api/moderation-v1.md
     docs/security/marketplace-threat-model.md
@@ -68,11 +69,13 @@ class MarketplaceContractChecker
     catalog_creators_v1 catalog_categories_v1 catalog_tags_v1
     catalog_collections_v1 my_profile_v1 my_creator_submissions_v1
     my_favorites_v1 my_saved_wallpapers_v1
+    catalog_wallpapers_v2 catalog_wallpaper_details_v2 my_favorites_v2 my_saved_wallpapers_v2
   ].freeze
   ALLOWED_PUBLIC_FUNCTIONS = Set.new(%w[
     catalog_home_v1 catalog_search_v1 catalog_browse_v1
+    catalog_home_v2 catalog_search_v2 catalog_browse_v2 catalog_wallpaper_detail_v2
     catalog_wallpaper_detail_v1 catalog_creator_v1 my_favorites_v1
-    my_saved_wallpapers_v1 set_favorite_v1 set_saved_v1
+    my_saved_wallpapers_v1 catalog_preferences_v1 set_catalog_preferences_v1 set_favorite_v1 set_saved_v1
     set_creator_follow_v1 request_install_v1 creator_authorization_v1
     creator_metadata_v1 creator_processing_status_v1 my_creator_submissions_v1
     moderation_queue_v1 moderation_reports_v1 moderation_metadata_v1
@@ -80,7 +83,7 @@ class MarketplaceContractChecker
   ]).freeze
   EDGE_BOUNDARY_PUBLIC_FUNCTIONS = Set.new(%w[
     record_install_v1 wali_edge_take_rate_limit_v1
-    wali_edge_request_install_v1 wali_edge_create_upload_v1
+    wali_edge_request_install_v1 wali_edge_request_install_v2 wali_edge_create_upload_v1
     wali_edge_bind_upload_endpoint_v1 wali_edge_complete_upload_v1
     wali_edge_submit_wallpaper_v1 wali_edge_moderate_submission_v1
     wali_edge_report_wallpaper_v1 wali_edge_resolve_report_v1 wali_edge_request_account_export_v1
@@ -95,6 +98,9 @@ class MarketplaceContractChecker
     wali_edge_finalize_account_identity_deletion_v1
     wali_edge_accept_creator_terms_v1 wali_edge_save_submission_draft_v1
     wali_edge_withdraw_submission_v1 wali_edge_curated_catalog_command_v1
+    wali_edge_claim_automatic_publication_v1 wali_edge_prepare_automatic_publication_v1
+    wali_edge_finalize_automatic_publication_v1 wali_edge_finish_automatic_publication_v1
+    wali_edge_retry_publication_v1 wali_edge_retry_processing_v1
   ]).freeze
   MANIFEST_ROOT_KEYS = %w[
     schema key_id wallpaper_id release_id edition issued_at artifacts
@@ -354,17 +360,27 @@ class MarketplaceContractChecker
     missing = REQUIRED_SURFACES - ids
     record("MKT-COMPATIBILITY-MISSING", "missing compatibility entries: #{missing.join(', ')}") unless missing.empty?
     catalog = Array(surfaces["surfaces"]).find { |surface| surface["id"] == "catalog_manifest" }
-    unless catalog && catalog.dig("version", "current") == {"epoch" => 1, "revision" => 0}
-      record("MKT-COMPATIBILITY-VERSION", "catalog manifest must be epoch 1 revision 0")
+    unless catalog && catalog.dig("version", "current") == {"epoch" => 2, "revision" => 0}
+      record("MKT-COMPATIBILITY-VERSION", "catalog manifest must be epoch 2 revision 0 with video V1 compatibility")
+    end
+    expected_readers = [{"epoch" => 1, "minimum_revision" => 0, "maximum_revision" => 0},
+                        {"epoch" => 2, "minimum_revision" => 0, "maximum_revision" => 0}]
+    unless catalog && catalog.dig("version", "readable_epochs") == expected_readers
+      record("MKT-COMPATIBILITY-VERSION", "catalog must preserve video1.0 and declare still2.0 only")
     end
   end
 
   def check_api_documents
     catalog = read("docs/api/catalog-v1.md")
+    catalog_v2 = read("docs/api/catalog-v2.md")
     creator = read("docs/api/creator-v1.md")
     moderation = read("docs/api/moderation-v1.md")
     REQUIRED_PUBLIC_VIEWS.each do |name|
-      record("MKT-API-ALLOWLIST", "catalog contract missing #{name}") unless catalog.include?(name)
+      document = name.end_with?("_v2") ? catalog_v2 : catalog
+      record("MKT-API-ALLOWLIST", "catalog contract missing #{name}") unless document.include?(name)
+    end
+    %w[catalog_home_v2 catalog_browse_v2 catalog_search_v2 catalog_wallpaper_detail_v2 wali_edge_request_install_v2].each do |name|
+      record("MKT-API-ALLOWLIST", "catalog V2 contract missing #{name}") unless catalog_v2.include?(name)
     end
     %w[request-install record-install report-wallpaper].each do |name|
       record("MKT-API-ALLOWLIST", "catalog contract missing #{name}") unless catalog.include?(name)

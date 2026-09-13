@@ -60,7 +60,7 @@ export async function handleSubmitWallpaper(
     );
     if (
       !isObject(data) || data.submission_id !== submissionID ||
-      data.state !== "submitted" ||
+      (data.state !== "submitted" && data.state !== "ready_for_submission") ||
       typeof data.revision !== "number" ||
       data.generation !== expectedGeneration
     ) {

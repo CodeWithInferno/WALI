@@ -263,6 +263,10 @@ public actor CatalogPresentationMediaCache: CatalogPresentationMediaCaching {
             guard artifact.byteCount <= Self.posterByteLimit else {
                 throw CatalogPresentationMediaCacheError.unsupportedArtifact
             }
+        case (.imageDefault, "image/png"):
+            guard artifact.byteCount <= 128 * 1_024 * 1_024 else {
+                throw CatalogPresentationMediaCacheError.unsupportedArtifact
+            }
         case (.preview, "video/mp4"):
             guard artifact.byteCount <= Self.previewByteLimit else {
                 throw CatalogPresentationMediaCacheError.unsupportedArtifact

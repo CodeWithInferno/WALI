@@ -45,9 +45,12 @@ end
   rejects("another resolved configuration") { WALIReleaseSupport.verify_direct_release_build_settings!(changed) }
 end
 
-WALIReleaseSupport.verify_prerelease_tag!("v0.1.0-beta.1", version: "0.1.0")
-[nil, "v0.1.0", "v0.2.0-beta.1", "v0.1.0-", "v0.1.0-beta/1"].each do |tag|
-  rejects("stable or malformed initial release tag") { WALIReleaseSupport.verify_prerelease_tag!(tag, version: "0.1.0") }
+["v0.1.0", "v0.1.0-beta.1", "v0.1.0-rc-1", "v0.1.0-#{'a' * 93}"].each do |tag|
+  WALIReleaseSupport.verify_release_tag!(tag, version: "0.1.0")
+end
+[nil, false, 1, [], "", "v0.2.0", "v0.2.0-beta.1", "0.1.0", "v0.1.0-", "v0.1.0-beta/1",
+ "v0.1.0+build.1", "v0.1.0-#{'a' * 94}", "v0.1.0 ", "v0.1.0\n", "v0.1.0-βeta", "v0.1.0;touch /tmp/injected"].each do |tag|
+  rejects("mismatched or malformed release tag") { WALIReleaseSupport.verify_release_tag!(tag, version: "0.1.0") }
 end
 
 Dir.mktmpdir("wali-release-fixtures-") do |directory|

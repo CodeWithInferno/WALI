@@ -92,8 +92,8 @@ public struct WALICatalogDetailPresentation: Identifiable, Equatable, Sendable {
     public let licenseName: String
     public let licenseTermsURL: URL
     public let dimensions: String
-    public let duration: String
-    public let framesPerSecond: Double
+    public let duration: String?
+    public let framesPerSecond: Double?
     public let verifiedInstallCount: UInt64
     public var favoriteCount: UInt64
     public var saveCount: UInt64
@@ -122,8 +122,8 @@ public struct WALICatalogDetailPresentation: Identifiable, Equatable, Sendable {
         licenseName: String,
         licenseTermsURL: URL,
         dimensions: String,
-        duration: String,
-        framesPerSecond: Double,
+        duration: String?,
+        framesPerSecond: Double?,
         verifiedInstallCount: UInt64,
         favoriteCount: UInt64,
         saveCount: UInt64,

@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 077
+readonly INPUT=/work/input/source.bin OUTPUT=/work/output
+readonly POLICY=/opt/wali/policy/still-image-policy.json
+readonly CONTRACT=/opt/wali/bin/still-image-contract
+emit_failure() {
+  local code="${1:-canonicalization_failed}" status="${2:-65}"
+  case "$code" in
+    invalid_contract|policy_mismatch|credential_exposed|invalid_input_type|input_too_large|input_digest_mismatch|media_limits_exceeded|canonicalization_failed|output_quota_exceeded|image_color_profile_unsupported|invalid_image_orientation|animated_image_unsupported|unsupported_image_format|invalid_image_container|private_image_metadata|invalid_canonical_image) ;;
+    *) code=canonicalization_failed ;;
+  esac
+  if [[ -d "$OUTPUT" && ! -L "$OUTPUT" ]]; then
+    jq -n --arg attempt_id "${WALI_ATTEMPT_ID:-unknown}" --arg submission_id "${WALI_SUBMISSION_ID:-unknown}" \
+      --argjson generation "${WALI_GENERATION:-0}" --arg safe_code "$code" \
+      '{schema_version:1,attempt_id:$attempt_id,submission_id:$submission_id,generation:$generation,safe_code:$safe_code}' \
+      >"$OUTPUT/.failure.json.tmp" 2>/dev/null || true
+    mv -f -- "$OUTPUT/.failure.json.tmp" "$OUTPUT/failure.json" 2>/dev/null || true
+  fi
+  exit "$status"
+}
+trap 'status=$?; trap - ERR; emit_failure canonicalization_failed "$status"' ERR
+[[ "${WALI_MEDIA_KIND:-}" == still ]] || emit_failure invalid_contract
+[[ "${WALI_POLICY_DIGEST:-}" =~ ^[a-f0-9]{64}$ && "${WALI_INPUT_DIGEST:-}" =~ ^[a-f0-9]{64}$ ]] || emit_failure invalid_contract
+[[ "${WALI_ATTEMPT_ID:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ && "${WALI_SUBMISSION_ID:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || emit_failure invalid_contract
+[[ "${WALI_GENERATION:-}" =~ ^[1-9][0-9]{0,9}$ ]] || emit_failure invalid_contract
+(( WALI_GENERATION <= 2147483647 )) || emit_failure invalid_contract
+for secret in AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN SUPABASE_SERVICE_ROLE_KEY WALI_STORAGE_SECRET_KEY DATABASE_URL; do
+  [[ -z "${!secret:-}" ]] || emit_failure credential_exposed
+done
+[[ -f "$POLICY" && ! -L "$POLICY" && "$(sha256sum "$POLICY" | cut -d' ' -f1)" == "$WALI_POLICY_DIGEST" ]] || emit_failure policy_mismatch
+[[ -d "$OUTPUT" && ! -L "$OUTPUT" && ! -e "$OUTPUT/artifacts" && ! -e "$OUTPUT/frames" && ! -e "$OUTPUT/media-claim.json" ]] || emit_failure invalid_contract
+[[ -f "$INPUT" && ! -L "$INPUT" ]] || emit_failure invalid_input_type
+readonly INPUT_BYTES="$(stat -c '%s' "$INPUT")"
+(( INPUT_BYTES > 0 && INPUT_BYTES <= 134217728 )) || emit_failure input_too_large
+[[ "$(sha256sum "$INPUT" | cut -d' ' -f1)" == "$WALI_INPUT_DIGEST" ]] || emit_failure input_digest_mismatch
+if ! "$CONTRACT" inspect-source "$INPUT" >/tmp/source-image.json 2>/tmp/image-error; then
+  emit_failure "$(cat /tmp/image-error)"
+fi
+readonly FORMAT="$(jq -er '.format' /tmp/source-image.json)"
+readonly ORIENTATION="$(jq -er '.orientation' /tmp/source-image.json)"
+readonly WIDTH="$(jq -er '.width' /tmp/source-image.json)" HEIGHT="$(jq -er '.height' /tmp/source-image.json)"
+case "$FORMAT" in png) DEMUXER=png_pipe ;; jpeg) DEMUXER=jpeg_pipe ;; *) emit_failure unsupported_image_format ;; esac
+case "$ORIENTATION" in
+  1) ROTATION='' ;; 2) ROTATION=',hflip' ;; 3) ROTATION=',hflip,vflip' ;; 4) ROTATION=',vflip' ;;
+  5) ROTATION=',transpose=cclock_flip' ;; 6) ROTATION=',transpose=clock' ;;
+  7) ROTATION=',transpose=clock_flip' ;; 8) ROTATION=',transpose=cclock' ;; *) emit_failure invalid_image_orientation ;;
+esac
+mkdir -- "$OUTPUT/artifacts" "$OUTPUT/frames"
+# Full bounded decode; apply the inspected orientation explicitly once. Use
+# 16-bit intermediate alpha arithmetic to preserve fully opaque 8-bit values.
+# The final raster stays RGB8; intermediate allocation is bounded at 256 MiB.
+ALPHA_FILTER=format=rgb24
+if [[ "$(jq -r ' .has_alpha' /tmp/source-image.json)" == true ]]; then
+  ALPHA_FILTER='format=gbrap16le,premultiply=inplace=1,format=rgb24'
+fi
+ffmpeg -nostdin -hide_banner -loglevel error -filter_threads 2 -threads 1 -xerror -max_alloc 268435456 -err_detect explode \
+  -noautorotate -f "$DEMUXER" -i "$INPUT" -map 0:v:0 -an -sn -dn -map_metadata -1 -map_chapters -1 \
+  -vf "${ALPHA_FILTER}${ROTATION}" -frames:v 1 -pix_fmt rgb24 -c:v png \
+  -threads 1 -f image2 /tmp/master-encoded.png || emit_failure canonicalization_failed
+"$CONTRACT" canonicalize-png /tmp/master-encoded.png "$OUTPUT/artifacts/image-default.png" 2>/tmp/image-error \
+  || emit_failure "$(cat /tmp/image-error)"
+"$CONTRACT" inspect-canonical "$OUTPUT/artifacts/image-default.png" >/tmp/master-image.json || emit_failure invalid_canonical_image
+EXPECTED_WIDTH=$WIDTH EXPECTED_HEIGHT=$HEIGHT
+if (( ORIENTATION >= 5 )); then EXPECTED_WIDTH=$HEIGHT EXPECTED_HEIGHT=$WIDTH; fi
+[[ "$(jq -r '.width' /tmp/master-image.json)" == "$EXPECTED_WIDTH" && "$(jq -r '.height' /tmp/master-image.json)" == "$EXPECTED_HEIGHT" ]] || emit_failure invalid_canonical_image
+readonly MASTER="$OUTPUT/artifacts/image-default.png"
+for role in poster thumbnail sample; do
+  case "$role" in
+    poster) filter='scale=min(1920\,iw):min(1920\,ih):force_original_aspect_ratio=decrease'; target="$OUTPUT/artifacts/poster.jpg" ;;
+    thumbnail) filter='scale=512:512:force_original_aspect_ratio=increase,crop=512:512'; target="$OUTPUT/artifacts/thumbnail.jpg" ;;
+    sample) filter='scale=384:224:force_original_aspect_ratio=decrease,pad=384:224:(ow-iw)/2:(oh-ih)/2'; target="$OUTPUT/frames/frame-001.jpg" ;;
+  esac
+  ffmpeg -nostdin -hide_banner -loglevel error -filter_threads 2 -threads 1 -xerror -max_alloc 134217728 -err_detect explode -noautorotate \
+    -f png_pipe -i "$MASTER" -map 0:v:0 -an -sn -dn -map_metadata -1 -map_chapters -1 \
+    -vf "$filter" -frames:v 1 -c:v mjpeg -pix_fmt yuvj420p -q:v 2 -threads 1 -f image2 "/tmp/${role}-encoded.jpg" \
+    || emit_failure canonicalization_failed
+  "$CONTRACT" canonicalize-jpeg "/tmp/${role}-encoded.jpg" "$target" 2>/tmp/image-error || emit_failure "$(cat /tmp/image-error)"
+done
+artifact_record() {
+  local role=$1 path=$2 type=$3 codec=$4 pixel=$5 color=$6 bound=$7 file="$OUTPUT/$2"
+  local bytes digest probe="/tmp/${role}-record.json"
+  bytes="$(stat -c '%s' "$file")"; (( bytes > 0 && bytes <= bound )) || emit_failure output_quota_exceeded
+  "$CONTRACT" inspect-canonical "$file" >"$probe" || emit_failure invalid_canonical_image
+  digest="$(sha256sum "$file" | cut -d' ' -f1)"
+  jq -n --arg role "$role" --arg relative_path "$path" --arg media_type "$type" --arg codec "$codec" \
+    --arg pixel_format "$pixel" --arg color_space "$color" --arg digest "$digest" --argjson byte_count "$bytes" \
+    --argjson width "$(jq -r '.width' "$probe")" --argjson height "$(jq -r '.height' "$probe")" \
+    '{role:$role,relative_path:$relative_path,media_type:$media_type,codec:$codec,pixel_format:$pixel_format,color_space:$color_space,digest:$digest,byte_count:$byte_count,width:$width,height:$height,duration_ms:0,frame_rate_numerator:0,frame_rate_denominator:1,has_audio:false}'
+}
+artifact_record image_default artifacts/image-default.png image/png png rgb24 srgb 134217728 >/tmp/artifact-1.json
+artifact_record poster artifacts/poster.jpg image/jpeg mjpeg yuvj420p bt470bg 16777216 >/tmp/artifact-2.json
+artifact_record thumbnail artifacts/thumbnail.jpg image/jpeg mjpeg yuvj420p bt470bg 16777216 >/tmp/artifact-3.json
+artifact_record sample frames/frame-001.jpg image/jpeg mjpeg yuvj420p bt470bg 16777216 >/tmp/sample-artifact.json
+jq '{ordinal:1,relative_path,digest,byte_count,width,height}' /tmp/sample-artifact.json >/tmp/sample-frame.json
+jq -s '.' /tmp/artifact-{1,2,3}.json >/tmp/artifacts.json
+jq -e 'all(.[]; if .role=="poster" then .width<=1920 and .height<=1920 elif .role=="thumbnail" then .width==512 and .height==512 else true end)' /tmp/artifacts.json >/dev/null || emit_failure invalid_canonical_image
+jq -e '.width==384 and .height==224' /tmp/sample-frame.json >/dev/null || emit_failure invalid_canonical_image
+readonly TOTAL_BYTES="$(jq -s '([.[0][].byte_count] + [.[1].byte_count]) | add' /tmp/artifacts.json /tmp/sample-frame.json)"
+(( TOTAL_BYTES <= 201326592 )) || emit_failure output_quota_exceeded
+jq -n --arg attempt_id "$WALI_ATTEMPT_ID" --arg submission_id "$WALI_SUBMISSION_ID" --argjson generation "$WALI_GENERATION" \
+  --arg policy_digest "$WALI_POLICY_DIGEST" --arg input_digest "$WALI_INPUT_DIGEST" --slurpfile artifacts /tmp/artifacts.json --slurpfile frames /tmp/sample-frame.json \
+  '{schema_version:2,media_kind:"still",kind:"media",attempt_id:$attempt_id,submission_id:$submission_id,generation:$generation,policy_digest:$policy_digest,input_digest:$input_digest,artifacts:$artifacts[0],sample_frames:$frames,encoder_build:"ffmpeg-7.1.2-kvazaar-2.3.1",safe_code:"ok"}' \
+  >"$OUTPUT/.media-claim.json.tmp"
+mv -- "$OUTPUT/.media-claim.json.tmp" "$OUTPUT/media-claim.json"
+trap - ERR

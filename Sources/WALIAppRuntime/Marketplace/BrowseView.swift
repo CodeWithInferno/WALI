@@ -4,11 +4,13 @@ import WALIUI
 
 struct BrowseView: View {
     @Bindable var marketplace: WALIMarketplaceModel
+    @Bindable var discovery: CatalogDiscoveryModel
     @Binding var sort: CatalogBrowseSort
     let query: String
     let onLoad: (CatalogBrowseSort) -> Void
     let onOpen: (String) -> Void
     let onLoadMore: () -> Void
+    var onRetryTaxonomy: () -> Void = {}
 
     private var normalizedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var isSearching: Bool { !normalizedQuery.isEmpty }
@@ -16,7 +18,33 @@ struct BrowseView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             WALIPageHeader(isSearching ? "Search Results" : "Browse") {
-                if !isSearching { CatalogFiltersView(sort: $sort) }
+                CatalogFiltersView(sort: $sort)
+            }
+            HStack(spacing: 12) {
+                Picker("Category", selection: $discovery.selectedCategory) {
+                    Text("All Categories").tag(String?.none)
+                    ForEach(discovery.categories) { category in
+                        Text(category.name).tag(Optional(category.slug))
+                    }
+                }.frame(maxWidth: 260)
+                Menu {
+                    ForEach(discovery.tags) { tag in
+                        Toggle(tag.name, isOn: Binding(get: { discovery.selectedTags.contains(tag.slug) }, set: { selected in
+                            if selected && discovery.selectedTags.count < 10 { discovery.selectedTags.insert(tag.slug) }
+                            else if !selected { discovery.selectedTags.remove(tag.slug) }
+                        }))
+                        .disabled(discovery.selectedTags.count >= 10 && !discovery.selectedTags.contains(tag.slug))
+                    }
+                    if !discovery.selectedTags.isEmpty { Button("Clear Tags") { discovery.selectedTags = [] } }
+                } label: {
+                    Label(discovery.selectedTags.isEmpty ? "Tags" : "\(discovery.selectedTags.count) Tags", systemImage: "line.3.horizontal.decrease")
+                }.disabled(discovery.tags.isEmpty)
+                if discovery.taxonomyState == .loading { ProgressView().controlSize(.small) }
+                Spacer()
+            }.padding(.horizontal, 20).padding(.bottom, 12)
+            if discovery.taxonomyState != .loading && discovery.taxonomyState != .ready {
+                Button("Reload Categories", action: onRetryTaxonomy)
+                    .padding(.horizontal, 20).padding(.bottom, 12)
             }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -24,6 +52,8 @@ struct BrowseView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { onLoad(sort) }
         .onChange(of: sort) { _, value in onLoad(value) }
+        .onChange(of: discovery.selectedCategory) { _, _ in onLoad(sort) }
+        .onChange(of: discovery.selectedTags) { _, _ in onLoad(sort) }
         .accessibilityIdentifier("WALI.Marketplace.Browse")
     }
 
@@ -36,6 +66,17 @@ struct BrowseView: View {
         case .empty:
             if isSearching {
                 ContentUnavailableView.search(text: normalizedQuery)
+            } else if discovery.selectedCategory != nil || !discovery.selectedTags.isEmpty {
+                ContentUnavailableView {
+                    Label("No Matching Wallpapers", systemImage: "line.3.horizontal.decrease.circle")
+                } description: {
+                    Text("Try another category or remove some tags.")
+                } actions: {
+                    Button("Clear Filters") {
+                        discovery.selectedCategory = nil
+                        discovery.selectedTags = []
+                    }
+                }
             } else {
                 ContentUnavailableView("No Wallpapers Yet", systemImage: "photo.on.rectangle.angled")
             }
@@ -115,11 +156,16 @@ struct CatalogSearchView: View {
 
 struct BrowseBentoTile: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     let card: WALICatalogCardPresentation
     let onOpen: () -> Void
 
     @State private var isHovering = false
     @State private var showsPreview = false
+    @State private var previewTask: Task<Void, Never>?
+
+    @FocusState private var isFocused: Bool
 
     private var artworkAspect: CGFloat {
         WALIBrowseLayout.artworkAspect(width: card.pixelWidth, height: card.pixelHeight)
@@ -133,7 +179,7 @@ struct BrowseBentoTile: View {
                     posterMedia
                 }
                 .overlay(alignment: .bottom) {
-                    if isHovering {
+                    if isHovering || isFocused {
                         hoverCaption
                     }
                 }
@@ -143,25 +189,18 @@ struct BrowseBentoTile: View {
                 .contentShape(RoundedRectangle(cornerRadius: WALIBrowseLayout.cornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            isHovering = hovering
-            guard !reduceMotion else { return }
-            if hovering {
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(350))
-                    guard isHovering else { return }
-                    showsPreview = true
-                }
-            } else {
-                showsPreview = false
-            }
+        .focused($isFocused)
+        .onHover(perform: updateHover)
+        .onDisappear { previewTask?.cancel(); showsPreview = false; isHovering = false }
+        .onChange(of: reduceMotion) { _, reduced in
+            if reduced { previewTask?.cancel(); showsPreview = false }
         }
-        .accessibilityLabel("\(card.title), published by \(card.creator), \(card.verifiedInstallCount) verified installs")
+        .accessibilityLabel("\(card.title), published by \(card.creator), \(card.verifiedInstallCount) downloads")
     }
 
     private var hoverCaption: some View {
         LinearGradient(
-            colors: [.clear, .black.opacity(0.72)],
+            colors: [.clear, .black.opacity(reduceTransparency || contrast == .increased ? 1 : 0.82)],
             startPoint: .top,
             endPoint: .bottom
         )
@@ -183,13 +222,25 @@ struct BrowseBentoTile: View {
         .allowsHitTesting(false)
     }
 
+    private func updateHover(_ hovering: Bool) {
+        previewTask?.cancel()
+        isHovering = hovering
+        showsPreview = false
+        guard hovering, !reduceMotion else { return }
+        previewTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, isHovering, !reduceMotion else { return }
+            showsPreview = true
+        }
+    }
+
     @ViewBuilder
     private var posterMedia: some View {
         if showsPreview, !reduceMotion, let previewURL = card.previewURL {
             LoopingVideoView(url: previewURL, cornerRadius: WALIBrowseLayout.cornerRadius)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let posterURL = card.posterURL {
-            AsyncImage(url: posterURL, transaction: .init(animation: .smooth)) { phase in
+            AsyncImage(url: posterURL, transaction: .init(animation: reduceMotion ? nil : .smooth)) { phase in
                 switch phase {
                 case let .success(image):
                     image.resizable().scaledToFill()
@@ -216,12 +267,15 @@ struct BrowseBentoTile: View {
 
 struct CatalogCardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     let card: WALICatalogCardPresentation
     var artworkAspect: CGFloat = WALIPosterLayout.aspectRatio
     let onOpen: () -> Void
 
     @State private var isHovering = false
     @State private var showsPreview = false
+    @State private var previewTask: Task<Void, Never>?
 
     var body: some View {
         Button(action: onOpen) {
@@ -245,7 +299,7 @@ struct CatalogCardView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .foregroundStyle(.white)
-                    .background(.black.opacity(0.45), in: Capsule())
+                    .background(.black.opacity(reduceTransparency || contrast == .increased ? 1 : 0.72), in: Capsule())
                     .padding(8)
                 }
 
@@ -265,21 +319,25 @@ struct CatalogCardView: View {
         }
         .buttonStyle(.plain)
         .scaleEffect(isHovering && !reduceMotion ? 1.02 : 1)
-        .animation(.smooth(duration: 0.18), value: isHovering)
-        .onHover { hovering in
-            isHovering = hovering
-            guard !reduceMotion else { return }
-            if hovering {
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(320))
-                    guard isHovering else { return }
-                    showsPreview = true
-                }
-            } else {
-                showsPreview = false
-            }
+        .animation(reduceMotion ? nil : .smooth(duration: 0.18), value: isHovering)
+        .onHover(perform: updateHover)
+        .onDisappear { previewTask?.cancel(); showsPreview = false; isHovering = false }
+        .onChange(of: reduceMotion) { _, reduced in
+            if reduced { previewTask?.cancel(); showsPreview = false }
         }
-        .accessibilityLabel("\(card.title), published by \(card.creator), \(card.verifiedInstallCount) verified installs")
+        .accessibilityLabel("\(card.title), published by \(card.creator), \(card.verifiedInstallCount) downloads")
+    }
+
+    private func updateHover(_ hovering: Bool) {
+        previewTask?.cancel()
+        isHovering = hovering
+        showsPreview = false
+        guard hovering, !reduceMotion else { return }
+        previewTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled, isHovering, !reduceMotion else { return }
+            showsPreview = true
+        }
     }
 
     @ViewBuilder
@@ -288,7 +346,7 @@ struct CatalogCardView: View {
             LoopingVideoView(url: previewURL, cornerRadius: WALIPosterLayout.cornerRadius)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let posterURL = card.posterURL {
-            AsyncImage(url: posterURL, transaction: .init(animation: .smooth)) { phase in
+            AsyncImage(url: posterURL, transaction: .init(animation: reduceMotion ? nil : .smooth)) { phase in
                 switch phase {
                 case let .success(image):
                     image.resizable().scaledToFill()

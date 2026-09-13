@@ -32,6 +32,7 @@ public struct WALIMenuBarScene: Scene {
     private var menuBarAccessibilityLabel: String {
         switch model.snapshot.renderer.state {
         case .playing: "WALI, playing"
+        case .displaying: "WALI, wallpaper displayed"
         case .automaticallyPaused: "WALI, automatically paused"
         case .userPaused: "WALI, paused"
         case .converting: "WALI, converting"

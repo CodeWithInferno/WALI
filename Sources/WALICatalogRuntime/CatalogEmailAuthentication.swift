@@ -59,6 +59,8 @@ protocol CatalogEmailAttemptTransport: Sendable {
 
 protocol CatalogSharedSessionAdapter: Sendable {
     func currentState() async -> CatalogAuthState?
+    /// Includes an expired stored session, which still needs scoped credential removal.
+    func currentSubjectID() async -> String?
     func changes() async -> AsyncStream<Void>
     func admit(_ candidate: CatalogEmailSessionCandidate) async throws -> CatalogAuthState
     func signOut() async throws

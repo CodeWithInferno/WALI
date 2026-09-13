@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "policy_id": "wali-still-v1",
+  "media_kind": "still",
+  "accepted_containers": ["jpeg", "png"],
+  "limits": {
+    "input_bytes": 134217728,
+    "output_bytes": 201326592,
+    "long_edge": 7680,
+    "pixels": 33177600,
+    "decoded_bytes": 134217728,
+    "sample_frames": 1,
+    "png_chunks": 16384,
+    "jpeg_markers": 16384
+  },
+  "required_artifact_roles": ["thumbnail", "poster", "image_default"],
+  "canonical": {
+    "master_codec": "png",
+    "pixel_format": "rgb24",
+    "color_space": "srgb",
+    "input_profile": "standard_srgb_or_untagged_assumed_srgb",
+    "embedded_icc": "reject_convert_to_srgb",
+    "input_bit_depth": 8,
+    "orientation": "apply_exif_1_through_8",
+    "alpha": "flatten_over_black",
+    "metadata": "stripped",
+    "poster_long_edge": 1920,
+    "thumbnail_width": 512,
+    "thumbnail_height": 512,
+    "sample_width": 384,
+    "sample_height": 224
+  }
+}

@@ -12,7 +12,7 @@ private final class ReplyBox: @unchecked Sendable {
     }
 }
 
-private final class AgentServiceEndpoint: NSObject, WALIAgentXPCProtocol, @unchecked Sendable {
+final class AgentServiceEndpoint: NSObject, WALIAgentXPCProtocol, @unchecked Sendable {
     private let handler: AgentRequestHandler
     private let afterQuitReply: (@Sendable () async -> Void)?
 
@@ -34,12 +34,14 @@ private final class AgentServiceEndpoint: NSObject, WALIAgentXPCProtocol, @unche
         Task {
             let response = await handler(request)
             do {
+                guard response.requestID == request.requestID,
+                      response.protocolVersion == WALIProtocol.currentVersion else {
+                    throw WireCodecError.invalidEnvelope
+                }
                 replyBox.reply(try WireCodec.encodeResponse(response), nil)
-                #if WALI_APP_STORE
                 if case .quit = request.command, case .snapshot = response.result {
                     await afterQuitReply?()
                 }
-                #endif
             } catch {
                 replyBox.reply(nil, error as NSError)
             }

@@ -5,8 +5,10 @@ IFS=$'\n\t'
 readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 run_static_checks() {
-  bash -n "$ROOT/bin/process-media" "$ROOT/bin/verify-media"
+  bash -n "$ROOT/bin/process-media" "$ROOT/bin/verify-media" "$ROOT/bin/process-still" "$ROOT/bin/verify-still"
   python3 -m json.tool "$ROOT/policy/ffmpeg-policy.json" >/dev/null
+  python3 -m json.tool "$ROOT/policy/still-image-policy.json" >/dev/null
+  python3 -m unittest discover -s "$ROOT/tests" -p test_still_contract.py
   python3 "$ROOT/../../Tests/Release/media-license-tests.py" --source-root "$ROOT"
   grep -q -- '--disable-network' "$ROOT/Containerfile"
   grep -q -- '--disable-gpl' "$ROOT/Containerfile"
@@ -98,6 +100,9 @@ run_static_checks
 bash "$ROOT/../../Tests/Worker/process-media-encode-contract-tests.sh"
 if [[ "${1:-}" == "--runtime" ]]; then
   run_runtime_corpus
+elif [[ "${1:-}" == "--still-runtime" ]]; then
+  : "${WALI_STILL_TEST_IMAGE:?set an exact local Docker image ID for still pixel tests}"
+  python3 -m unittest discover -s "$ROOT/tests" -p test_still_pipeline.py
 else
   echo "static sandbox contract checks passed; runtime corpus requires --runtime and WALI_SANDBOX_IMAGE"
 fi

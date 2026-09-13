@@ -57,7 +57,27 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	storageClient, err := storage.NewClient(cfg.StorageURL, cfg.StoragePublishableKey, cfg.StorageWorkerToken, &http.Client{Timeout: 15 * time.Minute})
+	var storageClient *storage.Client
+	var storageReady func(context.Context) error
+	var staticMediaReady func(context.Context) error
+	httpClient := &http.Client{Timeout: 15 * time.Minute}
+	if cfg.StorageAuthMode == config.StorageAuthDatabaseRenewal {
+		issuer, issuerErr := storage.NewDatabaseCredentialIssuer(database)
+		if issuerErr != nil {
+			return issuerErr
+		}
+		credentials, credentialErr := storage.NewCredentialCache(ctx, issuer, cfg.WorkerID, cfg.StorageURL, time.Now)
+		if credentialErr != nil {
+			return credentialErr
+		}
+		storageClient, err = storage.NewClientWithTokenSource(cfg.StorageURL, cfg.StoragePublishableKey, credentials, httpClient)
+		storageReady = credentials.Ready
+	} else {
+		storageClient, err = storage.NewClient(cfg.StorageURL, cfg.StoragePublishableKey, cfg.StorageWorkerToken, httpClient)
+		if err == nil {
+			staticMediaReady, err = config.NewStaticMediaAdmission(cfg.StorageWorkerToken, cfg.WorkerID, time.Now)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -85,7 +105,7 @@ func run(logger *slog.Logger) error {
 		Classifier: activeClassifier, Classification: attempts, Cleanup: cleanup,
 		ScratchRoot: cfg.ScratchRoot, MediaImage: cfg.MediaImage,
 		VerifierImage: cfg.VerifierImage, HeartbeatInterval: cfg.HeartbeatInterval,
-		LeaseDuration: cfg.LeaseDuration, PolicyDigest: cfg.MediaPolicyDigest,
+		LeaseDuration: cfg.LeaseDuration, PolicyDigest: cfg.MediaPolicyDigest, StillPolicyDigest: cfg.StillPolicyDigest,
 	})
 	if err != nil {
 		return err
@@ -110,12 +130,32 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	backend, err := queue.NewPGMQBackend(database)
+	pgmqBackend, err := queue.NewPGMQBackend(database)
+	if cfg.StillPolicyDigest != "" {
+		pgmqBackend, err = queue.NewPGMQBackendV2(database)
+	}
 	if err != nil {
 		return err
 	}
+	var backend queue.Backend = pgmqBackend
+	if storageReady != nil {
+		backend, err = queue.NewStorageGatedBackend(backend, storageReady)
+		if err != nil {
+			return err
+		}
+	}
+	if staticMediaReady != nil {
+		backend, err = queue.NewMediaAdmissionGatedBackend(backend, staticMediaReady)
+		if err != nil {
+			return err
+		}
+	}
+	readiness := storageReady
+	if staticMediaReady != nil {
+		readiness = staticMediaReady
+	}
 	metrics := health.NewMetrics()
-	healthHandler, err := health.NewHandler(metrics, databaseReadiness{database: database})
+	healthHandler, err := health.NewHandler(metrics, databaseReadiness{database: database, storageReady: readiness})
 	if err != nil {
 		return err
 	}
@@ -165,11 +205,18 @@ func run(logger *slog.Logger) error {
 }
 
 type databaseReadiness struct {
-	database *sql.DB
+	database     *sql.DB
+	storageReady func(context.Context) error
 }
 
 func (readiness databaseReadiness) Ready(ctx context.Context) error {
-	return readiness.database.PingContext(ctx)
+	if err := readiness.database.PingContext(ctx); err != nil {
+		return err
+	}
+	if readiness.storageReady != nil {
+		return readiness.storageReady(ctx)
+	}
+	return nil
 }
 
 type instrumentedProcessor struct {

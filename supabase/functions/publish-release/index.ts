@@ -1,6 +1,9 @@
+import {
+  signPublication,
+  validPublicationResponse,
+} from "../_shared/publication-signing.ts";
 import { EdgeError, success } from "../_shared/errors.ts";
 import {
-  buildSignedPublication,
   signCanonicalDocument,
   unpaddedBase64URL,
 } from "../_shared/manifest.ts";
@@ -95,18 +98,7 @@ export async function handlePublishRelease(
     if (isObject(prepared) && prepared.status === "promotion_pending") {
       throw new EdgeError("publication_promotion_pending", 409, true, 2);
     }
-    const keyID = Deno.env.get("WALI_CATALOG_SIGNING_KEY_ID");
-    const privateKey = Deno.env.get("WALI_CATALOG_SIGNING_PRIVATE_KEY_PKCS8");
-    const approvedCDNHost = Deno.env.get("WALI_APPROVED_CDN_HOST");
-    if (!keyID || !privateKey || !approvedCDNHost) {
-      throw new EdgeError("signing_key_unavailable", 503, true);
-    }
-    const signed = await buildSignedPublication(
-      prepared,
-      keyID,
-      privateKey,
-      approvedCDNHost,
-    );
+    const signature = await signPublication(prepared);
     const data = await dependencies.database.rpc<unknown>(
       "wali_edge_finalize_publication_v1",
       {
@@ -118,19 +110,15 @@ export async function handlePublishRelease(
         expected_revision: expectedRevision,
         expected_generation: expectedGeneration,
         expected_wallpaper_revision: expectedWallpaperRevision,
-        manifest_body: unpaddedBase64URL(signed.manifestBody),
-        metadata_body: unpaddedBase64URL(signed.metadataBody),
-        manifest_digest: signed.manifestDigest,
-        metadata_digest: signed.metadataDigest,
-        manifest_signature: unpaddedBase64URL(signed.signature),
-        signing_key_id: keyID,
+        ...signature,
       },
     );
     if (
       !isObject(data) || typeof data.wallpaper_id !== "string" ||
       typeof data.release_id !== "string" ||
       typeof data.edition !== "number" ||
-      data.manifest_digest !== signed.manifestDigest || data.key_id !== keyID ||
+      data.manifest_digest !== signature.manifest_digest ||
+      data.key_id !== signature.signing_key_id ||
       typeof data.wallpaper_revision !== "number" ||
       typeof data.published_at !== "string"
     ) {
@@ -261,21 +249,6 @@ async function handleIssueCatalogRevocation(
   } catch (error) {
     return safeFailure(API_VERSION, requestID, error);
   }
-}
-
-function validPublicationResponse(value: unknown): boolean {
-  return isObject(value) &&
-    typeof value.wallpaper_id === "string" &&
-    typeof value.release_id === "string" &&
-    Number.isSafeInteger(value.edition) && (value.edition as number) > 0 &&
-    typeof value.manifest_digest === "string" &&
-    /^[0-9a-f]{64}$/.test(value.manifest_digest) &&
-    typeof value.key_id === "string" &&
-    /^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/.test(value.key_id) &&
-    Number.isSafeInteger(value.wallpaper_revision) &&
-    (value.wallpaper_revision as number) > 0 &&
-    typeof value.published_at === "string" &&
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value.published_at);
 }
 
 function validRevocationResponse(

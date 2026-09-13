@@ -427,6 +427,10 @@ struct SupabaseSharedSession: CatalogSharedSessionAdapter {
         auth.currentSession.flatMap(SupabaseEmailAttempt.activeState)
     }
 
+    func currentSubjectID() async -> String? {
+        auth.currentSession?.user.id.uuidString.lowercased()
+    }
+
     func changes() async -> AsyncStream<Void> {
         let changes = auth.authStateChanges
         return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in

@@ -12,6 +12,7 @@ CONTEXT_FILES = (
     "Containerfile", "THIRD_PARTY_NOTICES.md", "LICENSE", "SOURCE-LICENSES.sha256",
     "patches/ffmpeg-7.1.2-libkvazaar-10bit.patch",
     "policy/ffmpeg-policy.json", "bin/process-media", "bin/verify-media",
+    "policy/still-image-policy.json", "bin/process-still", "bin/verify-still", "bin/still-image-contract.c",
 )
 ARCHIVE_MEMBERS = {
     "sources/ffmpeg-7.1.2.tar.xz": {

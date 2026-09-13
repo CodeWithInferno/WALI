@@ -1,4 +1,5 @@
 import AVKit
+import CoreGraphics
 import SwiftUI
 import WALICatalogRuntime
 
@@ -209,7 +210,10 @@ struct ReportReviewView: View {
     @Bindable var model: CreatorModerationModel
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer?
-    @State private var isLoadingVideo = false
+    @State private var isLoadingMedia = false
+    @State private var reviewImage: CGImage?
+    @State private var mediaGeneration: UInt64 = 0
+    @State private var loadedMediaIdentity: String?
     @State private var action: ModerationReportAction = .hidePendingReview
     @State private var reasonCode = "other"
     @State private var note = ""
@@ -238,21 +242,25 @@ struct ReportReviewView: View {
                                     Text(report.createdAt.formatted()).font(.caption).foregroundStyle(.secondary)
                                 }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
                             }
-                            GroupBox("Reported Video") {
-                                if let player {
+                            GroupBox("Reported Wallpaper") {
+                                if let reviewImage, loadedMediaIdentity == mediaIdentity {
+                                    Image(reviewImage, scale: 1, label: Text("Still wallpaper")).resizable().scaledToFit()
+                                        .frame(maxWidth: .infinity, maxHeight: 400)
+                                        .accessibilityLabel("Reported still wallpaper")
+                                } else if let player, loadedMediaIdentity == mediaIdentity {
                                     VideoPlayer(player: player)
                                         .aspectRatio(16 / 9, contentMode: .fit)
                                         .frame(maxHeight: 400)
                                         .accessibilityLabel("Reported wallpaper full video")
-                                } else if isLoadingVideo {
-                                    ProgressView("Preparing full video…")
+                                } else if isLoadingMedia {
+                                    ProgressView("Preparing wallpaper…")
                                         .frame(maxWidth: .infinity, minHeight: 140)
                                 } else {
                                     VStack(spacing: 8) {
-                                        Label("Video unavailable", systemImage: "play.slash")
-                                        Text("Return to Reports and refresh if the private video link has expired.")
+                                        Label("Wallpaper unavailable", systemImage: "photo.badge.exclamationmark")
+                                        Text("Return to Reports and refresh if the private media link has expired.")
                                             .font(.callout).foregroundStyle(.secondary)
-                                        Button("Try Again") { Task { await loadVideo() } }
+                                        Button("Try Again") { Task { await loadMedia() } }
                                     }.frame(maxWidth: .infinity, minHeight: 140)
                                 }
                             }
@@ -266,10 +274,11 @@ struct ReportReviewView: View {
             }
         }
         .navigationTitle("Review Report")
-        .task(id: report.id) {
+        .task(id: mediaIdentity) {
+            player?.pause(); player = nil; reviewImage = nil; isLoadingMedia = false
             model.prepareReport(report)
             reasonCode = Self.reasons.contains(report.reasonCode) ? report.reasonCode : "other"
-            await loadVideo()
+            await loadMedia()
         }
         .confirmationDialog(action.title, isPresented: $showsConfirmation) {
             Button(action.title, role: action == .delist ? .destructive : nil) {
@@ -280,11 +289,11 @@ struct ReportReviewView: View {
         } message: { Text(action.explanation) }
         .onDisappear {
             player?.pause()
-            player = nil
+            player = nil; reviewImage = nil; mediaGeneration &+= 1; isLoadingMedia = false
             model.finishReport(report)
         }
         .onChange(of: model.canShowReviewQueue) { _, permitted in
-            if !permitted { player?.pause(); player = nil; note = ""; hasReviewed = false }
+            if !permitted { player?.pause(); player = nil; reviewImage = nil; note = ""; hasReviewed = false }
         }
     }
 
@@ -346,13 +355,28 @@ struct ReportReviewView: View {
         return result.wallpaperStatus
     }
 
-    @MainActor private func loadVideo() async {
-        guard !isLoadingVideo else { return }
-        isLoadingVideo = true
-        defer { isLoadingVideo = false }
-        if let url = await model.loadReportVideo(report), !Task.isCancelled, model.canShowReviewQueue {
-            player?.pause()
-            player = AVPlayer(url: url)
+    private var mediaIdentity: String {
+        "\(report.id):\(report.revision):\(model.authorization.subjectID ?? "none"):\(model.authorization.moderatorGrantRevision ?? 0)"
+    }
+
+    @MainActor private func loadMedia() async {
+        guard !isLoadingMedia else { return }
+        mediaGeneration &+= 1
+        let generation = mediaGeneration
+        let authority = model.authorization
+        isLoadingMedia = true
+        defer { if generation == mediaGeneration { isLoadingMedia = false } }
+        guard let media = await model.loadReportMedia(report), !Task.isCancelled,
+              model.canShowReviewQueue, model.authorization == authority, generation == mediaGeneration
+        else { return }
+        switch media {
+        case .video(let url):
+            player?.pause(); reviewImage = nil; player = AVPlayer(url: url); loadedMediaIdentity = mediaIdentity
+        case .still(let source):
+            let image = try? await CreatorModerationImageLoader.shared.load(source)
+            guard !Task.isCancelled, model.canShowReviewQueue, model.authorization == authority,
+                  generation == mediaGeneration else { return }
+            player?.pause(); player = nil; reviewImage = image; loadedMediaIdentity = mediaIdentity
         }
     }
 
@@ -386,8 +410,11 @@ public struct SubmissionReviewView: View {
     @State private var creatorNote = ""
     @State private var privateNote = ""
     @State private var reviewPlayer: AVPlayer?
-    @State private var isLoadingVideo = false
-    @State private var reviewedFullVideo = false
+    @State private var isLoadingMedia = false
+    @State private var reviewImage: CGImage?
+    @State private var mediaGeneration: UInt64 = 0
+    @State private var loadedMediaIdentity: String?
+    @State private var reviewedFullMedia = false
     @State private var showsPublishConfirmation = false
 
     public init(
@@ -423,9 +450,10 @@ public struct SubmissionReviewView: View {
             }
         }
         .navigationTitle(item.proposedTitle)
-        .task(id: item.id) {
+        .task(id: mediaIdentity) {
+            reviewPlayer?.pause(); reviewPlayer = nil; reviewImage = nil; isLoadingMedia = false; reviewedFullMedia = false
             model.prepareReview(item)
-            await loadVideo()
+            await loadMedia()
         }
         .confirmationDialog("Publish this wallpaper?", isPresented: $showsPublishConfirmation) {
             Button("Publish Wallpaper") { Task { await model.publish(item) } }
@@ -434,53 +462,74 @@ public struct SubmissionReviewView: View {
         }
         .onDisappear {
             reviewPlayer?.pause()
-            reviewPlayer = nil
+            reviewPlayer = nil; reviewImage = nil; mediaGeneration &+= 1; isLoadingMedia = false
+            model.finishReview(item)
         }
         .onChange(of: model.canShowReviewQueue) { _, permitted in
             if !permitted {
                 reviewPlayer?.pause()
-                reviewPlayer = nil
-                reviewedFullVideo = false
+                reviewPlayer = nil; reviewImage = nil
+                reviewedFullMedia = false
             }
         }
     }
 
     @ViewBuilder
     private var canonicalPreview: some View {
-        GroupBox("Review Video") {
-            if let reviewPlayer {
+        GroupBox("Review Wallpaper") {
+            if let reviewImage, loadedMediaIdentity == mediaIdentity {
+                Image(reviewImage, scale: 1, label: Text("Still wallpaper")).resizable().scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: 440)
+                    .accessibilityLabel("Full still wallpaper")
+            } else if let reviewPlayer, loadedMediaIdentity == mediaIdentity {
                 VideoPlayer(player: reviewPlayer)
                 .frame(maxWidth: .infinity, maxHeight: 440)
                 .aspectRatio(16 / 9, contentMode: .fit)
                 .clipShape(.rect(cornerRadius: 12))
                 .accessibilityLabel("Full wallpaper video")
-            } else if isLoadingVideo {
-                ProgressView("Preparing full video…")
+            } else if isLoadingMedia {
+                ProgressView("Preparing wallpaper…")
                     .frame(maxWidth: .infinity, minHeight: 220)
             } else {
                 ContentUnavailableView {
-                    Label("Video couldn’t be loaded", systemImage: "play.slash")
+                    Label("Wallpaper couldn’t be loaded", systemImage: "photo.badge.exclamationmark")
                 } description: {
-                    Text("Refresh the queue if its private video link has expired.")
+                    Text("Refresh the queue if its private media link has expired.")
                 } actions: {
-                    Button("Try Again") { Task { await loadVideo() } }
+                    Button("Try Again") { Task { await loadMedia() } }
                 }
                     .frame(maxWidth: .infinity, minHeight: 220)
             }
-            Text("Watch the full video and check its content and rights before approving.")
+            Text("Review the complete wallpaper and its rights before approving. Play live wallpapers through their full duration.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .padding(.top, 8)
         }
     }
 
-    private func loadVideo() async {
-        guard !isLoadingVideo else { return }
-        isLoadingVideo = true
-        defer { isLoadingVideo = false }
-        let url = await model.loadReviewVideo(for: item)
-        guard !Task.isCancelled, model.canShowReviewQueue, let url else { return }
-        reviewPlayer = AVPlayer(url: url)
+    private var mediaIdentity: String {
+        "\(item.id):\(item.revision):\(item.generation):\(model.authorization.subjectID ?? "none"):\(model.authorization.moderatorGrantRevision ?? 0)"
+    }
+
+    private func loadMedia() async {
+        guard !isLoadingMedia else { return }
+        mediaGeneration &+= 1
+        let generation = mediaGeneration
+        let authority = model.authorization
+        isLoadingMedia = true
+        defer { if generation == mediaGeneration { isLoadingMedia = false } }
+        guard let media = await model.loadReviewMedia(for: item), !Task.isCancelled,
+              model.canShowReviewQueue, model.authorization == authority, generation == mediaGeneration
+        else { return }
+        switch media {
+        case .video(let url):
+            reviewPlayer?.pause(); reviewImage = nil; reviewPlayer = AVPlayer(url: url); loadedMediaIdentity = mediaIdentity
+        case .still(let source):
+            let image = try? await CreatorModerationImageLoader.shared.load(source)
+            guard !Task.isCancelled, model.canShowReviewQueue, model.authorization == authority,
+                  generation == mediaGeneration else { return }
+            reviewPlayer?.pause(); reviewPlayer = nil; reviewImage = image; loadedMediaIdentity = mediaIdentity
+        }
     }
 
     private var metadata: some View {
@@ -513,8 +562,8 @@ public struct SubmissionReviewView: View {
                     .font(.callout.monospacedDigit())
                 if let facts = item.mediaFacts {
                     LabeledContent("Media", value: "\(facts.width) × \(facts.height) · \(facts.codec)")
-                    LabeledContent("Frame rate", value: facts.frameRate.formatted())
-                    LabeledContent("Duration", value: "\(facts.durationMilliseconds) ms")
+                    if let frameRate = facts.frameRate { LabeledContent("Frame rate", value: frameRate.formatted()) }
+                    if let duration = facts.durationMilliseconds { LabeledContent("Duration", value: "\(duration) ms") }
                 }
                 ForEach(item.findings) { finding in
                     Label(finding.message, systemImage: finding.severity.reviewSymbol)
@@ -575,8 +624,8 @@ public struct SubmissionReviewView: View {
                     .lineLimit(2...6)
                 SecureField("Private moderator note (optional)", text: $privateNote)
                 if decision == .approved {
-                    Toggle("I reviewed the full video and its rights declaration", isOn: $reviewedFullVideo)
-                        .disabled(reviewPlayer == nil)
+                    Toggle("I reviewed the complete wallpaper and its rights declaration", isOn: $reviewedFullMedia)
+                        .disabled(loadedMediaIdentity != mediaIdentity || (reviewPlayer == nil && reviewImage == nil))
                 }
                 HStack {
                     if model.decisionState == .submitting { ProgressView().controlSize(.small) }
@@ -649,7 +698,7 @@ public struct SubmissionReviewView: View {
     private var canRecordDecision: Bool {
         model.decisionState != .submitting
             && model.decisionState != .succeeded
-            && (decision != .approved || (reviewPlayer != nil && reviewedFullVideo))
+            && (decision != .approved || (loadedMediaIdentity == mediaIdentity && (reviewPlayer != nil || reviewImage != nil) && reviewedFullMedia))
             && !selectedReasons.isEmpty
             && !creatorNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }

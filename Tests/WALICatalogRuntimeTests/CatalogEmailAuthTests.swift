@@ -84,6 +84,45 @@ final class CatalogEmailAuthTests: XCTestCase {
         XCTAssertNil(state)
     }
 
+    func testScopedSignOutRechecksSubjectAfterQueuedAdmission() async throws {
+        let fixture = AuthFixture()
+        let previousID = "11111111-1111-4111-8111-111111111111"
+        await fixture.shared.setState(CatalogAuthState(userID: previousID, expiresAt: .distantFuture))
+        let owner = UUID()
+        let attempt = try await fixture.authority.beginEmailSignIn(email: "second@example.com", ownerID: owner)
+        await fixture.shared.pauseAdmission()
+        let verification = Task {
+            try await fixture.authority.verifyEmailCode(code: "123456", attemptID: attempt.id, ownerID: owner) {}
+        }
+        await fixture.shared.admissionStarted.wait()
+        let signOut = Task { try await fixture.authority.signOut(expectedSubjectID: previousID) }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while await fixture.authority.queuedTransitionCount == 0, ContinuousClock.now < deadline { await Task.yield() }
+        let queued = await fixture.authority.queuedTransitionCount
+        XCTAssertGreaterThan(queued, 0)
+        await fixture.shared.resumeAdmission()
+        _ = try await verification.value
+        let signedOut = try await signOut.value
+        XCTAssertFalse(signedOut)
+        let count = await fixture.shared.signOuts
+        let current = await fixture.authority.currentState()
+        XCTAssertEqual(count, 0)
+        XCTAssertEqual(current, fixture.candidate.state)
+    }
+
+    func testScopedSignOutClearsOnlyMatchingSubjectAndHandlesAlreadySignedOut() async throws {
+        let fixture = AuthFixture()
+        await fixture.shared.setState(fixture.candidate.state)
+        let first = try await fixture.authority.signOut(expectedSubjectID: fixture.candidate.state.userID)
+        let count = await fixture.shared.signOuts
+        let repeated = try await fixture.authority.signOut(expectedSubjectID: fixture.candidate.state.userID)
+        let current = await fixture.authority.currentState()
+        XCTAssertTrue(first)
+        XCTAssertTrue(repeated)
+        XCTAssertEqual(count, 1)
+        XCTAssertNil(current)
+    }
+
     func testDetachedOwnerDiscardsLateRequestAndReplacementCanStart() async throws {
         let fixture = AuthFixture()
         let owner = UUID()
@@ -299,6 +338,8 @@ private actor FakeSharedSession: CatalogSharedSessionAdapter {
     private(set) var signOuts = 0
     private(set) var operations: [String] = []
     func currentState() async -> CatalogAuthState? { state }
+    func currentSubjectID() async -> String? { state?.userID }
+    func setState(_ state: CatalogAuthState?) { self.state = state }
     func changes() async -> AsyncStream<Void> { AsyncStream { $0.yield(()) } }
     func pauseAdmission() { admissionPause = AuthSignal() }
     func resumeAdmission() async { await admissionPause?.signal(); admissionPause = nil }

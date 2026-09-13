@@ -105,6 +105,10 @@ jobs:
       - run: supabase start
       - run: supabase db reset --local
       - run: supabase test db
+      - name: Verify Storage renewal with a real restricted local login
+        run: |
+          python3 Tests/Backend/worker-storage-renewal-harness-tests.py
+          python3 Tests/Backend/worker-storage-renewal-tests.py --project-id wali-marketplace-local
       - run: supabase db lint --local --level warning --fail-on error
       - run: deno fmt --check supabase/functions
       - run: deno check supabase/functions/*/index.ts supabase/functions/tests/*.ts

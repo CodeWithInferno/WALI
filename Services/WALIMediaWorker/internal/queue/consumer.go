@@ -333,6 +333,7 @@ func runLoop(ctx context.Context, idleDelay time.Duration, runOnce func(context.
 
 type PGMQBackend struct {
 	database *sql.DB
+	mediaV2  bool
 }
 
 type databaseRoleSession interface {
@@ -389,11 +390,25 @@ func NewPGMQBackend(database *sql.DB) (*PGMQBackend, error) {
 	return &PGMQBackend{database: database}, nil
 }
 
+// NewPGMQBackendV2 opts this binary into version 2 still jobs. Older binaries
+// continue using the SQL reader that filters unsupported versions before lease.
+func NewPGMQBackendV2(database *sql.DB) (*PGMQBackend, error) {
+	b, err := NewPGMQBackend(database)
+	if err == nil {
+		b.mediaV2 = true
+	}
+	return b, err
+}
+
 func (b *PGMQBackend) Read(ctx context.Context, queueName string, visibility time.Duration) (Message, bool, error) {
 	var message Message
 	var body []byte
+	query := `select msg_id, message, vt from wali.worker_queue_read($1, $2)`
+	if b.mediaV2 {
+		query = `select msg_id, message, vt from wali.worker_queue_read_v2($1, $2)`
+	}
 	err := b.database.QueryRowContext(ctx,
-		`select msg_id, message, vt from wali.worker_queue_read($1, $2)`,
+		query,
 		queueName, int(visibility.Seconds()),
 	).Scan(&message.ID, &body, &message.VisibleUntil)
 	if errors.Is(err, sql.ErrNoRows) {

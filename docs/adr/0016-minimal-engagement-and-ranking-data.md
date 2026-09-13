@@ -1,10 +1,15 @@
 # 0016: Collect only explicit marketplace engagement for ranking
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-09-01
 - owner_role: catalog_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner AFK marketplace implementation directive 2026-09-01
+
+- superseded_by: 0025
+- superseded_scope: displayed_engagement_totals,explicit_category_preferences
+
+The scoped clauses identified above are superseded by [ADR 0025](0025-public-creator-and-catalog-flows.md). The original decision text is retained below.
 
 ## Context
 

@@ -72,8 +72,12 @@ enum ContentStorage {
         under root: URL,
         into destinationDirectory: URL,
         expectedDigest: ContentDigest,
-        expectedByteCount: UInt64
+        expectedByteCount: UInt64,
+        mediaKind: WallpaperMediaKind = .video
     ) throws -> URL {
+        guard expectedByteCount > 0,
+              mediaKind != .still || expectedByteCount <= 128 * 1_024 * 1_024
+        else { throw StorageError.invalidCandidate }
         try requireDirectoryWithoutSymlink(root)
         try requireDirectoryWithoutSymlink(destinationDirectory)
         guard url.standardizedFileURL.deletingLastPathComponent() == root.standardizedFileURL,
@@ -131,7 +135,7 @@ enum ContentStorage {
             throw StorageError.ioFailure(String(cString: strerror(errno)))
         }
         defer { close(destinationDescriptor) }
-        let fileName = "catalog-source.mp4"
+        let fileName = mediaKind == .still ? "catalog-source.png" : "catalog-source.mp4"
         let destination = destinationDirectory.appendingPathComponent(fileName, isDirectory: false)
         let output = openat(
             destinationDescriptor,
@@ -357,20 +361,53 @@ enum ContentStorage {
                 ),
                 durationSeconds: duration
             )
-        case .heicImage:
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  CGImageSourceGetCount(source) == 1,
-                  let type = CGImageSourceGetType(source),
-                  UTType(type as String)?.conforms(to: .heic) == true,
-                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-            else {
+        case .pngImage:
+            do {
+                let image = try await StaticWallpaperImageLoader.shared.load(url)
+                return VerifiedMedia(pixelSize: try PixelSize(width: UInt32(image.width), height: UInt32(image.height)), durationSeconds: nil)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
                 throw StorageError.unsupportedMedia
             }
-            return VerifiedMedia(
-                pixelSize: try PixelSize(width: UInt32(image.width), height: UInt32(image.height)),
-                durationSeconds: nil
-            )
+        case .heicImage:
+            return try verifyHEICImage(at: url)
         }
+    }
+
+    /// Video posters historically retain the source dimensions. Their generic
+    /// decode boundary must not inherit the smaller still-poster policy, which
+    /// is enforced using verified dimensions when a still record is assembled.
+    static func verifyHEICImage(
+        at url: URL,
+        decode: ((CGImageSource) -> CGImage?)? = nil
+    ) throws -> VerifiedMedia {
+        let decode = decode ?? { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+        let maximumDimension = 16_384
+        let maximumPixels = 33_177_600
+        let maximumDecodedBytes = 512 * 1_024 * 1_024
+        let fileValues = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard fileValues.isRegularFile == true, fileValues.isSymbolicLink != true,
+              let size = fileValues.fileSize, (1...16_777_216).contains(size),
+              let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+              CGImageSourceGetCount(source) == 1,
+              let type = CGImageSourceGetType(source),
+              UTType(type as String)?.conforms(to: .heic) == true,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              (1...maximumDimension).contains(width), (1...maximumDimension).contains(height),
+              width <= maximumPixels / height
+        else { throw StorageError.unsupportedMedia }
+        try Task.checkCancellation()
+        guard let image = decode(source),
+              image.width == width, image.height == height,
+              image.bytesPerRow <= maximumDimension * 16,
+              image.bytesPerRow <= maximumDecodedBytes / image.height
+        else { throw StorageError.unsupportedMedia }
+        try Task.checkCancellation()
+        return VerifiedMedia(pixelSize: try PixelSize(width: UInt32(image.width), height: UInt32(image.height)),
+                             durationSeconds: nil)
     }
 
     private static func isAerialMain10(_ description: CMFormatDescription) -> Bool {

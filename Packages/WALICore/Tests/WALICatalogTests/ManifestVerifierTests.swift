@@ -57,6 +57,41 @@ struct ManifestVerifierTests {
         #expect(verified.signedBytes == data)
     }
 
+    @Test("Verifies the still2.0 repository golden fixture byte for byte")
+    func verifiesStillGoldenFixture() throws {
+        let root = repositoryRoot()
+        let data = try Data(contentsOf: root.appending(path: "Fixtures/Catalog/manifest-still-v2.json"))
+        let signature = try String(
+            contentsOf: root.appending(path: "Fixtures/Catalog/manifest-still-v2.signature"),
+            encoding: .utf8
+        )
+        let publicKey = try #require(
+            Data(hex: "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+        )
+        let issuedAt = try parseCatalogTimestamp("2026-09-01T16:00:00Z")
+        let key = try TrustedCatalogSigningKey(
+            id: CatalogKeyID("catalog-test-2026-01"),
+            publicKey: publicKey,
+            validFrom: issuedAt.addingTimeInterval(-1),
+            validUntil: issuedAt.addingTimeInterval(1),
+            status: .active
+        )
+        let verifier = try ManifestVerifier(
+            trustedKeys: [key],
+            approvedCDNHosts: ["catalog.wali.example"]
+        )
+        let verified = try verifier.verify(
+            manifestData: data,
+            signatureBase64URL: signature,
+            context: CatalogVerificationContext(
+                wallpaperID: "11111111-1111-4111-8111-111111111111",
+                releaseID: "22222222-2222-4222-8222-222222222222",
+                metadataDigest: String(repeating: "e", count: 64)
+            )
+        )
+        #expect(verified.signedBytes == data)
+    }
+
     @Test("Rejects tampering and cross-release replay")
     func rejectsTamperAndReplay() throws {
         let fixture = try makeFixture()

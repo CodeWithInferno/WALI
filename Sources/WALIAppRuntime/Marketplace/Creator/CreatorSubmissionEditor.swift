@@ -71,7 +71,7 @@ public struct CreatorSubmissionEditor: View {
         _attributionText = State(initialValue: draft?.rights.attributionText ?? "")
         _proofObjectIDs = State(initialValue: draft?.rights.proofObjectIDs ?? [])
         _attestsRights = State(initialValue: draft?.rights.attestsRights ?? false)
-        _acceptsCurrentTerms = State(initialValue: false)
+        _acceptsCurrentTerms = State(initialValue: !currentTermsVersion.isEmpty)
     }
 
     public var body: some View {
@@ -80,7 +80,7 @@ public struct CreatorSubmissionEditor: View {
             submissionForm
         }
         .navigationTitle(title.isEmpty ? "Wallpaper Submission" : title)
-        .task(id: scenePhase) {
+        .task(id: ProcessingObservation(phase: scenePhase, generation: generation, state: state)) {
             guard scenePhase == .active else { return }
             await refreshProcessingWhileActive()
         }
@@ -108,10 +108,20 @@ public struct CreatorSubmissionEditor: View {
             }
             if state == .processingFailed {
                 Section {
-                    Label("This video couldn’t be prepared", systemImage: "exclamationmark.triangle")
-                    Text("Return to Creator Studio and upload another video to create a new submission.")
+                    Label("This wallpaper couldn’t be prepared", systemImage: "exclamationmark.triangle")
+                    Text("Your source file and credits are preserved. Retry processing without uploading the file again.")
                         .foregroundStyle(.secondary)
+                    Button("Retry Processing") { Task { await retryProcessing() } }
+                        .disabled(activity == .working)
                     Button("Back to Submissions") { dismiss() }
+                }
+            }
+            if state == .approved, processingStatus?.safeErrorCode != nil {
+                Section {
+                    Label("Publishing couldn’t finish", systemImage: "exclamationmark.triangle")
+                    Text("Your verified upload and credits are preserved. Retry the publication step.")
+                    Button("Retry Publishing") { Task { await retryPublication() } }
+                        .disabled(activity == .working)
                 }
             }
             Section("Your wallpaper details") {
@@ -139,8 +149,10 @@ public struct CreatorSubmissionEditor: View {
                                 }
                             }
                         ))
+                        .disabled(selectedTagIDs.count >= 20 && !selectedTagIDs.contains(tag.id))
                     }
                 }
+                .help("Choose up to 20 tags")
                 TextField("Content warning (optional)", text: $contentWarning, axis: .vertical)
                     .accessibilityLabel("Content warning (optional)")
                     .lineLimit(1...4)
@@ -166,7 +178,8 @@ public struct CreatorSubmissionEditor: View {
                 attestsRights: $attestsRights,
                 acceptsCurrentTerms: $acceptsCurrentTerms,
                 licenses: licenses,
-                currentTermsVersion: currentTermsVersion
+                currentTermsVersion: currentTermsVersion,
+                showTermsAcceptance: false
             )
             .disabled(activity == .working || !canEdit)
 
@@ -174,21 +187,28 @@ public struct CreatorSubmissionEditor: View {
                 HStack {
                     Spacer()
                     if activity == .working { ProgressView().controlSize(.small) }
-                    Button("Save Draft") { Task { await save() } }
-                        .disabled(activity == .working || !canEdit)
-                    Button("Submit for Review") { Task { await submit() } }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!canSubmit || activity == .working)
+                    if canEdit {
+                        Button("Save Draft") { Task { await save() } }.disabled(activity == .working)
+                        Button("Publish Changes") { Task { await submit() } }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!canSubmit || activity == .working)
+                    } else if state == .published {
+                        Label("Available in the catalog", systemImage: "checkmark.seal")
+                    } else if state.awaitsAutomaticPublication {
+                        Text("Processing and publication continue automatically.").foregroundStyle(.secondary)
+                    }
                 }
                 if case let .failed(code) = activity {
                     Label(failureMessage(for: code), systemImage: "exclamationmark.triangle")
                 } else if activity == .stale {
                     Label("This submission changed. Reopen it from Creator Studio before editing.", systemImage: "arrow.clockwise.circle")
+                    Button("Retry Processing") { Task { await retryProcessing() } }
+                        .disabled(activity == .working)
                     Button("Back to Submissions") { dismiss() }
                 } else if activity == .saved {
                     Label("Draft saved", systemImage: "checkmark.circle")
                 } else if activity == .submitted {
-                    Label("Submitted for review", systemImage: "checkmark.circle")
+                    Label("Publication requested", systemImage: "checkmark.circle")
                 }
             }
         }
@@ -242,7 +262,7 @@ public struct CreatorSubmissionEditor: View {
     }
 
     private var requirements: CreatorRightsRequirements {
-        rightsRequirements(basis: rightsBasis, license: licenses.first(where: { $0.id == licenseID }))
+        creatorRightsRequirements(basis: rightsBasis, license: licenses.first(where: { $0.id == licenseID }))
     }
 
     private var canSubmit: Bool {
@@ -340,7 +360,7 @@ public struct CreatorSubmissionEditor: View {
 
     private func refreshProcessingWhileActive() async {
         while !Task.isCancelled, generation > 0,
-              state == .processing || state == .uploaded {
+              state.awaitsAutomaticPublication {
             do {
                 let boundRevision = revision
                 let boundGeneration = generation
@@ -352,6 +372,9 @@ public struct CreatorSubmissionEditor: View {
                         processingStatus = status
                         revision = status.revision
                         state = status.state
+                        if state == .published {
+                            didChange(.init(submissionID: submissionID, revision: revision, generation: generation, state: state))
+                        }
                     }
                 }
                 try await Task.sleep(for: .seconds(5))
@@ -366,6 +389,41 @@ public struct CreatorSubmissionEditor: View {
         }
     }
 
+    private func retryProcessing() async {
+        guard state == .processingFailed, activity != .working else { return }
+        let boundRevision = revision
+        let boundGeneration = generation
+        activity = .working
+        do {
+            let result = try await gateway.retryProcessing(.init(
+                submissionID: submissionID, expectedRevision: boundRevision,
+                idempotencyKey: UUID().uuidString.lowercased()
+            ))
+            try Task.checkCancellation()
+            guard revision == boundRevision, generation == boundGeneration else { return }
+            processingStatus = nil
+            apply(result)
+            activity = .idle
+        } catch { present(error) }
+    }
+
+    private func retryPublication() async {
+        guard state == .approved, activity != .working else { return }
+        let boundRevision = revision
+        let boundGeneration = generation
+        activity = .working
+        do {
+            let result = try await gateway.retryPublication(.init(
+                submissionID: submissionID, expectedRevision: boundRevision,
+                idempotencyKey: UUID().uuidString.lowercased()
+            ))
+            try Task.checkCancellation()
+            guard revision == boundRevision, generation == boundGeneration else { return }
+            apply(result)
+            activity = .idle
+        } catch { present(error) }
+    }
+
     private func failureMessage(for code: String) -> String {
         switch code {
         case "invalid_request": "Check the title, category, license, and rights declaration, then try again."
@@ -373,6 +431,8 @@ public struct CreatorSubmissionEditor: View {
         case "invalid_remote_response": "WALI couldn’t read the service response. Reopen the submission before trying again."
         case "creator_terms_stale": "The Creator Terms have changed. Return to Creator Studio and review the current terms."
         case "creator_access_expired", "creator_terms_required": "Creator access needs to be refreshed. Return to Creator Studio and review your account."
+        case "processing_retry_limit_reached": "This source has reached its processing retry limit. Choose another file to create a new submission."
+        case "upload_source_unavailable": "The original upload is no longer available. Choose the source file to create a new submission."
         case "rate_limited": "Too many requests. Wait a few minutes and try again."
         default: "The submission couldn’t be updated. Your edits are still here. Try again."
         }
@@ -408,6 +468,12 @@ public struct CreatorSubmissionEditor: View {
     }
 }
 
+private struct ProcessingObservation: Equatable {
+    let phase: ScenePhase
+    let generation: UInt64
+    let state: CreatorSubmissionState
+}
+
 private enum EditorActivity: Equatable {
     case idle
     case working
@@ -427,19 +493,23 @@ public struct ProcessingStatusView: View {
     }
 
     public var body: some View {
-        GroupBox("Video processing") {
+        GroupBox("Publication progress") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Label(state.displayName, systemImage: state.symbolName)
                 }
-                if state == .processing || state == .uploaded {
-                    ProgressView("Preparing your wallpaper…")
+                if state.awaitsAutomaticPublication, status.safeErrorCode == nil {
+                    ProgressView(state == .approved ? "Publishing your wallpaper…" : "Preparing your wallpaper…")
                         .controlSize(.small)
                 }
                 if let facts = status.mediaFacts {
                     LabeledContent("Detected media", value: "\(facts.width) × \(facts.height) · \(facts.codec)")
-                    LabeledContent("Frame rate", value: facts.frameRate.formatted(.number.precision(.fractionLength(0...2))))
-                    LabeledContent("Duration", value: Duration.milliseconds(facts.durationMilliseconds).formatted(.time(pattern: .minuteSecond)))
+                    if let frameRate = facts.frameRate {
+                        LabeledContent("Frame rate", value: frameRate.formatted(.number.precision(.fractionLength(0...2))))
+                    }
+                    if let duration = facts.durationMilliseconds {
+                        LabeledContent("Duration", value: Duration.milliseconds(duration).formatted(.time(pattern: .minuteSecond)))
+                    }
                 }
                 if status.duplicateWarning {
                     Label("Possible duplicate content detected", systemImage: "rectangle.on.rectangle")
@@ -448,7 +518,10 @@ public struct ProcessingStatusView: View {
                     Label(finding.message, systemImage: finding.severity.processingSymbolName)
                 }
                 if status.safeErrorCode != nil {
-                    Label("This video couldn’t be prepared. Try uploading another video.", systemImage: "exclamationmark.triangle")
+                    Label(state == .approved
+                          ? "Publishing couldn’t finish. Your verified upload is preserved. Retry publishing."
+                          : "This video couldn’t be prepared. Try uploading another video.",
+                          systemImage: "exclamationmark.triangle")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -468,6 +541,7 @@ public struct RightsDeclarationView: View {
     @Binding private var acceptsCurrentTerms: Bool
     private let licenses: [CreatorLicenseOption]
     private let currentTermsVersion: String
+    private let showTermsAcceptance: Bool
 
     public init(
         basis: Binding<CreatorRightsBasis>,
@@ -479,7 +553,8 @@ public struct RightsDeclarationView: View {
         attestsRights: Binding<Bool>,
         acceptsCurrentTerms: Binding<Bool>,
         licenses: [CreatorLicenseOption],
-        currentTermsVersion: String
+        currentTermsVersion: String,
+        showTermsAcceptance: Bool = true
     ) {
         _basis = basis
         _rightsHolder = rightsHolder
@@ -491,15 +566,17 @@ public struct RightsDeclarationView: View {
         _acceptsCurrentTerms = acceptsCurrentTerms
         self.licenses = licenses
         self.currentTermsVersion = currentTermsVersion
+        self.showTermsAcceptance = showTermsAcceptance
     }
 
     public var body: some View {
         Section("Rights and attribution") {
             Picker("Rights basis", selection: $basis) {
                 Text("Original work").tag(CreatorRightsBasis.original)
+                Text("Licensed with permission").tag(CreatorRightsBasis.licensed)
                 Text("Public domain").tag(CreatorRightsBasis.publicDomain)
             }
-            Text("Currently accepting original and public-domain works.")
+            Text("Keep the actual author and rights holder credited. Choose a license you have permission to grant.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             TextField("Rights holder", text: $rightsHolder)
@@ -511,17 +588,16 @@ public struct RightsDeclarationView: View {
                         .disabled(license.requirements.requiresProof)
                 }
             }
+            if let termsURL = licenses.first(where: { $0.id == selectedLicenseID })?.termsURL {
+                Link("Read selected license", destination: termsURL)
+            }
 
-            if requirements.requiresSourceURL {
-                TextField("HTTPS source URL", text: $sourceURL)
-                    .accessibilityLabel("HTTPS source URL")
+            TextField(requirements.requiresSourceURL ? "HTTPS source URL" : "HTTPS source URL (optional)", text: $sourceURL)
+                    .accessibilityLabel(requirements.requiresSourceURL ? "Required HTTPS source URL" : "HTTPS source URL, optional")
                     .textContentType(.URL)
-            }
-            if requirements.requiresAttribution {
-                TextField("Required attribution", text: $attributionText, axis: .vertical)
-                    .accessibilityLabel("Required attribution")
+            TextField(requirements.requiresAttribution ? "Required credits" : "Credits (optional)", text: $attributionText, axis: .vertical)
+                    .accessibilityLabel(requirements.requiresAttribution ? "Required credits" : "Credits, optional")
                     .lineLimit(2...5)
-            }
             if requirements.requiresProof {
                 Label("This rights option isn’t available for submission yet.", systemImage: "info.circle")
                     .foregroundStyle(.secondary)
@@ -529,21 +605,23 @@ public struct RightsDeclarationView: View {
 
             Toggle("I attest that I have the right to publish this wallpaper", isOn: $attestsRights)
                 .toggleStyle(.checkbox)
-            Toggle("I accept Creator Terms \(currentTermsVersion)", isOn: $acceptsCurrentTerms)
-                .toggleStyle(.checkbox)
+            if showTermsAcceptance {
+                Toggle("I accept Creator Terms \(currentTermsVersion)", isOn: $acceptsCurrentTerms)
+                    .toggleStyle(.checkbox)
+            }
         }
     }
 
     private var requirements: CreatorRightsRequirements {
-        rightsRequirements(basis: basis, license: licenses.first(where: { $0.id == selectedLicenseID }))
+        creatorRightsRequirements(basis: basis, license: licenses.first(where: { $0.id == selectedLicenseID }))
     }
 }
 
-private func rightsRequirements(basis: CreatorRightsBasis, license: CreatorLicenseOption?) -> CreatorRightsRequirements {
+func creatorRightsRequirements(basis: CreatorRightsBasis, license: CreatorLicenseOption?) -> CreatorRightsRequirements {
     CreatorRightsRequirements(
         requiresSourceURL: basis != .original || license?.requirements.requiresSourceURL == true,
         requiresAttribution: basis != .original || license?.requirements.requiresAttribution == true,
-        requiresProof: basis == .licensed || basis == .other || license?.requirements.requiresProof == true
+        requiresProof: basis == .other || license?.requirements.requiresProof == true
     )
 }
 

@@ -436,9 +436,10 @@ surfaces:
     owner_role: catalog_maintainer
     implementation: implemented
     version:
-      current: { epoch: 1, revision: 0 }
+      current: { epoch: 2, revision: 0 }
       readable_epochs:
         - { epoch: 1, minimum_revision: 0, maximum_revision: 0 }
+        - { epoch: 2, minimum_revision: 0, maximum_revision: 0 }
       additive_compatibility: declared_ranges_only
     product_compatibility:
       minimum_reader: 0.1.0
@@ -453,6 +454,8 @@ surfaces:
       paths:
         - Fixtures/Catalog/manifest-v1.json
         - Fixtures/Catalog/manifest-v1.signature
+        - Fixtures/Catalog/manifest-still-v2.json
+        - Fixtures/Catalog/manifest-still-v2.signature
         - Fixtures/Catalog/invalid/duplicate-key.json
         - Fixtures/Catalog/invalid/oversized-count.json
         - Fixtures/Catalog/invalid/unapproved-host.json
@@ -464,13 +467,15 @@ surfaces:
       canonicalization: schema_ordered_compact_utf8
       maximum_body_bytes: 65536
       maximum_nesting: 4
-      minimum_artifacts: 4
+      minimum_artifacts: 3
       maximum_artifacts: 7
-      required_artifact_roles: [thumbnail, poster, preview, video_default]
+      required_artifact_roles_by_media_kind:
+        video: [thumbnail, poster, preview, video_default]
+        still: [thumbnail, poster, image_default]
       approved_host_policy: injected_exact_allowlist_no_redirects
       network_status: foreground_adapter_only
       schema_policy: reject_unknown_epoch_and_undeclared_revision
-      contract: docs/api/catalog-v1.md
+      contract: docs/api/catalog-v2.md
 
   - id: catalog_revocations
     kind: catalog_revocations
@@ -503,6 +508,10 @@ surfaces:
       scope: catalog_origin_only
       contract: docs/api/catalog-v1.md
 
+  # ADR0025 / migration202609130001 adds honest system publication decisions,
+  # durable leased jobs, protected publication_worker.v1 scheduling and required
+  # metadata/rights draft before completion. Human moderation keeps AAL2.
+  # Contract: docs/api/automatic-publication-v1.md; original rows stay readable.
   - id: marketplace_server_schema
     kind: server_schema
     owner_role: catalog_maintainer
@@ -568,6 +577,10 @@ surfaces:
   # signed metadata, native install formats, or public Creator activation.
   # Schema migration 202609120001 adds immutable admission and attestation kind
   # while preserving old creator defaults and additive rollback read behavior.
+  # ADR0025 activates effective Creator Terms2026-09-12 with ordinary AAL1.
+  # Completion requires draft metadata; old requests fail before enqueue rather
+  # than creating placeholder content. Retry is revision/subject bound, and
+  # creator_metadata_v1 supplies the selected license terms_url.
   - id: creator_public_api
     kind: public_api
     owner_role: catalog_maintainer
@@ -914,3 +927,36 @@ surfaces:
         - Tests/WALIAgentTests/StoreScopedStorageTests.swift
         - Tests/WALITranscoderTests/WorkerGrantTests.swift
       remaining_gate: signed_cross_process_scope_and_recovery_journeys
+
+  # ADR0025: foreground network acknowledgement recovery, never agent library state.
+  - id: catalog_acknowledgements
+    kind: catalog_acknowledgements
+    owner_role: catalog_maintainer
+    implementation: implemented
+    version:
+      current: { epoch: 1, revision: 0 }
+      readable_epochs:
+        - { epoch: 1, minimum_revision: 0, maximum_revision: 0 }
+      additive_compatibility: declared_ranges_only
+    product_compatibility:
+      minimum_reader: 0.1.0
+      minimum_writer: 0.1.0
+      rollback_readers: []
+      rollback_fixture_paths: []
+    module_access:
+      readers: [WALICatalogRuntime]
+      writers: [WALICatalogRuntime]
+    fixture_gate:
+      status: passing
+      paths:
+        - Fixtures/Catalog/acknowledgements-v1.json
+        - Fixtures/Catalog/invalid/acknowledgements-future-version.json
+    details:
+      encoding: json
+      schema_version: 1
+      maximum_entries: 128
+      maximum_bytes: 262144
+      replay_retention_seconds: 604800
+      subject_binding: authenticated_owner
+      scope: foreground_network_recovery_only
+      path_template: "<foreground_application_support>/<bundle_id>/CatalogAcknowledgements/<project_sha256>.json"

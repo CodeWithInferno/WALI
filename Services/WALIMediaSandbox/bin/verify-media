@@ -3,6 +3,11 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
+# The explicit additive still protocol keeps the legacy video entry unchanged.
+if [[ "${WALI_MEDIA_KIND:-}" == still ]]; then
+  exec /opt/wali/bin/verify-still
+fi
+
 readonly INPUT=/work/input
 readonly OUTPUT=/work/output
 readonly POLICY=/opt/wali/policy/ffmpeg-policy.json

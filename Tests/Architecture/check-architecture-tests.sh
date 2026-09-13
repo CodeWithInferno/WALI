@@ -112,7 +112,7 @@ EOF
 
     cat > "${root}/Config/Base.xcconfig" <<'EOF'
 MARKETING_VERSION = 0.1.0
-CURRENT_PROJECT_VERSION = 1
+CURRENT_PROJECT_VERSION = 4
 WALI_MARKETPLACE_ENABLED = NO
 WALI_AUTHENTICATION_METHOD = native_apple
 WALI_RELEASE_MODE = development
@@ -949,6 +949,9 @@ RUBY
         "${root}/docs/security/"
     cp "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.json" \
         "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.signature" \
+        "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-still-v2.json" \
+        "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-still-v2.signature" \
+        "${REPOSITORY_ROOT}/Fixtures/Catalog/acknowledgements-v1.json" \
         "${REPOSITORY_ROOT}/Fixtures/Catalog/revocations-v1.json" \
         "${root}/Fixtures/Catalog/"
     cp "${REPOSITORY_ROOT}/Fixtures/Catalog/invalid/"*.json \
@@ -969,6 +972,8 @@ RUBY
         "${REPOSITORY_ROOT}/docs/adr/0020-direct-release-identifier-namespace.md" \
         "${REPOSITORY_ROOT}/docs/adr/0021-developer-id-local-only-entitlements.md" \
         "${REPOSITORY_ROOT}/docs/adr/0022-direct-production-email-otp-authentication.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0023-staff-curated-licensed-catalog.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0025-public-creator-and-catalog-flows.md" \
         "${root}/docs/adr/"
 
     printf '%s\n' "${root}"
@@ -1055,9 +1060,14 @@ new_marketplace_fixture() {
         "${REPOSITORY_ROOT}/docs/adr/0020-direct-release-identifier-namespace.md" \
         "${REPOSITORY_ROOT}/docs/adr/0021-developer-id-local-only-entitlements.md" \
         "${REPOSITORY_ROOT}/docs/adr/0022-direct-production-email-otp-authentication.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0023-staff-curated-licensed-catalog.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0025-public-creator-and-catalog-flows.md" \
         "${root}/docs/adr/"
     cp "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.json" \
         "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.signature" \
+        "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-still-v2.json" \
+        "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-still-v2.signature" \
+        "${REPOSITORY_ROOT}/Fixtures/Catalog/acknowledgements-v1.json" \
         "${REPOSITORY_ROOT}/Fixtures/Catalog/revocations-v1.json" \
         "${root}/Fixtures/Catalog/"
     cp "${REPOSITORY_ROOT}/Fixtures/Catalog/invalid/"*.json \

@@ -12,38 +12,78 @@ public struct MediaAttemptID: Codable, Sendable, Hashable {
     }
 }
 
-/// The artifacts produced by WALI's video-first import pipeline.
+/// Exact artifact families produced by the private preparation pipeline.
 public enum MediaArtifactKind: String, Codable, Sendable, Hashable, CaseIterable {
     case masterVideo = "master_video"
     case previewVideo = "preview_video"
     case posterImage = "poster_image"
+    case masterImage = "master_image"
+
+    public static func required(for kind: WallpaperMediaKind) -> Set<Self> {
+        kind == .video ? [.masterVideo, .previewVideo, .posterImage] : [.masterImage, .posterImage]
+    }
 }
 
 /// A bounded, immutable media conversion request.
 public struct MediaTranscodeRequest: Codable, Sendable, Hashable {
     public static let maximumSourceByteCount: UInt64 = 20 * 1_024 * 1_024 * 1_024
+    public static let maximumStillSourceByteCount: UInt64 = 128 * 1_024 * 1_024
 
     public let attempt: MediaAttemptID
     public let sourceURL: URL
     public let stagingDirectoryURL: URL
     public let sourceByteLimit: UInt64
+    public let mediaKind: WallpaperMediaKind
 
     public init(
         attempt: MediaAttemptID,
         sourceURL: URL,
         stagingDirectoryURL: URL,
-        sourceByteLimit: UInt64 = Self.maximumSourceByteCount
+        sourceByteLimit: UInt64? = nil,
+        mediaKind: WallpaperMediaKind = .video
     ) throws {
         guard sourceURL.isFileURL, stagingDirectoryURL.isFileURL else {
             throw MediaPipelineError.invalidFileURL
         }
-        guard sourceByteLimit > 0, sourceByteLimit <= Self.maximumSourceByteCount else {
-            throw MediaPipelineError.sourceTooLarge(limit: Self.maximumSourceByteCount)
+        let maximum = mediaKind == .still ? Self.maximumStillSourceByteCount : Self.maximumSourceByteCount
+        let limit = sourceByteLimit ?? maximum
+        guard limit > 0, limit <= maximum else {
+            throw MediaPipelineError.sourceTooLarge(limit: maximum)
         }
         self.attempt = attempt
         self.sourceURL = sourceURL
         self.stagingDirectoryURL = stagingDirectoryURL
-        self.sourceByteLimit = sourceByteLimit
+        self.sourceByteLimit = limit
+        self.mediaKind = mediaKind
+    }
+}
+
+/// True raster facts; no duration or frame-rate stand-ins are present.
+public struct StillMediaInspection: Codable, Sendable, Hashable {
+    public let byteCount: UInt64
+    public let pixelSize: PixelSize
+    public let frameCount: UInt32
+    public let bitsPerComponent: UInt16
+    public let colorSpace: String
+    public let hasAlpha: Bool
+
+    public init(byteCount: UInt64, pixelSize: PixelSize, frameCount: UInt32 = 1,
+                bitsPerComponent: UInt16, colorSpace: String, hasAlpha: Bool) {
+        self.byteCount = byteCount
+        self.pixelSize = pixelSize
+        self.frameCount = frameCount
+        self.bitsPerComponent = bitsPerComponent
+        self.colorSpace = colorSpace
+        self.hasAlpha = hasAlpha
+    }
+}
+
+public enum MediaInspectionContent: Codable, Sendable, Hashable {
+    case video(MediaInspection)
+    case still(StillMediaInspection)
+
+    public var mediaKind: WallpaperMediaKind {
+        switch self { case .video: .video; case .still: .still }
     }
 }
 
@@ -88,7 +128,12 @@ public struct MediaArtifactClaim: Codable, Sendable, Hashable {
     public let stagedURL: URL
     public let digest: ContentDigest
     public let byteCount: UInt64
-    public let inspection: MediaInspection?
+    public let inspection: MediaInspectionContent?
+
+    public var videoInspection: MediaInspection? {
+        guard case .video(let value) = inspection else { return nil }
+        return value
+    }
 
     public init(
         kind: MediaArtifactKind,
@@ -97,6 +142,15 @@ public struct MediaArtifactClaim: Codable, Sendable, Hashable {
         byteCount: UInt64,
         inspection: MediaInspection?
     ) {
+        self.kind = kind
+        self.stagedURL = stagedURL
+        self.digest = digest
+        self.byteCount = byteCount
+        self.inspection = inspection.map(MediaInspectionContent.video)
+    }
+
+    public init(kind: MediaArtifactKind, stagedURL: URL, digest: ContentDigest,
+                byteCount: UInt64, inspection: MediaInspectionContent) {
         self.kind = kind
         self.stagedURL = stagedURL
         self.digest = digest
@@ -111,7 +165,7 @@ public struct MediaTranscodeResult: Codable, Sendable, Hashable {
     public let suggestedDisplayName: String
     public let completedAt: Date
     public let sourceDigest: ContentDigest
-    public let sourceInspection: MediaInspection
+    public let sourceInspection: MediaInspectionContent
     public let claims: [MediaArtifactClaim]
 
     public init(
@@ -122,8 +176,23 @@ public struct MediaTranscodeResult: Codable, Sendable, Hashable {
         sourceInspection: MediaInspection,
         claims: [MediaArtifactClaim]
     ) throws {
-        guard claims.count == MediaArtifactKind.allCases.count,
-              Set(claims.map(\.kind)) == Set(MediaArtifactKind.allCases)
+        try self.init(attempt: attempt, suggestedDisplayName: suggestedDisplayName,
+            completedAt: completedAt, sourceDigest: sourceDigest,
+            sourceInspection: .video(sourceInspection), claims: claims)
+    }
+
+    public init(attempt: MediaAttemptID, suggestedDisplayName: String,
+                completedAt: Date = Date(), sourceDigest: ContentDigest,
+                sourceInspection: MediaInspectionContent, claims: [MediaArtifactClaim]) throws {
+        let required = MediaArtifactKind.required(for: sourceInspection.mediaKind)
+        guard claims.count == required.count,
+              Set(claims.map(\.kind)) == required,
+              claims.allSatisfy({ claim in
+                  if sourceInspection.mediaKind == .video && claim.kind == .posterImage {
+                      return claim.inspection == nil
+                  }
+                  return claim.inspection?.mediaKind == sourceInspection.mediaKind
+              })
         else {
             throw MediaPipelineError.incompleteOutput
         }
@@ -154,6 +223,7 @@ public enum MediaPipelineError: Error, Sendable, Equatable {
     case posterGenerationFailed(String)
     case outputVerificationFailed(MediaArtifactKind)
     case incompleteOutput
+    case unsupportedStillImage
     case insufficientStorage(requiredBytes: UInt64, availableBytes: UInt64)
 }
 
@@ -177,6 +247,7 @@ extension MediaPipelineError: LocalizedError {
         case let .posterGenerationFailed(message): "Poster generation failed: \(message)"
         case let .outputVerificationFailed(kind): "Generated \(kind.rawValue) verification failed."
         case .incompleteOutput: "The conversion did not produce every required artifact."
+        case .unsupportedStillImage: "Use a single-frame, 8-bit sRGB JPEG or PNG within the image size limits. Export without an embedded ICC profile."
         case let .insufficientStorage(requiredBytes, availableBytes):
             "This import needs about \(requiredBytes.formatted(.byteCount(style: .file))) free, but only \(availableBytes.formatted(.byteCount(style: .file))) is available."
         }

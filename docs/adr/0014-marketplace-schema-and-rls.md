@@ -1,10 +1,15 @@
 # 0014: Keep marketplace truth behind a private schema and explicit RLS API
 
-- status: accepted
+- status: partially_superseded
 - date: 2026-09-01
 - owner_role: catalog_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner AFK marketplace implementation directive 2026-09-01
+
+- superseded_by: 0025
+- superseded_scope: mandatory_human_publication_approval,deployment_trust_bootstrap
+
+The scoped clauses identified above are superseded by [ADR 0025](0025-public-creator-and-catalog-flows.md). The original decision text is retained below.
 
 ## Context
 

@@ -14,7 +14,9 @@ A successful fixture test is not a successful signed release.
 ## Current distribution restriction
 
 Accepted [ADR 0022](../adr/0022-direct-production-email-otp-authentication.md)
-permits a production-bound direct prerelease using email codes. Developer ID
+permits production-bound direct releases using email codes, initially prerelease
+until the existing broader criteria are satisfied. Stable publication requires
+that final acceptance evidence; tag validation does not supply it. Developer ID
 still excludes the native Sign in with Apple entitlement under ADR 0021. The
 hosted workflow requires marketplace `YES`, an exact reviewed production manifest,
 and the independent authentication, catalog, operations and native release gates.
@@ -114,8 +116,9 @@ reviewed candidate.
 
 1. Commit the intended `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in
    `Config/Base.xcconfig`, along with reviewed, nonempty UTF-8 release notes at
-   `docs/release/notes/TAG.md`. The initial production tag must be a prerelease
-   such as `v0.1.0-beta.1` and match the committed version. Merge the source to `main` and wait for
+   `docs/release/notes/TAG.md`. The tag must match the committed version: use
+   `v0.1.0` only after final stable-release acceptance, or a prerelease such as
+   `v0.1.0-beta.1`. Merge the source to `main` and wait for
    all seven required checks: `source`, `history-secrets`, `contracts`, `swift`,
    `store`, `backend`, and `media`.
 2. In Actions, select **Signed GitHub release**, **Run workflow**, branch `main`,

@@ -23,7 +23,7 @@ public final class CreatorStudioModel {
     public private(set) var pageError: String?
 
     public var hasProcessingSubmissions: Bool {
-        submissions.contains { $0.state == .processing || $0.state == .uploaded }
+        submissions.contains { $0.state.awaitsAutomaticPublication }
     }
 
     public var canUseCreatorStudio: Bool {
@@ -123,7 +123,7 @@ public final class CreatorStudioModel {
 
     public func refreshProcessingSubmissions() async {
         let generation = loadGeneration
-        for submission in submissions where submission.state == .processing || submission.state == .uploaded {
+        for submission in submissions where submission.state.awaitsAutomaticPublication {
             guard !Task.isCancelled, canUseCreatorStudio, generation == loadGeneration else { return }
             do {
                 let status = try await gateway.processingStatus(submissionID: submission.id, generation: submission.generation)
@@ -164,6 +164,7 @@ public final class CreatorStudioModel {
         }
         let binding = (submission.id, submission.revision, submission.generation)
         let grantRevision = authorization.creatorGrantRevision
+        let generation = loadGeneration
         do {
             let request = try CreatorWithdrawRequest(
                 submissionID: submission.id,
@@ -171,20 +172,58 @@ public final class CreatorStudioModel {
                 idempotencyKey: UUID().uuidString.lowercased()
             )
             _ = try await gateway.withdraw(request)
-            guard grantRevision == authorization.creatorGrantRevision,
+            try Task.checkCancellation()
+            guard generation == loadGeneration, grantRevision == authorization.creatorGrantRevision,
                   canUseCreatorStudio,
                   submissions.contains(where: {
                       ($0.id, $0.revision, $0.generation) == binding
                   })
             else { return }
             await loadSubmissions()
+        } catch is CancellationError {
+            return
         } catch {
+            guard generation == loadGeneration else { return }
             switch CreatorRemoteFailureDisposition(error: error) {
             case .stale:
                 await loadSubmissions()
             default:
                 handle(error)
             }
+        }
+    }
+
+    public func retryProcessing(_ submission: CreatorSubmission) async {
+        guard canUseCreatorStudio, submission.state == .processingFailed else { return }
+        let generation = loadGeneration
+        do {
+            _ = try await gateway.retryProcessing(.init(
+                submissionID: submission.id, expectedRevision: submission.revision,
+                idempotencyKey: UUID().uuidString.lowercased()
+            ))
+            try Task.checkCancellation()
+            guard generation == loadGeneration, canUseCreatorStudio else { return }
+            await loadSubmissions()
+        } catch {
+            guard generation == loadGeneration else { return }
+            handle(error)
+        }
+    }
+
+    public func retryPublication(_ submission: CreatorSubmission) async {
+        guard canUseCreatorStudio, submission.state == .approved else { return }
+        let generation = loadGeneration
+        do {
+            _ = try await gateway.retryPublication(.init(
+                submissionID: submission.id, expectedRevision: submission.revision,
+                idempotencyKey: UUID().uuidString.lowercased()
+            ))
+            try Task.checkCancellation()
+            guard generation == loadGeneration, canUseCreatorStudio else { return }
+            await loadSubmissions()
+        } catch {
+            guard generation == loadGeneration else { return }
+            handle(error)
         }
     }
 

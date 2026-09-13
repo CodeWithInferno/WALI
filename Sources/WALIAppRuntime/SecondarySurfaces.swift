@@ -16,20 +16,23 @@ struct DownloadsSurface: View {
         VStack(spacing: 0) {
             WALIPageHeader("Downloads") {
                 Text(summary).font(.callout).foregroundStyle(.secondary)
-                Button("Import Video…", systemImage: "plus", action: onImport)
+                Button("Import Wallpaper…", systemImage: "plus", action: onImport)
             }
             if let catalogInstall, catalogInstall.phase != .completed {
                 CatalogInstallProgressView(install: catalogInstall, onCancel: onCancelCatalog, onRetry: onRetryCatalog)
                     .padding(.horizontal, 20)
                     .padding(.bottom, 12)
             }
-            if transfers.isEmpty && catalogInstall == nil {
+            if transfers.isEmpty && catalogInstall?.phase == .completed {
+                ContentUnavailableView("Download Complete", systemImage: "checkmark.circle",
+                    description: Text("Your wallpaper is ready in Library."))
+            } else if transfers.isEmpty && catalogInstall == nil {
                 ContentUnavailableView {
                     Label("No Downloads or Imports", systemImage: "arrow.down.circle")
                 } description: {
                     Text("Download a wallpaper or import a video to see its progress here.")
                 } actions: {
-                    Button("Import Video…", action: onImport)
+                    Button("Import Wallpaper…", action: onImport)
                         .controlSize(.large)
                 }
             } else if !transfers.isEmpty {
@@ -54,7 +57,7 @@ struct DownloadsSurface: View {
                                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
                         }
 
-                        Label("Original videos stay untouched", systemImage: "lock.shield")
+                        Label("Original files stay untouched", systemImage: "lock.shield")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.leading, 4)
@@ -98,7 +101,8 @@ struct DownloadsSurface: View {
         if activeCount > 0 {
             return activeCount == 1 ? "1 active" : "\(activeCount) active"
         }
-        return transfers.count == 1 ? "1 item" : "\(transfers.count) items"
+        let completedCount = transfers.count + (catalogInstall?.phase == .completed ? 1 : 0)
+        return completedCount == 1 ? "1 item" : "\(completedCount) items"
     }
 }
 
@@ -132,7 +136,7 @@ struct CatalogInstallProgressView: View {
                 Button("Try Again", action: onRetry)
             }
         }
-        .padding(14)
+        .padding(16)
         .background(.background, in: RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .contain)
     }
@@ -153,7 +157,7 @@ private struct TransferRow: View {
                     .fill(Color(nsColor: .windowBackgroundColor))
 
                 Image(systemName: symbolName)
-                    .font(.system(size: 17, weight: .medium))
+                    .font(.body.weight(.medium))
                     .foregroundStyle(symbolColor)
             }
             .frame(width: 40, height: 40)
@@ -188,7 +192,7 @@ private struct TransferRow: View {
                     .foregroundStyle(symbolColor)
             }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private var stateTitle: String {

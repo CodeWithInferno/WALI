@@ -93,6 +93,7 @@ type Dependencies struct {
 	MediaImage        string
 	VerifierImage     string
 	PolicyDigest      string
+	StillPolicyDigest string
 	HeartbeatInterval time.Duration
 	LeaseDuration     time.Duration
 }
@@ -640,6 +641,9 @@ func NewProcessor(dependencies Dependencies) (*Processor, error) {
 	if len(dependencies.PolicyDigest) != 64 || strings.ToLower(dependencies.PolicyDigest) != dependencies.PolicyDigest {
 		return nil, errors.New("reviewed media policy digest is required")
 	}
+	if dependencies.StillPolicyDigest != "" && !jobDigestPattern.MatchString(dependencies.StillPolicyDigest) {
+		return nil, errors.New("still policy digest must be empty or lowercase SHA-256")
+	}
 	if dependencies.LeaseDuration <= 0 {
 		dependencies.LeaseDuration = 2 * time.Minute
 	}
@@ -649,7 +653,7 @@ func NewProcessor(dependencies Dependencies) (*Processor, error) {
 	return &Processor{dependencies: dependencies, claimDecoder: claims.NewDecoder(1 << 20)}, nil
 }
 
-func (p *Processor) Process(parent context.Context, job ProcessSubmission, lease Lease) Result {
+func (p *Processor) Process(parent context.Context, job ProcessSubmission, lease Lease) (result Result) {
 	disposition, err := p.dependencies.Attempts.Begin(parent, job, lease)
 	if err != nil {
 		return Result{Action: ActionNack, SafeCode: "attempt_begin_failed"}
@@ -663,16 +667,32 @@ func (p *Processor) Process(parent context.Context, job ProcessSubmission, lease
 	default:
 		return Result{Action: ActionNack, SafeCode: "attempt_begin_invalid"}
 	}
-	if job.PolicyDigest != p.dependencies.PolicyDigest {
+	policyDigest := p.dependencies.PolicyDigest
+	if job.MediaKind == "still" {
+		policyDigest = p.dependencies.StillPolicyDigest
+	}
+	if policyDigest == "" || job.PolicyDigest != policyDigest {
 		return p.permanentFailure(parent, job, lease, "policy_mismatch")
 	}
 
 	ctx, cancel := context.WithDeadline(parent, job.DeadlineAt)
 	defer cancel()
+	executionContext := ctx
+	var leaseLost <-chan struct{}
+	defer func() {
+		// The frozen execution budget cannot be recovered by redelivery. Record
+		// that terminal fact using a fresh bounded context, only while this
+		// worker still owns the current generation and an unexpired DB lease.
+		if result.Action != ActionAck && executionContext.Err() == context.DeadlineExceeded &&
+			parent.Err() == nil && !channelClosed(leaseLost) {
+			result = p.finishExecutionTimeout(parent, job, lease)
+		}
+	}()
 	if current := p.heartbeat(ctx, job, lease); !current {
 		return Result{Action: ActionLeave, SafeCode: "lease_lost"}
 	}
-	ctx, stopLeaseMonitor, leaseLost := p.monitorLease(ctx, job, lease)
+	var stopLeaseMonitor func()
+	ctx, stopLeaseMonitor, leaseLost = p.monitorLease(ctx, job, lease)
 	defer stopLeaseMonitor()
 
 	attemptDirectory, err := os.MkdirTemp(p.dependencies.ScratchRoot, job.AttemptID+"-")
@@ -724,10 +744,15 @@ func (p *Processor) Process(parent context.Context, job ProcessSubmission, lease
 	if err != nil {
 		return p.permanentFailure(ctx, job, lease, "missing_media_claim")
 	}
+	sampleFrames := 7
+	if job.MediaKind == "still" {
+		sampleFrames = 1
+	}
 	mediaClaim, decodeErr := p.claimDecoder.DecodeMedia(mediaClaimFile, claims.Expectation{
+		SchemaVersion: job.SchemaVersion, MediaKind: job.MediaKind,
 		AttemptID: job.AttemptID, SubmissionID: job.SubmissionID,
 		Generation: job.Generation, PolicyDigest: job.PolicyDigest,
-		InputDigest: observedInput.Digest, Roles: job.ExpectedArtifactRoles, SampleFrames: 7,
+		InputDigest: observedInput.Digest, Roles: job.ExpectedArtifactRoles, SampleFrames: sampleFrames,
 	})
 	closeErr := mediaClaimFile.Close()
 	if decodeErr != nil || closeErr != nil {
@@ -758,6 +783,7 @@ func (p *Processor) Process(parent context.Context, job ProcessSubmission, lease
 	}
 
 	classificationRequest := classifier.Request{
+		MediaKind: job.MediaKind,
 		AttemptID: job.AttemptID, SubmissionID: job.SubmissionID, Generation: job.Generation,
 		InputDirectory: mediaDirectory, OutputDirectory: filepath.Join(attemptDirectory, "classification"), PolicyDigest: job.PolicyDigest,
 	}
@@ -815,10 +841,15 @@ func (p *Processor) Process(parent context.Context, job ProcessSubmission, lease
 	if !p.heartbeat(ctx, job, lease) {
 		return Result{Action: ActionLeave, SafeCode: "lease_lost"}
 	}
-	current, err := p.dependencies.Attempts.Complete(ctx, job, lease, Completion{
+	completion := Completion{
 		SourceDigest: observedInput.Digest,
 		Artifacts:    completionArtifacts(mediaClaim.Artifacts), Classification: classification,
-	})
+	}
+	if job.MediaKind == "still" {
+		completion.SchemaVersion = 2
+		completion.MediaKind = "still"
+	}
+	current, err := p.dependencies.Attempts.Complete(ctx, job, lease, completion)
 	if err != nil {
 		return Result{Action: ActionNack, SafeCode: "completion_commit_failed"}
 	}
@@ -829,6 +860,8 @@ func (p *Processor) Process(parent context.Context, job ProcessSubmission, lease
 }
 
 var mediaPermanentSafeCodes = []string{
+	"image_color_profile_unsupported", "invalid_image_orientation", "animated_image_unsupported",
+	"unsupported_image_format", "invalid_image_container", "private_image_metadata", "invalid_canonical_image",
 	"invalid_input_type",
 	"input_too_large",
 	"input_digest_mismatch",
@@ -885,6 +918,9 @@ func (p *Processor) monitorLease(parent context.Context, job ProcessSubmission, 
 				return
 			case <-ticker.C:
 				if !p.heartbeat(ctx, job, lease) {
+					if ctx.Err() != nil {
+						return
+					}
 					close(lost)
 					cancel()
 					return
@@ -908,6 +944,19 @@ func channelClosed(channel <-chan struct{}) bool {
 	}
 }
 
+func (p *Processor) finishExecutionTimeout(parent context.Context, job ProcessSubmission, lease Lease) Result {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	current, err := p.dependencies.Attempts.Fail(ctx, job, lease, Failure{SafeCode: "processing_timeout"})
+	if err != nil {
+		return Result{Action: ActionNack, SafeCode: "timeout_commit_failed"}
+	}
+	if !current {
+		return Result{Action: ActionLeave, SafeCode: "lease_lost"}
+	}
+	return Result{Action: ActionAck, SafeCode: "processing_timeout"}
+}
+
 func (p *Processor) permanentFailure(ctx context.Context, job ProcessSubmission, lease Lease, safeCode string) Result {
 	current, err := p.dependencies.Attempts.Fail(ctx, job, lease, Failure{SafeCode: safeCode})
 	if err != nil {
@@ -920,12 +969,17 @@ func (p *Processor) permanentFailure(ctx context.Context, job ProcessSubmission,
 }
 
 func (p *Processor) sandboxSpec(mode sandbox.Mode, job ProcessSubmission, inputDigest, inputDirectory, outputDirectory, image string) sandbox.Spec {
+	cpus := "2"
+	if mode == sandbox.ModeProcess && job.MediaKind != "still" {
+		cpus = "4"
+	}
 	return sandbox.Spec{
-		Mode: mode, AttemptID: job.AttemptID, SubmissionID: job.SubmissionID,
+		MediaKind: job.MediaKind,
+		Mode:      mode, AttemptID: job.AttemptID, SubmissionID: job.SubmissionID,
 		Generation: job.Generation, InputDigest: inputDigest, Image: image,
 		InputDirectory: inputDirectory, OutputDirectory: outputDirectory,
 		PolicyDigest: job.PolicyDigest,
-		Limits:       sandbox.Limits{CPUs: "2", Memory: "4g", PIDs: 64, TmpfsBytes: 1 << 30},
+		Limits:       sandbox.Limits{CPUs: cpus, Memory: "4g", PIDs: 64, TmpfsBytes: 1 << 30},
 	}
 }
 

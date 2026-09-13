@@ -5,8 +5,8 @@
 - owner_role: media_worker_maintainer
 - accepted_by: project_owner
 - approval_reference: project-owner AFK marketplace implementation directive 2026-09-01
-- superseded_by: 0017
-- superseded_scope: 0017=marketplace_canonical_codec
+- superseded_by: 0017, 0025
+- superseded_scope: 0017=marketplace_canonical_codec;0025=mandatory_human_publication_approval
 
 ## Context
 
@@ -61,6 +61,9 @@ No process with Full Disk Access parses those bytes.
   emits only a stable safe error code.
 
 ## Partially superseded clauses
+
+ADR 0025 permits explicitly system-attributed publication decisions after verified
+processing and rights attestation, superseding mandatory human approval only.
 
 ADR 0017 replaces the H.264 MP4 codec clause for marketplace sandbox output.
 Hostile decode/re-encode, independent verification, audio stripping, and

@@ -15,6 +15,9 @@ public protocol CatalogAuthSessionProviding: Sendable {
     func currentState() async -> CatalogAuthState?
     func stateChanges() async -> AsyncStream<CatalogAuthState?>
     func signOut() async throws
+    /// Atomically checks the subject under the existing session transition gate.
+    /// Returns false when another account now owns the shared session.
+    func signOut(expectedSubjectID: String) async throws -> Bool
 }
 
 public enum CatalogAssuranceLevel: String, Sendable, Hashable {
@@ -180,6 +183,9 @@ public actor AuthSessionStore: CatalogAuthSessionProviding, AccountMFASessionPro
     }
 
     public func signOut() async throws { try await authority.signOut() }
+    public func signOut(expectedSubjectID: String) async throws -> Bool {
+        try await authority.signOut(expectedSubjectID: expectedSubjectID)
+    }
 
     public func mfaStatus() async throws -> CatalogMFAStatus {
         try await authority.withSessionTransition { try await self.performMFAStatus() }

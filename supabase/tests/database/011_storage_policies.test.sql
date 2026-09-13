@@ -213,7 +213,7 @@ select results_eq(
 
 select is(
   (select allowed_mime_types from storage.buckets where id = 'uploads-private'),
-  array['video/mp4', 'video/quicktime']::text[],
+  array['video/mp4', 'video/quicktime', 'image/jpeg', 'image/png']::text[],
   'upload MIME allowlist is explicit'
 );
 

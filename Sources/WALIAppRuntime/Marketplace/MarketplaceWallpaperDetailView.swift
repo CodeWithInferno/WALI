@@ -5,6 +5,7 @@ import WALIUI
 
 struct MarketplaceWallpaperDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.openURL) private var openURL
     @Environment(\.waliOverlayLeadingBleed) private var overlayLeadingBleed
 
@@ -20,6 +21,10 @@ struct MarketplaceWallpaperDetailView: View {
     let onFavorite: () -> Void
     let onSave: () -> Void
     let onReport: (CatalogReportKind, String) -> Void
+    var installRecordingFailure: String? = nil
+    var canRetryInstallRecord = false
+    var isRetryingInstallRecord = false
+    var onRetryInstallRecord: () -> Void = {}
 
     @State private var showsReportSheet = false
 
@@ -138,7 +143,7 @@ struct MarketplaceWallpaperDetailView: View {
             }
 
             LinearGradient(
-                colors: [.clear, .black.opacity(0.55)],
+                colors: [.clear, .black.opacity(contrast == .increased ? 0.85 : 0.65)],
                 startPoint: UnitPoint(x: 0.5, y: 0.52),
                 endPoint: .bottom
             )
@@ -155,9 +160,9 @@ struct MarketplaceWallpaperDetailView: View {
                             .foregroundStyle(.white.opacity(0.88))
                             .lineLimit(WALIMarketplaceDetailLayout.descriptionLineLimit)
                     }
-                    Text("\(detail.dimensions)  ·  \(detail.duration)  ·  Published by \(detail.creator)")
+                    Text([detail.dimensions, detail.duration, "Published by \(detail.creator)"].compactMap { $0 }.joined(separator: "  ·  "))
                         .font(.callout.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.72))
+                        .foregroundStyle(.white.opacity(contrast == .increased ? 1 : 0.88))
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -194,9 +199,10 @@ struct MarketplaceWallpaperDetailView: View {
 
     private func favoriteButton(_ detail: WALICatalogDetailPresentation) -> some View {
         Button(action: onFavorite) {
-            Label("Favorite", systemImage: detail.isFavorite ? "heart.fill" : "heart")
+            Label(detail.isFavorite ? "Remove from Favorites" : "Add to Favorites", systemImage: detail.isFavorite ? "heart.fill" : "heart")
         }
         .labelStyle(.iconOnly)
+        .help(detail.isFavorite ? "Remove from Favorites" : "Add to Favorites")
         .controlSize(.large)
         .disabled(marketplace.actionState == .working)
     }
@@ -237,6 +243,15 @@ struct MarketplaceWallpaperDetailView: View {
             : AnyLayout(HStackLayout(alignment: .top, spacing: 42))
         return layout {
             VStack(alignment: .leading, spacing: 18) {
+                if let installRecordingFailure {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(installRecordingFailure).font(.callout).foregroundStyle(.secondary)
+                        if canRetryInstallRecord {
+                            Button(isRetryingInstallRecord ? "Updating…" : "Retry Count Update", action: onRetryInstallRecord)
+                                .disabled(isRetryingInstallRecord)
+                        }
+                    }
+                }
                 Text("About this wallpaper")
                     .font(.title2.weight(.semibold))
                 Text(detail.description)
@@ -245,7 +260,7 @@ struct MarketplaceWallpaperDetailView: View {
                     .lineSpacing(3)
 
                 LabeledContent(
-                    "Verified installs",
+                    "Completed downloads",
                     value: detail.verifiedInstallCount.formatted(.number.notation(.compactName))
                 )
 
@@ -269,13 +284,16 @@ struct MarketplaceWallpaperDetailView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 LabeledContent("Dimensions", value: detail.dimensions)
-                LabeledContent("Duration", value: detail.duration)
-                LabeledContent("Frame Rate", value: "\(detail.framesPerSecond.formatted()) fps")
+                if let duration = detail.duration { LabeledContent("Duration", value: duration) }
+                if let framesPerSecond = detail.framesPerSecond {
+                    LabeledContent("Frame Rate", value: "\(framesPerSecond.formatted()) fps")
+                }
                 LabeledContent("Favorites", value: detail.favoriteCount.formatted())
                 LabeledContent("Saves", value: detail.saveCount.formatted())
                 Button(detail.licenseName) { openURL(detail.licenseTermsURL) }
                 HStack {
-                    Button("Save", systemImage: detail.isSaved ? "bookmark.fill" : "bookmark", action: onSave)
+                    Button(detail.isSaved ? "Remove from Saved" : "Save Wallpaper", systemImage: detail.isSaved ? "bookmark.fill" : "bookmark", action: onSave)
+                        .help(detail.isSaved ? "Remove from Saved" : "Save Wallpaper")
                     Button("Copy Wallpaper ID", systemImage: "doc.on.doc") { copyIdentifier(detail.id) }
                     Button("Report", systemImage: "exclamationmark.bubble") {
                         marketplace.reportState = .idle

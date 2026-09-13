@@ -25,7 +25,9 @@ select results_eq(
          'wali.can_insert_rights_proof(text)',
          'wali.moderator_can_preview_canonical(text,text)',
          'wali.encode_catalog_cursor(timestamp with time zone,uuid,numeric,text)',
-         'wali.decode_catalog_cursor(text)'
+         'wali.decode_catalog_cursor(text)',
+         'wali.catalog_rating_limit()',
+         'wali.catalog_public_counts(uuid)'
        )$$,
   array[0::bigint],
   'internal wali functions are not executable through Data API roles'
@@ -94,7 +96,7 @@ select throws_ok(
       '00000000-0000-0000-0000-000000000003',
       '93000000-0000-4000-8000-000000000002',
       'accept_creator_terms_revoked_role_01',
-      '2026-09-01'
+      (select creator_terms_version from wali.runtime_configuration where singleton)
     )$$,
   'P0001',
   'WALI_CREATOR_ROLE_REVOKED',
@@ -670,8 +672,8 @@ insert into wali.rights_declarations (
 select set_config('request.jwt.claim.role', 'authenticated', true);
 select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000002', true);
 select is(
-  public.creator_metadata_v1() -> 'rights_bases' -> 2 ->> 'available', 'false',
-  'creator metadata exposes licensed rights as unavailable while proof workflow is disabled'
+  public.creator_metadata_v1() -> 'rights_bases' -> 2 ->> 'available', 'true',
+  'creator metadata exposes licensed attestations under the automatic publication policy'
 );
 select cmp_ok(
   jsonb_array_length(public.my_creator_submissions_v1(null, 24) -> 'items'), '>=', 1,

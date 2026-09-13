@@ -7,6 +7,7 @@ public enum AgentLifecycleError: LocalizedError {
     case consentRequired
     case requiresApproval
     case anotherDistributionRunning
+    case operationInProgress
 
     public var errorDescription: String? {
         switch self {
@@ -14,6 +15,7 @@ public enum AgentLifecycleError: LocalizedError {
         case .consentRequired: "Allow background playback before starting WALI's wallpaper service."
         case .requiresApproval: "WALI needs approval in Login Items to keep your wallpaper running."
         case .anotherDistributionRunning: "Quit the other edition of WALI before starting this one."
+        case .operationInProgress: "WALI is finishing background service setup. Try Quit again in a moment."
         }
     }
 }
@@ -42,6 +44,11 @@ public final class AgentLifecycleController {
     private let requiresExplicitConsent: Bool
     private let expectedAgentIdentifier: String?
     private let runningAgentIdentifiers: @MainActor () -> Set<String>
+    private(set) var isReinstalling = false
+    var onReinstallCompleted: (@MainActor () -> Void)?
+    #if !WALI_APP_STORE
+    private var agentWasActive = false
+    #endif
 
     public convenience init() {
         #if WALI_APP_STORE
@@ -84,7 +91,30 @@ public final class AgentLifecycleController {
         registrations?.contains(where: { $0.status == .requiresApproval }) == true
     }
 
+    #if !WALI_APP_STORE
+    /// Only the first registration belongs to the agent. Helper approval does
+    /// not establish whether the desktop agent is inactive.
+    var canQuitWithoutAgent: Bool {
+        guard !isReinstalling, let expectedAgentIdentifier,
+              let agent = registrations?.first else { return false }
+        if agent.status == .enabled || runningAgentIdentifiers().contains(expectedAgentIdentifier) {
+            agentWasActive = true
+        }
+        guard !agentWasActive else { return false }
+        switch agent.status {
+        case .notRegistered, .notFound, .requiresApproval: return true
+        case .enabled: return false
+        @unknown default: return false
+        }
+    }
+    #endif
+
     public func ensureRunning() throws {
+        try Task.checkCancellation()
+        guard !isReinstalling else { throw AgentLifecycleError.operationInProgress }
+        #if !WALI_APP_STORE
+        defer { _ = canQuitWithoutAgent }
+        #endif
         guard hasBackgroundPlaybackConsent else { throw AgentLifecycleError.consentRequired }
         guard let registrations else { throw AgentLifecycleError.missingConfiguration }
         if requiresExplicitConsent, let expectedAgentIdentifier {
@@ -112,12 +142,25 @@ public final class AgentLifecycleController {
     }
 
     public func reinstallAgent() async throws {
+        try Task.checkCancellation()
+        guard !isReinstalling else { throw AgentLifecycleError.operationInProgress }
+        #if !WALI_APP_STORE
+        _ = canQuitWithoutAgent
+        #endif
         guard hasBackgroundPlaybackConsent else { throw AgentLifecycleError.consentRequired }
         guard let registrations else { throw AgentLifecycleError.missingConfiguration }
+        isReinstalling = true
+        defer {
+            isReinstalling = false
+            onReinstallCompleted?()
+        }
         for registration in registrations where registration.status != .notRegistered && registration.status != .notFound {
+            try Task.checkCancellation()
             try await registration.unregister()
+            try Task.checkCancellation()
         }
         try await Task.sleep(for: .seconds(3))
+        isReinstalling = false
         try ensureRunning()
     }
 

@@ -87,10 +87,17 @@ public struct ManifestVerifier: Sendable {
         revocations: CatalogRevocationList? = nil
     ) throws -> VerifiedCatalogManifest {
         let document = try CanonicalJSON.requireCanonical(manifestData, limits: .manifest)
+        let manifest: CatalogManifest
+        do {
+            manifest = try JSONDecoder().decode(CatalogManifest.self, from: manifestData)
+        } catch let error as CatalogValidationError {
+            throw error
+        } catch {
+            throw CatalogValidationError.invalidManifest
+        }
         try document.requireObjectShape(
-            keys: [
-                "schema", "key_id", "wallpaper_id", "release_id", "edition",
-                "issued_at", "artifacts", "metadata_digest"
+            keys: ["schema"] + (manifest.schema == CatalogManifest.stillSchema ? ["media_kind"] : []) + [
+                "key_id", "wallpaper_id", "release_id", "edition", "issued_at", "artifacts", "metadata_digest"
             ],
             nestedObjects: ["schema": ["epoch", "revision"]],
             arrayObjectKey: "artifacts",
@@ -100,14 +107,6 @@ public struct ManifestVerifier: Sendable {
             ]
         )
 
-        let manifest: CatalogManifest
-        do {
-            manifest = try JSONDecoder().decode(CatalogManifest.self, from: manifestData)
-        } catch let error as CatalogValidationError {
-            throw error
-        } catch {
-            throw CatalogValidationError.invalidManifest
-        }
 
         guard manifest.wallpaperID == context.wallpaperID,
               manifest.releaseID == context.releaseID,

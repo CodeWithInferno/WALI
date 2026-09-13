@@ -76,7 +76,7 @@ struct WallpaperDetailView: View {
                             Text("Fill Screen").tag(WALIContentFitPreference.fill)
                             Text("Fit to Screen").tag(WALIContentFitPreference.fit)
                             Text("Stretch to Fill").tag(WALIContentFitPreference.stretch)
-                            Text("Center").tag(WALIContentFitPreference.center)
+                            Text("Center at Native Size").tag(WALIContentFitPreference.center)
                         }
                         Text(contentFitDescription)
                             .font(.caption)

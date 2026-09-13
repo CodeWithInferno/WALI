@@ -5,11 +5,20 @@ public enum StoredArtifactRole: String, Codable, Sendable, Hashable, CaseIterabl
     case masterVideo = "master_video"
     case previewVideo = "preview_video"
     case posterImage = "poster_image"
+    case masterImage = "master_image"
+
+    public static func required(for kind: WallpaperMediaKind) -> Set<Self> {
+        switch kind {
+        case .video: [.masterVideo, .previewVideo, .posterImage]
+        case .still: [.masterImage, .posterImage]
+        }
+    }
 }
 
 public enum StoredArtifactMediaKind: String, Codable, Sendable, Hashable {
     case hevcVideo = "hevc_video"
     case heicImage = "heic_image"
+    case pngImage = "png_image"
 }
 
 /// Untrusted worker output presented to the agent for independent installation.
@@ -78,51 +87,80 @@ public struct CommittedLibraryRecord: Codable, Sendable, Hashable {
     public let sourceDigest: ContentDigest
     public let importedAt: Date
     public let sourceFileName: String
+    public let mediaKind: WallpaperMediaKind
     public let artifacts: [StoredArtifact]
 
-    public init(
-        item: LibraryItem,
-        release: AssetRelease,
-        sourceDigest: ContentDigest,
-        importedAt: Date = Date(),
-        sourceFileName: String,
-        artifacts: [StoredArtifact]
-    ) throws {
-        guard artifacts.count == StoredArtifactRole.allCases.count,
-              Set(artifacts.map(\.role)) == Set(StoredArtifactRole.allCases),
+    public init(item: LibraryItem, release: AssetRelease, sourceDigest: ContentDigest,
+                importedAt: Date = Date(), sourceFileName: String,
+                mediaKind: WallpaperMediaKind = .video, artifacts: [StoredArtifact]) throws {
+        let required = StoredArtifactRole.required(for: mediaKind)
+        guard artifacts.count == required.count, Set(artifacts.map(\.role)) == required,
               Set(release.artifacts.map(\.contentID)) == Set(artifacts.map(\.digest)),
-              item.releaseID == release.id,
-              !sourceFileName.isEmpty,
-              sourceFileName.utf8.count <= 1_024
-        else {
-            throw StorageError.incompleteRelease
-        }
+              item.releaseID == release.id, !sourceFileName.isEmpty,
+              sourceFileName.utf8.count <= 1_024,
+              artifacts.allSatisfy({ artifact in
+                  switch artifact.role {
+                  case .masterVideo, .previewVideo: artifact.mediaKind == .hevcVideo && artifact.durationSeconds != nil
+                  case .posterImage: artifact.mediaKind == .heicImage && artifact.durationSeconds == nil
+                  case .masterImage: artifact.mediaKind == .pngImage && artifact.durationSeconds == nil
+                  }
+              }) else { throw StorageError.incompleteRelease }
         self.item = item
         self.release = release
         self.sourceDigest = sourceDigest
         self.importedAt = importedAt
         self.sourceFileName = sourceFileName
+        self.mediaKind = mediaKind
         self.artifacts = artifacts.sorted { $0.role.rawValue < $1.role.rawValue }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case item, release, sourceDigest, importedAt, sourceFileName, artifacts
+        case mediaKind = "media_kind"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        try self.init(from: decoder, allowLegacyVideo: true)
+    }
+
+    init(from decoder: any Decoder, allowLegacyVideo: Bool) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let artifacts = try values.decode([StoredArtifact].self, forKey: .artifacts)
+        let kind: WallpaperMediaKind
+        if values.contains(.mediaKind) {
+            kind = try values.decode(WallpaperMediaKind.self, forKey: .mediaKind)
+        } else {
+            guard allowLegacyVideo, artifacts.count == 3,
+                  Set(artifacts.map(\.role)) == StoredArtifactRole.required(for: .video) else {
+                throw StorageError.incompleteRelease
+            }
+            kind = .video
+        }
+        try self.init(item: values.decode(LibraryItem.self, forKey: .item),
+                      release: values.decode(AssetRelease.self, forKey: .release),
+                      sourceDigest: values.decode(ContentDigest.self, forKey: .sourceDigest),
+                      importedAt: values.decode(Date.self, forKey: .importedAt),
+                      sourceFileName: values.decode(String.self, forKey: .sourceFileName),
+                      mediaKind: kind, artifacts: artifacts)
     }
 
     public var masterURL: URL? {
         artifacts.first(where: { $0.role == .masterVideo })?.objectURL
     }
-
+    public var imageURL: URL? {
+        artifacts.first(where: { $0.role == .masterImage })?.objectURL
+    }
     public var previewURL: URL? {
         artifacts.first(where: { $0.role == .previewVideo })?.objectURL
     }
-
     public var posterURL: URL? {
         artifacts.first(where: { $0.role == .posterImage })?.objectURL
     }
-
     public var durationSeconds: Double? {
         artifacts.first(where: { $0.role == .masterVideo })?.durationSeconds
     }
-
     public var pixelSize: PixelSize? {
-        artifacts.first(where: { $0.role == .masterVideo })?.pixelSize
+        artifacts.first(where: { $0.role == (mediaKind == .video ? .masterVideo : .masterImage) })?.pixelSize
     }
 }
 
@@ -267,7 +305,7 @@ public struct ArtifactTombstone: Codable, Sendable, Hashable {
 public struct RuntimeSnapshot: Codable, Sendable, Hashable {
     public static let schemaEpoch: UInt16 = 1
     public static let minimumReadableSchemaRevision: UInt16 = 0
-    public static let schemaRevision: UInt16 = 1
+    public static let schemaRevision: UInt16 = 2
 
     public var schemaEpoch: UInt16
     public var schemaRevision: UInt16
@@ -279,6 +317,34 @@ public struct RuntimeSnapshot: Codable, Sendable, Hashable {
     public var installJournals: [ArtifactInstallJournal]
     public var leases: [ArtifactLease]
     public var tombstones: [ArtifactTombstone]
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaEpoch, schemaRevision, revision, preferences, library, assignments
+        case importJobs, installJournals, leases, tombstones
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schemaEpoch = try values.decode(UInt16.self, forKey: .schemaEpoch)
+        schemaRevision = try values.decode(UInt16.self, forKey: .schemaRevision)
+        guard schemaEpoch == Self.schemaEpoch,
+              schemaRevision >= Self.minimumReadableSchemaRevision,
+              schemaRevision <= Self.schemaRevision else {
+            throw StorageError.unsupportedSchema(epoch: schemaEpoch, revision: schemaRevision)
+        }
+        revision = try values.decode(UInt64.self, forKey: .revision)
+        preferences = try values.decode(RuntimePreferences.self, forKey: .preferences)
+        var records = try values.nestedUnkeyedContainer(forKey: .library)
+        library = []
+        while !records.isAtEnd {
+            library.append(try CommittedLibraryRecord(from: records.superDecoder(), allowLegacyVideo: schemaRevision < 2))
+        }
+        assignments = try values.decode([DeviceLocalPresentationAssignment].self, forKey: .assignments)
+        importJobs = try values.decode([PersistedImportJob].self, forKey: .importJobs)
+        installJournals = try values.decode([ArtifactInstallJournal].self, forKey: .installJournals)
+        leases = try values.decode([ArtifactLease].self, forKey: .leases)
+        tombstones = try values.decode([ArtifactTombstone].self, forKey: .tombstones)
+    }
 
     public init(
         revision: UInt64 = 0,

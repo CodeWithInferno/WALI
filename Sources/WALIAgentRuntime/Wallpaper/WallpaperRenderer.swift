@@ -1,37 +1,42 @@
 import AppKit
 import AVFoundation
 import Foundation
+import OSLog
 import WALIModel
 
-/// One immutable display-to-video request accepted by ``WallpaperRenderer``.
+/// Verified agent-owned media presented on one desktop canvas.
+public enum WallpaperRenderingContent: Sendable, Hashable {
+    case video(videoURL: URL, efficientVideoURL: URL?, posterURL: URL?,
+               lowPowerResponse: PresentationLowPowerResponse)
+    case still(imageURL: URL)
+
+    fileprivate func hasSameResource(as other: Self) -> Bool {
+        switch (self, other) {
+        case let (.video(a, _, ap, _), .video(b, _, bp, _)): a == b && ap == bp
+        case let (.still(a), .still(b)): a == b
+        default: false
+        }
+    }
+}
+
+/// One immutable display-to-media request accepted by ``WallpaperRenderer``.
 public struct WallpaperRenderingAssignment: Sendable, Hashable {
     public let displayID: WallpaperDisplayIdentifier
-    public let videoURL: URL
-    public let efficientVideoURL: URL?
-    public let posterURL: URL?
+    public let content: WallpaperRenderingContent
     public let contentFit: PresentationContentFit
-    public let lowPowerResponse: PresentationLowPowerResponse
 
-    public init(
-        displayID: WallpaperDisplayIdentifier,
-        videoURL: URL,
-        efficientVideoURL: URL? = nil,
-        posterURL: URL? = nil,
-        contentFit: PresentationContentFit = .fill,
-        lowPowerResponse: PresentationLowPowerResponse = .pause
-    ) {
+    public init(displayID: WallpaperDisplayIdentifier, content: WallpaperRenderingContent,
+                contentFit: PresentationContentFit = .fill) {
         self.displayID = displayID
-        self.videoURL = videoURL
-        self.efficientVideoURL = efficientVideoURL
-        self.posterURL = posterURL
+        self.content = content
         self.contentFit = contentFit
-        self.lowPowerResponse = lowPowerResponse
     }
 }
 
 public enum WallpaperSessionStatus: Sendable, Equatable {
     case preparing
     case playing
+    case displaying
     case paused(Set<WallpaperAutomaticPauseReason>)
     case failed(String)
 }
@@ -65,9 +70,43 @@ public struct WallpaperRendererSnapshot: Sendable, Equatable {
     }
 }
 
+extension WallpaperRendererSnapshot {
+    /// Only enum labels and counts enter local logs; never identifiers or failure text.
+    var diagnosticSummary: String {
+        var statusCounts: [String: Int] = [:]
+        var reasonCounts: [WallpaperAutomaticPauseReason: Int] = [:]
+        for session in sessions {
+            let label: String
+            switch session.status {
+            case .preparing: label = "preparing"
+            case .playing: label = "playing"
+            case .displaying: label = "displaying"
+            case let .paused(reasons):
+                label = "paused"
+                for reason in reasons { reasonCounts[reason, default: 0] += 1 }
+            case .failed: label = "failed"
+            }
+            statusCounts[label, default: 0] += 1
+        }
+        let statuses = ["preparing", "playing", "displaying", "paused", "failed"]
+            .map { "\($0):\(statusCounts[$0, default: 0])" }.joined(separator: ",")
+        let systemReasons = automaticPauseReasons.map(\.rawValue).sorted().joined(separator: ",")
+        let sessionReasons = reasonCounts.keys.sorted { $0.rawValue < $1.rawValue }
+            .map { "\($0.rawValue):\(reasonCounts[$0, default: 0])" }.joined(separator: ",")
+        return "sessions=\(sessions.count) statuses=\(statuses)"
+            + " system_reasons=\(systemReasons.isEmpty ? "none" : systemReasons)"
+            + " session_reasons=\(sessionReasons.isEmpty ? "none" : sessionReasons)"
+    }
+}
+
 /// Main-actor facade for display reconciliation, wallpaper windows and playback.
 @MainActor
 public final class WallpaperRenderer {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "io.github.codewithinferno.wali.WALIAgent",
+        category: "WallpaperRenderer"
+    )
+
     public typealias SnapshotHandler = @MainActor (WallpaperRendererSnapshot) -> Void
 
     public var onSnapshotChange: SnapshotHandler?
@@ -222,10 +261,9 @@ public final class WallpaperRenderer {
     private func effectiveReasons(
         for assignment: WallpaperRenderingAssignment
     ) -> Set<WallpaperAutomaticPauseReason> {
+        guard case let .video(_, _, _, response) = assignment.content else { return [] }
         var reasons = automaticPauseReasons
-        if assignment.lowPowerResponse != .pause {
-            reasons.remove(.lowPower)
-        }
+        if response != .pause { reasons.remove(.lowPower) }
         return reasons
     }
 
@@ -233,17 +271,13 @@ public final class WallpaperRenderer {
         _ assignment: WallpaperRenderingAssignment
     ) -> WallpaperRenderingAssignment {
         guard automaticPauseReasons.contains(.lowPower),
-              assignment.lowPowerResponse == .reduceQuality,
-              let efficientVideoURL = assignment.efficientVideoURL else {
-            return assignment
-        }
+              case let .video(_, efficientURL?, posterURL, .reduceQuality) = assignment.content
+        else { return assignment }
         return WallpaperRenderingAssignment(
             displayID: assignment.displayID,
-            videoURL: efficientVideoURL,
-            efficientVideoURL: efficientVideoURL,
-            posterURL: assignment.posterURL,
-            contentFit: assignment.contentFit,
-            lowPowerResponse: assignment.lowPowerResponse
+            content: .video(videoURL: efficientURL, efficientVideoURL: efficientURL,
+                            posterURL: posterURL, lowPowerResponse: .reduceQuality),
+            contentFit: assignment.contentFit
         )
     }
 
@@ -266,7 +300,179 @@ public final class WallpaperRenderer {
         )
         guard next != snapshot else { return }
         snapshot = next
+        Self.logger.notice("Renderer state: \(next.diagnosticSummary, privacy: .public)")
         onSnapshotChange?(next)
+    }
+}
+
+/// The real video adapter and a window-free deterministic test adapter share
+/// this existing playback boundary. Still content never constructs one.
+@MainActor
+protocol WallpaperVideoPresenting: AnyObject {
+    var onStateChange: (@MainActor (LoopingVideoPlaybackState) -> Void)? { get set }
+    var state: LoopingVideoPlaybackState { get }
+    func replace(videoURL: URL, posterURL: URL?, scaling: PresentationContentFit) async throws
+    func setScaling(_ scaling: PresentationContentFit)
+    func setPaused(_ paused: Bool)
+    func stop()
+}
+
+extension LoopingVideoPlayback: WallpaperVideoPresenting {}
+
+/// Owns exactly one active presentation adapter. It has no window, assignment
+/// persistence or original-media access, which keeps replacement tests isolated.
+@MainActor
+final class WallpaperContentPresenter {
+    var onChange: (@MainActor (WallpaperSessionStatus) -> Void)?
+    private(set) var status: WallpaperSessionStatus = .preparing
+    private let canvas: any StaticImageWallpaperCanvas
+    private let makeVideo: @MainActor () -> any WallpaperVideoPresenting
+    private let loadImage: @MainActor (URL) async throws -> CGImage
+    private var video: (any WallpaperVideoPresenting)?
+    private var still: StaticImageWallpaperSurface?
+    private var requestedContent: WallpaperRenderingContent?
+    private var loadedContent: WallpaperRenderingContent?
+    private var scaling: PresentationContentFit = .fill
+    private var preparationTask: Task<Void, Never>?
+    private var generation: UInt64 = 0
+    private var userPaused = false
+    private var pauseReasons: Set<WallpaperAutomaticPauseReason> = []
+    private var closed = false
+    private var applyingPauseState = false
+
+    init(canvas: any StaticImageWallpaperCanvas,
+         makeVideo: @escaping @MainActor () -> any WallpaperVideoPresenting,
+         loadImage: (@MainActor (URL) async throws -> CGImage)? = nil) {
+        self.canvas = canvas
+        self.makeVideo = makeVideo
+        self.loadImage = loadImage ?? { try await StaticWallpaperImageLoader.shared.load($0) }
+    }
+
+    func setContent(_ content: WallpaperRenderingContent, scaling: PresentationContentFit) {
+        guard !closed else { return }
+        self.scaling = scaling
+        if let requestedContent, requestedContent.hasSameResource(as: content),
+           preparationTask != nil || loadedContent?.hasSameResource(as: content) == true {
+            self.requestedContent = content
+            video?.setScaling(scaling)
+            still?.setScaling(scaling)
+            return
+        }
+        requestedContent = content
+        if case .still = content { video?.setPaused(true) }
+        generation &+= 1
+        let currentGeneration = generation
+        preparationTask?.cancel()
+        updateStatus(.preparing)
+        preparationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if currentGeneration == generation { preparationTask = nil }
+            }
+            do {
+                switch content {
+                case let .still(imageURL):
+                    let image = try await loadImage(imageURL)
+                    try Task.checkCancellation()
+                    guard !closed, generation == currentGeneration else { return }
+                    // Decode and validate before retiring the current display.
+                    try StaticImageWallpaperSurface.validate(image)
+                    releaseSurface()
+                    let surface = try StaticImageWallpaperSurface(canvas: canvas)
+                    try surface.present(image, scaling: self.scaling)
+                    still = surface
+                    loadedContent = content
+                    updateStatus(.displaying)
+                case let .video(videoURL, _, posterURL, _):
+                    if video == nil {
+                        releaseSurface()
+                        let playback = makeVideo()
+                        video = playback
+                        playback.onStateChange = { [weak self, weak playback] _ in
+                            guard let self, let playback,
+                                  self.video === playback,
+                                  case .video = self.requestedContent else { return }
+                            self.applyPauseState()
+                        }
+                    }
+                    guard let playback = video else { return }
+                    playback.setPaused(userPaused || !pauseReasons.isEmpty)
+                    try await playback.replace(videoURL: videoURL, posterURL: posterURL,
+                                               scaling: self.scaling)
+                    try Task.checkCancellation()
+                    guard !closed, generation == currentGeneration else { return }
+                    loadedContent = content
+                    playback.setScaling(self.scaling)
+                    applyPauseState()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled, !closed, generation == currentGeneration else { return }
+                loadedContent = nil
+                updateStatus(.failed(error.localizedDescription))
+            }
+        }
+    }
+
+    func setPaused(userPaused: Bool, automaticReasons: Set<WallpaperAutomaticPauseReason>) {
+        guard !closed else { return }
+        self.userPaused = userPaused
+        pauseReasons = automaticReasons
+        applyPauseState()
+    }
+
+    func tearDown() {
+        guard !closed else { return }
+        closed = true
+        generation &+= 1
+        preparationTask?.cancel()
+        preparationTask = nil
+        releaseSurface()
+        requestedContent = nil
+        loadedContent = nil
+        onChange = nil
+    }
+
+    private func releaseSurface() {
+        if let video {
+            video.onStateChange = nil
+            video.stop()
+            self.video = nil
+            canvas.onLayout = nil
+        }
+        still?.tearDown()
+        still = nil
+    }
+
+    private func applyPauseState() {
+        guard !applyingPauseState, case .video = requestedContent, let video else { return }
+        applyingPauseState = true
+        defer { applyingPauseState = false }
+        if case .failed(let message) = video.state {
+            loadedContent = nil
+            updateStatus(.failed(message))
+            return
+        }
+        let paused = userPaused || !pauseReasons.isEmpty
+        video.setPaused(paused)
+        if paused {
+            updateStatus(.paused(pauseReasons))
+        } else {
+            switch video.state {
+            case .empty, .preparing, .ready: updateStatus(.preparing)
+            case .playing, .paused: updateStatus(.playing)
+            case .failed(let message):
+                loadedContent = nil
+                updateStatus(.failed(message))
+            }
+        }
+    }
+
+    private func updateStatus(_ value: WallpaperSessionStatus) {
+        guard value != status else { return }
+        status = value
+        onChange?(value)
     }
 }
 
@@ -276,70 +482,52 @@ private final class WallpaperSession {
     var assignment: WallpaperRenderingAssignment
     var onChange: (@MainActor () -> Void)?
     private(set) var snapshot: WallpaperSessionSnapshot
-
     private let window: WallpaperWindow
-    private let playback: LoopingVideoPlayback
+    private let presenter: WallpaperContentPresenter
     private var currentScreen: NSScreen
-    private var preparationTask: Task<Void, Never>?
     private var globalPauseReasons: Set<WallpaperAutomaticPauseReason> = []
     private var isUserPaused = false
     private var isOccluded = false
-    private var loadedAssignment: WallpaperRenderingAssignment?
     private var isTornDown = false
 
-    init(
-        display: WallpaperDisplay,
-        assignment: WallpaperRenderingAssignment,
-        screen: NSScreen
-    ) {
+    init(display: WallpaperDisplay, assignment: WallpaperRenderingAssignment, screen: NSScreen) {
         self.display = display
         self.assignment = assignment
         snapshot = WallpaperSessionSnapshot(id: display.id, status: .preparing)
         currentScreen = screen
-        window = WallpaperWindow(screen: screen)
-        playback = LoopingVideoPlayback(canvas: window.canvas)
-
+        let window = WallpaperWindow(screen: screen)
+        self.window = window
+        presenter = WallpaperContentPresenter(canvas: window.canvas,
+            makeVideo: { LoopingVideoPlayback(canvas: window.canvas) })
         window.onVisibilityChange = { [weak self] visible in
             guard let self else { return }
-            self.isOccluded = !visible
-            self.applyPauseState()
+            isOccluded = !visible
+            applyPauseState()
         }
-        playback.onStateChange = { [weak self] state in
-            self?.playbackStateChanged(state)
-        }
+        presenter.onChange = { [weak self] status in self?.updateStatus(status) }
     }
 
-    func start(
-        globalPauseReasons: Set<WallpaperAutomaticPauseReason>,
-        userPaused: Bool
-    ) {
+    func start(globalPauseReasons: Set<WallpaperAutomaticPauseReason>, userPaused: Bool) {
         self.globalPauseReasons = globalPauseReasons
         isUserPaused = userPaused
         window.show(on: currentScreen)
-        loadAssignmentIfNeeded()
+        presenter.setContent(assignment.content, scaling: assignment.contentFit)
         applyPauseState()
     }
 
-    func update(
-        assignment: WallpaperRenderingAssignment,
-        screen: NSScreen,
-        globalPauseReasons: Set<WallpaperAutomaticPauseReason>,
-        userPaused: Bool
-    ) {
+    func update(assignment: WallpaperRenderingAssignment, screen: NSScreen,
+                globalPauseReasons: Set<WallpaperAutomaticPauseReason>, userPaused: Bool) {
         guard !isTornDown else { return }
         self.assignment = assignment
         self.globalPauseReasons = globalPauseReasons
         isUserPaused = userPaused
         currentScreen = screen
         window.refreshPlacement(on: screen)
-        loadAssignmentIfNeeded()
+        presenter.setContent(assignment.content, scaling: assignment.contentFit)
         applyPauseState()
     }
 
-    func setPaused(
-        globalReasons: Set<WallpaperAutomaticPauseReason>,
-        userPaused: Bool
-    ) {
+    func setPaused(globalReasons: Set<WallpaperAutomaticPauseReason>, userPaused: Bool) {
         globalPauseReasons = globalReasons
         isUserPaused = userPaused
         applyPauseState()
@@ -348,89 +536,16 @@ private final class WallpaperSession {
     func tearDown() {
         guard !isTornDown else { return }
         isTornDown = true
-        preparationTask?.cancel()
-        preparationTask = nil
         window.onVisibilityChange = nil
-        playback.onStateChange = nil
-        playback.stop()
+        presenter.tearDown()
         window.tearDown()
         onChange = nil
     }
 
-    private func loadAssignmentIfNeeded() {
-        guard assignment != loadedAssignment else { return }
-        if let loadedAssignment,
-           loadedAssignment.videoURL == assignment.videoURL,
-           loadedAssignment.posterURL == assignment.posterURL {
-            self.loadedAssignment = assignment
-            playback.setScaling(assignment.contentFit)
-            return
-        }
-        loadedAssignment = assignment
-        preparationTask?.cancel()
-
-        let requestedAssignment = assignment
-        preparationTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                try await playback.replace(
-                    videoURL: requestedAssignment.videoURL,
-                    posterURL: requestedAssignment.posterURL,
-                    scaling: requestedAssignment.contentFit
-                )
-                guard requestedAssignment.videoURL == assignment.videoURL,
-                      requestedAssignment.posterURL == assignment.posterURL else { return }
-                loadedAssignment = assignment
-                playback.setScaling(assignment.contentFit)
-            } catch is CancellationError {
-                return
-            } catch {
-                guard !Task.isCancelled, requestedAssignment == assignment else { return }
-                loadedAssignment = nil
-                updateStatus(.failed(error.localizedDescription))
-            }
-        }
-    }
-
     private func applyPauseState() {
         var reasons = globalPauseReasons
-        if isOccluded {
-            reasons.insert(.windowOccluded)
-        }
-        playback.setPaused(isUserPaused || !reasons.isEmpty)
-
-        if isUserPaused || !reasons.isEmpty {
-            updateStatus(.paused(reasons))
-        } else {
-            switch playback.state {
-            case .preparing, .ready:
-                updateStatus(.preparing)
-            case .failed(let message):
-                updateStatus(.failed(message))
-            case .empty:
-                updateStatus(.preparing)
-            case .playing, .paused:
-                updateStatus(.playing)
-            }
-        }
-    }
-
-    private func playbackStateChanged(_ state: LoopingVideoPlaybackState) {
-        if isUserPaused || !globalPauseReasons.isEmpty || isOccluded {
-            applyPauseState()
-            return
-        }
-        switch state {
-        case .empty, .preparing, .ready:
-            updateStatus(.preparing)
-        case .playing:
-            updateStatus(.playing)
-        case .paused:
-            updateStatus(.paused([]))
-        case .failed(let message):
-            loadedAssignment = nil
-            updateStatus(.failed(message))
-        }
+        if isOccluded { reasons.insert(.windowOccluded) }
+        presenter.setPaused(userPaused: isUserPaused, automaticReasons: reasons)
     }
 
     private func updateStatus(_ status: WallpaperSessionStatus) {

@@ -40,6 +40,9 @@ struct LibrarySurface: View {
             previewTask?.cancel()
             hoveringID = nil
         }
+        .onChange(of: reduceMotion) { _, reduced in
+            if reduced { previewTask?.cancel(); hoveringID = nil }
+        }
         .accessibilityIdentifier("WALI.Library")
     }
 
@@ -94,9 +97,9 @@ struct LibrarySurface: View {
         ContentUnavailableView {
             Label("Your Library Is Ready", systemImage: "photo.on.rectangle.angled")
         } description: {
-            Text("Drag in a video or import one from your Mac. WALI keeps the original untouched.")
+            Text("Import a JPEG, PNG, or video from your Mac. WALI keeps the original untouched.")
         } actions: {
-            Button("Import Video…", action: onImport)
+            Button("Import Wallpaper…", action: onImport)
                 .controlSize(.large)
         }
         .dropDestination(for: URL.self) { urls, _ in
@@ -124,6 +127,8 @@ struct LibrarySurface: View {
 }
 
 private struct WallpaperTile: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     let wallpaper: WALIWallpaperPresentation
     let isSelected: Bool
     let isPreviewing: Bool
@@ -233,7 +238,7 @@ private struct WallpaperTile: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .foregroundStyle(.white)
-                    .background(.black.opacity(0.45), in: Capsule())
+                    .background(.black.opacity(reduceTransparency || contrast == .increased ? 1 : 0.72), in: Capsule())
             }
         case let .preparing(progress):
             HStack(spacing: 6) {
@@ -246,14 +251,14 @@ private struct WallpaperTile: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .foregroundStyle(.white)
-            .background(.black.opacity(0.45), in: Capsule())
+            .background(.black.opacity(reduceTransparency || contrast == .increased ? 1 : 0.72), in: Capsule())
         case .failed:
             Label("Failed", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(.black.opacity(0.45), in: Capsule())
+                .background(.black.opacity(reduceTransparency || contrast == .increased ? 1 : 0.72), in: Capsule())
         }
     }
 
