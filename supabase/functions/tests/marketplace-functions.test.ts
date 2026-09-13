@@ -394,7 +394,7 @@ Deno.test("account deletion atomically requests and checkpoints provider session
   ]);
 });
 
-Deno.test("admin deletion executor soft-deletes, verifies, then finalizes the CAS", async () => {
+Deno.test("admin deletion executor sends the provider JSON soft-delete option before verified CAS", async () => {
   const deletionID = "94000000-0000-4000-8000-000000000002";
   const userID = "00000000-0000-4000-8000-000000000003";
   const database = new FakeDatabase({
@@ -415,6 +415,8 @@ Deno.test("admin deletion executor soft-deletes, verifies, then finalizes the CA
     },
   });
   const methods: string[] = [];
+  const providerRequests: Request[] = [];
+  let providerSoftDeleted = false;
   const response = await handleRequestAccountDeletion(
     jsonRequest(JSON.stringify({
       api_version: "account.v1",
@@ -433,23 +435,43 @@ Deno.test("admin deletion executor soft-deletes, verifies, then finalizes the CA
           expiresAt: 2_000_000_000,
           authenticatedAt: 1_788_220_800,
         }),
-      fetcher: (input, init) => {
-        methods.push(init?.method ?? "GET");
-        const url = new URL(input instanceof Request ? input.url : input);
-        assert(url.pathname.endsWith(`/auth/v1/admin/users/${userID}`));
-        if (init?.method === "DELETE") {
-          assertEquals(url.searchParams.get("should_soft_delete"), "true");
+      fetcher: async (input, init) => {
+        const request = new Request(input, init);
+        providerRequests.push(request.clone());
+        methods.push(request.method);
+        if (request.method === "DELETE") {
+          // Supabase Auth reads this flag from the JSON body, defaulting to
+          // hard deletion when it is absent; query parameters do not set it.
+          const body = await request.json().catch(() => ({}));
+          providerSoftDeleted = body.should_soft_delete === true;
+          return Response.json({}, {
+            status: providerSoftDeleted ? 200 : 400,
+          });
         }
-        return Promise.resolve(
-          init?.method === "DELETE"
-            ? Response.json({}, { status: 200 })
-            : Response.json({ deleted_at: "2026-09-01T00:00:00Z" }),
-        );
+        return Response.json({
+          deleted_at: providerSoftDeleted ? "2026-09-01T00:00:00Z" : null,
+        });
       },
     }),
   );
+  const deletionRequest = providerRequests[0];
+  assertEquals(await deletionRequest.json().catch(() => null), {
+    should_soft_delete: true,
+  });
+  assertEquals(
+    deletionRequest.url,
+    `https://catalog.example/auth/v1/admin/users/${userID}`,
+  );
+  assertEquals(deletionRequest.headers.get("content-type"), "application/json");
+  assertEquals(
+    deletionRequest.headers.get("authorization"),
+    "Bearer service-role-key",
+  );
+  assertEquals(deletionRequest.headers.get("apikey"), "service-role-key");
+  assertEquals(deletionRequest.redirect, "error");
   assertEquals(response.status, 200);
   assertEquals(methods, ["DELETE", "GET"]);
+  assertEquals(providerRequests[1].body, null);
   assertEquals(database.calls.map((call) => call.name), [
     "wali_edge_take_rate_limit_v1",
     "wali_edge_prepare_account_identity_deletion_v1",
