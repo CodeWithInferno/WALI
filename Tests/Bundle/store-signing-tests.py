@@ -2,8 +2,10 @@
 import copy
 import datetime
 import importlib.util
+import sys
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('store_signing_policy', ROOT / 'scripts/store_signing_policy.py')
@@ -12,6 +14,10 @@ spec.loader.exec_module(policy)
 package_spec = importlib.util.spec_from_file_location('verify_store_package', ROOT / 'scripts/verify-store-package.py')
 package_policy = importlib.util.module_from_spec(package_spec)
 package_spec.loader.exec_module(package_policy)
+bundle_spec = importlib.util.spec_from_file_location('verify_store_bundle', ROOT / 'scripts/verify-store-bundle.py')
+bundle_policy = importlib.util.module_from_spec(bundle_spec)
+with patch.dict(sys.modules, {'store_signing_policy': policy}):
+    bundle_spec.loader.exec_module(bundle_policy)
 
 
 class StoreSigningTests(unittest.TestCase):
@@ -26,6 +32,33 @@ class StoreSigningTests(unittest.TestCase):
 
     def validate(self, configuration='AppStore'):
         policy.validate_signature(self.metadata, configuration=configuration, identifier=self.identifier, team=self.team, expected=self.expected, profile=self.profile, leaf_certificate=b'fixture-leaf', now=self.now)
+
+    def test_codesign_requirement_is_literal_and_binds_identity(self):
+        bundle = Path('/fixture/WALI.app')
+        with patch.object(bundle_policy, 'run') as run:
+            bundle_policy.verify_code_signature(bundle, self.identifier, self.team)
+        run.assert_called_once_with(
+            '/usr/bin/codesign', '--verify', '--strict', '--test-requirement',
+            '=anchor apple generic and identifier "com.wali.store.WALI" and certificate leaf[subject.OU] = "TESTTEAM01"',
+            str(bundle),
+        )
+
+    def test_codesign_requirement_failure_is_not_accepted(self):
+        failure = bundle_policy.subprocess.CalledProcessError(1, '/usr/bin/codesign')
+        with patch.object(bundle_policy, 'run', side_effect=failure), self.assertRaises(bundle_policy.subprocess.CalledProcessError) as result:
+            bundle_policy.verify_code_signature(Path('/fixture/WALI.app'), self.identifier, self.team)
+        self.assertIs(result.exception, failure)
+
+    def test_codesign_extracts_leaf_to_explicit_temporary_prefix(self):
+        bundle = Path('/fixture/WALI.app')
+        with patch.object(bundle_policy.tempfile, 'TemporaryDirectory') as temporary, patch.object(bundle_policy, 'run') as run, patch.object(Path, 'read_bytes', autospec=True, return_value=b'fixture-leaf') as read:
+            temporary.return_value.__enter__.return_value = '/fixture/certificates'
+            self.assertEqual(bundle_policy.signing_leaf_certificate(bundle), b'fixture-leaf')
+        run.assert_called_once_with(
+            '/usr/bin/codesign', '-d', '--extract-certificates=/fixture/certificates/certificate-', str(bundle),
+        )
+        read.assert_called_once_with(Path('/fixture/certificates/certificate-0'))
+        temporary.return_value.__exit__.assert_called_once_with(None, None, None)
 
     def test_installer_signing_class_and_team(self):
         valid = 'Status: signed by a certificate trusted by macOS\nCertificate Chain:\n 1. 3rd Party Mac Developer Installer: Fixture (TESTTEAM01)\n 2. Apple Worldwide Developer Relations Certification Authority\n'
