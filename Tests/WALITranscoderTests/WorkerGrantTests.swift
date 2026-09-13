@@ -153,7 +153,7 @@ final class WorkerGrantTests: XCTestCase {
         for isDirectory in [false, true] {
             let fixture = try fixture()
             defer { try? FileManager.default.removeItem(at: fixture.root) }
-            let target = isDirectory ? fixture.staging : fixture.source
+            var target = isDirectory ? fixture.staging : fixture.source
             let keys: Set<URLResourceKey> = [.fileResourceIdentifierKey, .volumeIdentifierKey]
             let data = try target.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: keys, relativeTo: nil)
             let replacement = fixture.root.appendingPathComponent("replacement", isDirectory: isDirectory)
@@ -161,7 +161,11 @@ final class WorkerGrantTests: XCTestCase {
             else { try Data([9, 8, 7]).write(to: replacement) }
             try FileManager.default.removeItem(at: target)
             try FileManager.default.moveItem(at: replacement, to: target)
-            // Pass the same URL whose bookmark creation populated resource caches.
+            // Resolved bookmarks may carry old resource metadata. Explicitly
+            // seed that cache while the path now names a different object.
+            let recorded = try XCTUnwrap(URL.resourceValues(forKeys: keys, fromBookmarkData: data))
+            target.setTemporaryResourceValue(try XCTUnwrap(recorded.fileResourceIdentifier as? Data), forKey: .fileResourceIdentifierKey)
+            target.setTemporaryResourceValue(try XCTUnwrap(recorded.volumeIdentifier as? Data), forKey: .volumeIdentifierKey)
             XCTAssertThrowsError(try renew(data, target, isDirectory)) { error in
                 guard case WorkerGrantError.identityMismatch = error else { return XCTFail("Unexpected error: \(error)") }
             }
