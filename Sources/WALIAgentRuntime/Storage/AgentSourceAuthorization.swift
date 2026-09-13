@@ -114,8 +114,11 @@ public enum StoreWorkerRequestFactory {
               !source.url.standardizedFileURL.path.hasPrefix(request.stagingDirectoryURL.standardizedFileURL.path + "/") else {
             throw StorageError.pathEscapesStore
         }
-        let sourceGrant = try source.url.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: nil, relativeTo: nil)
-        let stagingGrant = try request.stagingDirectoryURL.bookmarkData(options: [.minimalBookmark], includingResourceValuesForKeys: nil, relativeTo: nil)
+        // Keep the full file identity in the transient bookmark. Minimal
+        // bookmarks for agent-container resources can resolve stale in the
+        // separately sandboxed worker even when their path still matches.
+        let sourceGrant = try source.url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        let stagingGrant = try request.stagingDirectoryURL.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
         let result = StoreTranscoderRequest(request: TranscoderRequest(
             jobID: request.jobID, attemptGeneration: request.attemptGeneration,
             sourceBookmark: sourceGrant, sourceURL: source.url,
