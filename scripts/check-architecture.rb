@@ -1539,8 +1539,8 @@ class ArchitectureChecker
 
     marketing = resolved_target_build_setting(target_name, configuration, "MARKETING_VERSION")
     build = resolved_target_build_setting(target_name, configuration, "CURRENT_PROJECT_VERSION")
-    error("#{target_name} #{configuration} MARKETING_VERSION must be 0.1.0") unless marketing == "0.1.0"
-    error("#{target_name} #{configuration} CURRENT_PROJECT_VERSION must be 4") unless build == "4"
+    error("#{target_name} #{configuration} MARKETING_VERSION must be 0.1.1") unless marketing == "0.1.1"
+    error("#{target_name} #{configuration} CURRENT_PROJECT_VERSION must be 5") unless build == "5"
 
     return unless configuration == "Development"
 
