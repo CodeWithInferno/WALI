@@ -129,6 +129,12 @@ promotion, classification, and live catalog-integrity queues use fixed names
 and lease-bound database RPCs. Live catalog integrity verification is not an
 archive or restore proof.
 
+Storage cleanup uses the [multiple-object DELETE route](https://supabase.com/docs/reference/self-hosting-storage)
+`/storage/v1/object/{bucket}` without a trailing slash, with exactly the leased
+object path in `prefixes`. The separate verification GET keeps that exact object
+path. Completion still requires the scoped lease, an absent object response, and
+the database's absent-object check; a successful DELETE alone is insufficient.
+
 The media image is an untrusted-data plane. Its process and independent verify
 passes accept fixed paths only, validate the embedded policy digest, fully
 decode/re-encode supported media, strip audio and metadata, enforce bounded

@@ -221,6 +221,14 @@ func TestDeleteUsesSeparatedAuthAndVerifiesObjectIsGone(t *testing.T) {
 		}
 		switch request.Method {
 		case http.MethodDelete:
+			if requests != 1 || request.URL.EscapedPath() != "/storage/v1/object/uploads-private" || request.URL.RawQuery != "" {
+				t.Errorf("delete must use the multiple-object bucket route: request=%d URL=%s", requests, request.URL.RequestURI())
+				http.NotFound(writer, request)
+				return
+			}
+			if request.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("delete content type=%q", request.Header.Get("Content-Type"))
+			}
 			var body struct {
 				Prefixes []string `json:"prefixes"`
 			}
@@ -229,6 +237,9 @@ func TestDeleteUsesSeparatedAuthAndVerifiesObjectIsGone(t *testing.T) {
 			}
 			writer.WriteHeader(http.StatusOK)
 		case http.MethodGet:
+			if requests != 2 || request.URL.EscapedPath() != "/storage/v1/object/uploads-private/"+objectPath || request.URL.RawQuery != "" {
+				t.Errorf("verification must read only the deleted object: request=%d URL=%s", requests, request.URL.RequestURI())
+			}
 			writer.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("method=%s", request.Method)
