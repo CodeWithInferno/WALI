@@ -285,7 +285,8 @@ func (c *Client) Delete(ctx context.Context, bucket, objectPath string) error {
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.objectURL(bucket, ""), bytes.NewReader(body))
+	// The multiple-object route ends at the bucket name, without an object slash.
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, strings.TrimSuffix(c.objectURL(bucket, ""), "/"), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
