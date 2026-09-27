@@ -974,6 +974,7 @@ RUBY
         "${REPOSITORY_ROOT}/docs/adr/0022-direct-production-email-otp-authentication.md" \
         "${REPOSITORY_ROOT}/docs/adr/0023-staff-curated-licensed-catalog.md" \
         "${REPOSITORY_ROOT}/docs/adr/0025-public-creator-and-catalog-flows.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0030-identity-bound-store-bookmark-renewal.md" \
         "${root}/docs/adr/"
 
     printf '%s\n' "${root}"
@@ -1062,6 +1063,7 @@ new_marketplace_fixture() {
         "${REPOSITORY_ROOT}/docs/adr/0022-direct-production-email-otp-authentication.md" \
         "${REPOSITORY_ROOT}/docs/adr/0023-staff-curated-licensed-catalog.md" \
         "${REPOSITORY_ROOT}/docs/adr/0025-public-creator-and-catalog-flows.md" \
+        "${REPOSITORY_ROOT}/docs/adr/0030-identity-bound-store-bookmark-renewal.md" \
         "${root}/docs/adr/"
     cp "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.json" \
         "${REPOSITORY_ROOT}/Fixtures/Catalog/manifest-v1.signature" \
