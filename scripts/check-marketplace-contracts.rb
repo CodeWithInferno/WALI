@@ -80,7 +80,7 @@ class MarketplaceContractChecker
     catalog_home_v1 catalog_search_v1 catalog_browse_v1
     catalog_home_v2 catalog_search_v2 catalog_browse_v2 catalog_wallpaper_detail_v2
     catalog_wallpaper_detail_v1 catalog_creator_v1 my_favorites_v1
-    my_saved_wallpapers_v1 catalog_preferences_v1 set_catalog_preferences_v1 set_favorite_v1 set_saved_v1
+    my_saved_wallpapers_v1 my_saved_wallpapers_v2 my_favorites_v2 catalog_preferences_v1 set_catalog_preferences_v1 set_favorite_v1 set_saved_v1
     set_creator_follow_v1 request_install_v1 creator_authorization_v1
     creator_metadata_v1 creator_processing_status_v1 my_creator_submissions_v1
     moderation_queue_v1 moderation_reports_v1 moderation_metadata_v1

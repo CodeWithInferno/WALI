@@ -184,7 +184,7 @@ stable `{field, code}` pairs; rejected input is not partially saved.
 The creator may read only a safe projection for the current generation:
 
 - processing state and safe error code;
-- detected container/codec, width, height, frame rate, and duration;
+- detected container/codec, width, height, frame rate, and duration; container is a format name (`mp4` for video or `png` for the canonical still), while immutable artifact `media_type` retains its MIME value (`video/mp4` or `image/png`); still facts omit frame rate and duration;
 - generated variant roles and dimensions, without private object paths;
 - duplicate-content warning without another creator's identity/private record;
 - category/tag suggestions with model ID/revision/confidence;

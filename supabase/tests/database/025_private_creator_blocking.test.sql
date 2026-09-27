@@ -33,6 +33,9 @@ select is((select count(*) from public.my_saved_wallpapers_v1),0::bigint,'saved 
 select is((select count(*) from public.my_saved_wallpapers_v2),0::bigint,'saved V2 hidden');
 select is((select count(*) from public.my_favorites_v1),0::bigint,'favorite V1 hidden');
 select is((select count(*) from public.my_favorites_v2),0::bigint,'favorite V2 hidden');
+select is(jsonb_array_length(public.my_saved_wallpapers_v2(null,24)->'items'),0,'Saved V2 RPC preserves creator blocking before paging');
+select is(jsonb_array_length(public.my_favorites_v2(null,24)->'items'),0,'Favorites V2 RPC preserves creator blocking before paging');
+
 select throws_ok($$select public.set_saved_v1('30000000-0000-0000-0000-000000000001',true,1,'blocked_save_new_0001')$$,'P0001','WALI_CREATOR_BLOCKED','new positive save rejected');
 select throws_ok($$select public.set_favorite_v1('30000000-0000-0000-0000-000000000001',true,1,'blocked_favorite_0001')$$,'P0001','WALI_CREATOR_BLOCKED','new positive favorite rejected');
 select throws_ok($$select public.set_creator_follow_v1('00000000-0000-0000-0000-000000000002',true,1,'blocked_follow_new_01')$$,'P0001','WALI_CREATOR_BLOCKED','new positive follow rejected');

@@ -547,6 +547,8 @@ surfaces:
   # ADR0022 changes direct foreground auth to email_otp without changing this API
   # version, account IDs, IPC, or persisted library/session namespaces. The compiled
   # public configuration contract is docs/release/production-configuration.md.
+  # ADR0027 owner Saved/Favorites V2 RPCs use the existing V2 views and owner
+  # RLS with distinct V2 cursors; Creator still containers use the native png name.
   # Native account recovery reads the existing server-owned request IDs through
   # account_operation_references_v1; see docs/api/catalog-v1.md.
   # Private creator pages use100 items and10,000 active blocks, independently of
