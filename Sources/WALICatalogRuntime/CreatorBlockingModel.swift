@@ -66,6 +66,7 @@ public final class CreatorBlockingModel {
     }
 
     public func refresh() async throws -> Snapshot {
+        try Task.checkCancellation()
         let expectedSubject = subjectID; let expectedSubjectEpoch = subjectEpoch
         isReady = false
         var operationID: UUID?
@@ -103,8 +104,11 @@ public final class CreatorBlockingModel {
         } catch {
             guard subjectID == expectedSubject, subjectEpoch == expectedSubjectEpoch else { throw CancellationError() }
             if let operationID, operationID != latestRefreshID { throw CancellationError() }
+            // A cancelled waiter cannot undo another waiter's accepted result.
+            // Without one, this refresh already left readiness false on entry.
+            if error is CancellationError { throw error }
             isReady = false
-            if !(error is CancellationError) { failureMessage = "Creator preferences couldn’t be refreshed. Try again to load the catalog." }
+            failureMessage = "Creator preferences couldn’t be refreshed. Try again to load the catalog."
             throw error
         }
     }

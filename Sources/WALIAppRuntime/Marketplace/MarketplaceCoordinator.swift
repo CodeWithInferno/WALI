@@ -278,6 +278,7 @@ public final class MarketplaceCoordinator {
     private var browseGeneration: UInt64 = 0
     private var detailGeneration: UInt64 = 0
     private var taxonomyTask: Task<Void, Never>?
+    private var taxonomyGeneration: UInt64 = 0
     private var preferencesTask: Task<Void, Never>?
     private var savedTask: Task<Void, Never>?
     private var savedGeneration: UInt64 = 0
@@ -492,7 +493,7 @@ public final class MarketplaceCoordinator {
         }
         Self.logger.info("Marketplace lifecycle started")
         loadTaxonomy()
-        if model.homeState == .idle { loadHome() }
+        if model.homeState == .idle || model.homeState == .loading { loadHome() }
         observeAccount()
         securityTask?.cancel()
         securityTask = Task { [weak self] in
@@ -533,6 +534,8 @@ public final class MarketplaceCoordinator {
     public func loadTaxonomy() {
         guard let gateway else { return }
         taxonomyTask?.cancel()
+        taxonomyGeneration &+= 1
+        let generation = taxonomyGeneration
         discovery.taxonomyState = .loading
         taxonomyTask = Task { [weak self] in
             do {
@@ -540,11 +543,14 @@ public final class MarketplaceCoordinator {
                 async let tags = gateway.tags()
                 let options = try await (categories, tags)
                 try Task.checkCancellation()
-                self?.discovery.categories = options.0
-                self?.discovery.tags = options.1
-                self?.discovery.taxonomyState = options.0.isEmpty ? .empty : .ready
-            } catch is CancellationError { return }
-            catch { self?.discovery.taxonomyState = Self.loadState(for: error) }
+                guard let self, generation == taxonomyGeneration else { return }
+                discovery.categories = options.0
+                discovery.tags = options.1
+                discovery.taxonomyState = options.0.isEmpty ? .empty : .ready
+            } catch {
+                guard let self, !Task.isCancelled, generation == taxonomyGeneration else { return }
+                discovery.taxonomyState = Self.loadState(for: error)
+            }
         }
     }
 
@@ -749,9 +755,10 @@ public final class MarketplaceCoordinator {
             blockedReportTarget = (detail.id, detail.currentReleaseID, creatorID)
         }
         let reloadSaved = discovery.savedState != .idle
-        homeTask?.cancel(); browseTask?.cancel(); detailTask?.cancel(); savedTask?.cancel()
+        taxonomyTask?.cancel(); homeTask?.cancel(); browseTask?.cancel(); detailTask?.cancel(); savedTask?.cancel()
         actionTask?.cancel(); installTask?.cancel()
-        homeGeneration &+= 1; browseGeneration &+= 1; detailGeneration &+= 1; savedGeneration &+= 1
+        taxonomyGeneration &+= 1; homeGeneration &+= 1; browseGeneration &+= 1; detailGeneration &+= 1; savedGeneration &+= 1
+        discovery.categories = []; discovery.tags = []; discovery.taxonomyState = .idle
         homeMediaLease = CatalogMediaLease(); browseMediaLease = CatalogMediaLease()
         searchMediaLease = CatalogMediaLease(); detailMediaLease = CatalogMediaLease(); savedMediaLease = CatalogMediaLease()
         model.homeSections = []; model.homeState = .idle
@@ -765,6 +772,7 @@ public final class MarketplaceCoordinator {
         creatorBlockReloadTask = Task { [weak self] in
             await Task.yield()
             guard let self, !Task.isCancelled, acceptsAuthenticationResults else { return }
+            loadTaxonomy()
             refreshCatalogSurfaces()
             if reloadSaved { loadSavedWallpapers() }
         }
@@ -794,10 +802,8 @@ public final class MarketplaceCoordinator {
                 self.model.homeState = self.model.homeSections.isEmpty ? .empty : .ready
                 Self.logger.info("Discover metadata ready; durationMs=\(Int(Date().timeIntervalSince(started) * 1_000), privacy: .public)")
                 await self.hydrateHome(home.sections, generation: generation)
-            } catch is CancellationError {
-                return
             } catch {
-                guard let self, generation == self.homeGeneration else { return }
+                guard let self, !Task.isCancelled, generation == self.homeGeneration else { return }
                 self.model.homeState = Self.loadState(for: error)
             }
         }

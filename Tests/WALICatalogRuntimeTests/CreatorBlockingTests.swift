@@ -95,6 +95,47 @@ final class CreatorBlockingTests: XCTestCase {
         XCTAssertTrue(model.isReady)
     }
 
+    func testCancelledCoalescedWaiterCannotInvalidateSuccessfulRefresh() async throws {
+        let gateway = ScriptedBlockGateway(subject: viewer, hold: true)
+        await gateway.setRows([try row(creator, revision: 1)], generation: 1)
+        let model = CreatorBlockingModel(gateway: gateway, anonymousStore: MemoryAnonymousBlocks())
+        model.updateSubject(viewer)
+        let first = Task { try await model.refresh() }
+        await gateway.waitForRead()
+        var secondEntered = false
+        let second = Task { secondEntered = true; return try await model.refresh() }
+        while !secondEntered { await Task.yield() }
+        // Whichever waiter applies first cancels both old presentations. Its
+        // accepted result must survive the other waiter's cancellation catch.
+        model.onInvalidation = { first.cancel(); second.cancel() }
+        await gateway.release()
+        let results = await [first.result, second.result]
+        var snapshots: [CreatorBlockingModel.Snapshot] = []
+        for result in results {
+            switch result {
+            case let .success(snapshot): snapshots.append(snapshot)
+            case let .failure(error): XCTAssertTrue(error is CancellationError)
+            }
+        }
+        XCTAssertEqual(snapshots.count, 1)
+        XCTAssertTrue(model.isReady)
+        XCTAssertEqual(model.blockedCreatorIDs, [creator])
+        try model.validate(XCTUnwrap(snapshots.first))
+    }
+
+    func testAlreadyCancelledCallerCannotInvalidateReadySnapshot() async throws {
+        let gateway = ScriptedBlockGateway(subject: viewer)
+        let model = CreatorBlockingModel(gateway: gateway, anonymousStore: MemoryAnonymousBlocks())
+        model.updateSubject(viewer)
+        let snapshot = try await model.refresh()
+        let cancelled = Task { try await model.refresh() }
+        cancelled.cancel()
+        do { _ = try await cancelled.value; XCTFail("Cancelled caller admitted") }
+        catch is CancellationError {}
+        XCTAssertTrue(model.isReady)
+        try model.validate(snapshot)
+    }
+
     func testAnonymousCapDoesNotEvictAndAllowsUnblock() async throws {
         let ids = Set((1...10_000).map { String(format: "10000000-0000-0000-0000-%012d", $0) })
         let store = MemoryAnonymousBlocks(ids)
