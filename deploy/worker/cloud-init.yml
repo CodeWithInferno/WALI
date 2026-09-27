@@ -11,6 +11,8 @@ packages:
   - curl
   - fuse-overlayfs
   - jq
+  - libcap2-bin
+  - python3
   - nftables
   - podman
   - slirp4netns

@@ -4,15 +4,18 @@ IFS=$'\n\t'
 
 readonly ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly UNIT="$ROOT/deploy/worker/wali-media-worker.service"
+readonly NAMESPACE_UNIT="$ROOT/deploy/worker/wali-podman-namespace.service"
 readonly RUNNER="$ROOT/Services/WALIMediaWorker/internal/sandbox/runner.go"
 
 readonly DEPLOY_ROOT="$ROOT/deploy/worker"
-for file in cloud-init.yml wali-media-worker.service worker.env.example storage.conf deploy.sh releases.sh image-verification.sh verify.sh; do
+for file in cloud-init.yml wali-media-worker.service wali-podman-namespace.service idmap-helpers.py worker.env.example storage.conf deploy.sh releases.sh image-verification.sh verify.sh; do
   test -f "$DEPLOY_ROOT/$file"
 done
 for file in deploy.sh releases.sh image-verification.sh verify.sh; do bash -n "$DEPLOY_ROOT/$file"; done
 grep -q '^ssh_pwauth: false$' "$DEPLOY_ROOT/cloud-init.yml"
 grep -q '^disable_root: true$' "$DEPLOY_ROOT/cloud-init.yml"
+grep -q '^  - libcap2-bin$' "$DEPLOY_ROOT/cloud-init.yml"
+grep -q '^  - python3$' "$DEPLOY_ROOT/cloud-init.yml"
 grep -q 'unattended-upgrades' "$DEPLOY_ROOT/cloud-init.yml"
 grep -q 'AS production' "$ROOT/Services/WALIClassifier/Containerfile"
 grep -q 'verify_model_directory' "$ROOT/Services/WALIClassifier/Containerfile"
@@ -83,6 +86,15 @@ for setting in "${required_unit_settings[@]}"; do
   }
 done
 
+for setting in 'User=wali-worker' 'Group=wali-worker' 'CapabilityBoundingSet=CAP_SETUID CAP_SETGID' 'AmbientCapabilities=' 'NoNewPrivileges=no' 'Environment=PATH=/usr/libexec/wali-worker/idmap:/usr/sbin:/usr/bin:/sbin:/bin' 'ExecStart=/usr/bin/podman unshare /bin/true'; do
+  grep -Fqx -- "$setting" "$NAMESPACE_UNIT" || { echo "namespace isolation is missing: $setting" >&2; exit 1; }
+done
+if grep -Eq '^EnvironmentFile=|CAP_DAC_OVERRIDE|CAP_SYS_ADMIN' "$NAMESPACE_UNIT" || grep -Fq '/usr/libexec/wali-worker/idmap' "$UNIT"; then
+  echo 'private mapping authority escaped the credential-free namespace bootstrap' >&2
+  exit 1
+fi
+python3 "$ROOT/Tests/Worker/idmap-helper-tests.py"
+
 required_sandbox_flags=(
   '"--network=none"'
   '"--read-only"'
@@ -108,6 +120,8 @@ runtime_configuration=(
   "$ROOT/deploy/worker/storage.conf"
   "$ROOT/deploy/worker/verify.sh"
   "$ROOT/deploy/worker/wali-media-worker.service"
+  "$NAMESPACE_UNIT"
+  "$ROOT/deploy/worker/idmap-helpers.py"
   "$ROOT/deploy/worker/worker.env.example"
   "$ROOT/Services/WALIMediaWorker/cmd/wali-media-worker/main.go"
   "$ROOT/Services/WALIMediaWorker/internal/config/config.go"

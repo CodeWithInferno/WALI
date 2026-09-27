@@ -57,15 +57,36 @@ verify_database_ca() {
   fi
 }
 
+verify_idmap_helpers() {
+  local base=/opt/wali-worker current root support=/usr/libexec/wali-worker/idmap-helpers.py namespace=wali-podman-namespace.service property
+  current="$(readlink "$base/current")" || fail 'private helper release link is missing'
+  [[ "$current" =~ ^releases/[a-f0-9]{64}$ ]] || fail 'private helper release link is invalid'
+  root="$base/$current"
+  [[ -d "$root" && ! -L "$root" && "$(stat -c %u "$root")" == 0 ]] || fail 'private helper release is unsafe'
+  [[ -z "$(find "$root" \( -type l -o ! -user root -o -perm /022 \) -print -quit)" ]] || fail 'private helper snapshot tree is unsafe'
+  [[ -f "$root/manifest.sha256" && "$(sha256sum "$root/manifest.sha256" | cut -d' ' -f1)" == "${current#releases/}" ]] || fail 'private helper release manifest differs'
+  (cd "$root" && sha256sum --check --status manifest.sha256) || fail 'private helper snapshot contents changed'
+  [[ -f "$support" && ! -L "$support" && "$(stat -c '%U:%G:%a' "$support")" == root:root:555 ]] || fail 'private helper verifier is unsafe'
+  cmp -s "$root/payload/idmap-support" "$support" || fail 'private helper verifier differs from the selected snapshot'
+  /usr/bin/python3 -I -B "$support" verify-installed "$root/payload" || fail 'private helper installation is invalid'
+  cmp -s "$root/payload/namespace-unit" /etc/systemd/system/wali-podman-namespace.service || fail 'namespace unit differs from the selected snapshot'
+  for property in 'User=wali-worker' 'Group=wali-worker' 'CapabilityBoundingSet=cap_setgid cap_setuid' 'AmbientCapabilities=' 'NoNewPrivileges=no' 'EnvironmentFiles=' 'DropInPaths=' 'ActiveState=active' 'SubState=exited'; do
+    [[ "$(systemctl show "$namespace" --property="${property%%=*}" --value)" == "${property#*=}" ]] || fail "namespace property ${property} is not active"
+  done
+  [[ "$(systemctl show "$namespace" --property=Environment --value | tr ' ' '\n' | grep '^PATH=')" == 'PATH=/usr/libexec/wali-worker/idmap:/usr/sbin:/usr/bin:/sbin:/bin' ]] || fail 'namespace helper PATH is not active'
+  [[ "$(systemctl show "$UNIT" --property=Environment --value)" != *'/usr/libexec/wali-worker/idmap'* ]] || fail 'private helper PATH leaked into the main worker'
+}
+
 [[ "$(id -u)" == 0 ]] || fail 'run as root'
 id wali-worker >/dev/null 2>&1 || fail 'dedicated identity missing'
 if id -nG wali-worker | tr ' ' '\n' | grep -Eq '^(sudo|wheel|docker|adm)$'; then fail 'worker has a privileged group'; fi
 [[ "$(stat -c '%U:%G:%a' "$ENV_FILE")" == root:wali-worker:640 ]] || fail 'environment ownership/mode is not root:wali-worker 0640'
 verify_database_ca
+verify_idmap_helpers
 [[ "$(stat -c '%U:%G:%a' /var/lib/wali-worker/attempts)" == wali-worker:wali-worker:700 ]] || fail 'scratch ownership/mode is incorrect'
 systemctl is-active --quiet "$UNIT" || fail 'worker service is not active'
 
-for property in 'User=wali-worker' 'Group=wali-worker' 'ProtectSystem=strict' 'PrivateDevices=yes' 'Delegate=yes' 'MemoryMax=6442450944' 'TasksMax=256'; do
+for property in 'User=wali-worker' 'Group=wali-worker' 'ProtectSystem=strict' 'PrivateDevices=yes' 'NoNewPrivileges=yes' 'CapabilityBoundingSet=' 'AmbientCapabilities=' 'RestrictSUIDSGID=yes' 'Delegate=yes' 'MemoryMax=6442450944' 'TasksMax=256'; do
   [[ "$(systemctl show "$UNIT" --property="${property%%=*}" --value)" == "${property#*=}" ]] || fail "unit property ${property} is not active"
 done
 pid="$(systemctl show -p MainPID --value "$UNIT")"

@@ -12,6 +12,7 @@ Group=wali-worker
 Environment=HOME=/var/lib/wali-worker
 Environment=XDG_RUNTIME_DIR=/run/wali-media-worker
 Environment=CONTAINERS_STORAGE_CONF=/etc/wali-worker/storage.conf
+Environment=PATH=/usr/libexec/wali-worker/idmap:/usr/sbin:/usr/bin:/sbin:/bin
 WorkingDirectory=/
 RuntimeDirectory=wali-media-worker
 RuntimeDirectoryMode=0700

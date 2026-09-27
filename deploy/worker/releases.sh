@@ -4,12 +4,16 @@
 readonly RELEASE_BASE=/opt/wali-worker
 readonly TRANSACTION=/opt/wali-worker/.transaction
 readonly DATABASE_CA_PATH=/etc/wali-worker/database-ca.crt
-release_keys=(environment worker-unit namespace-unit storage verifier cosign media-runbook compromise-runbook cosign-trust-root cosign-trust-receipt cosign-trust-receipt-digest database-ca)
-release_paths=(/etc/wali-worker/worker.env /etc/systemd/system/wali-media-worker.service /etc/systemd/system/wali-podman-namespace.service /etc/wali-worker/storage.conf /usr/local/sbin/wali-worker-verify /etc/wali-worker/cosign.pub /usr/share/doc/wali-worker/media-worker.md /usr/share/doc/wali-worker/worker-compromise.md /etc/wali-worker/cosign-trusted-root.json /etc/wali-worker/cosign-trust-receipt.json /etc/wali-worker/cosign-trust-receipt.sha256 "$DATABASE_CA_PATH")
-release_modes=(0640 0644 0644 0644 0555 0444 0444 0444 0444 0444 0444 0444)
+release_keys=(environment worker-unit namespace-unit storage verifier cosign media-runbook compromise-runbook cosign-trust-root cosign-trust-receipt cosign-trust-receipt-digest database-ca idmap-support)
+release_paths=(/etc/wali-worker/worker.env /etc/systemd/system/wali-media-worker.service /etc/systemd/system/wali-podman-namespace.service /etc/wali-worker/storage.conf /usr/local/sbin/wali-worker-verify /etc/wali-worker/cosign.pub /usr/share/doc/wali-worker/media-worker.md /usr/share/doc/wali-worker/worker-compromise.md /etc/wali-worker/cosign-trusted-root.json /etc/wali-worker/cosign-trust-receipt.json /etc/wali-worker/cosign-trust-receipt.sha256 "$DATABASE_CA_PATH" /usr/libexec/wali-worker/idmap-helpers.py)
+release_modes=(0640 0644 0644 0644 0555 0444 0444 0444 0444 0444 0444 0444 0555)
 readonly SBOM_DIRECTORY=/usr/share/doc/wali-worker/sbom
 
 release_fail() { echo "release transaction: $1" >&2; exit 65; }
+
+idmap_helpers() {
+  /usr/bin/python3 -I -B "$SCRIPT_ROOT/idmap-helpers.py" "$@"
+}
 
 # Opt-in repair deployment only: preserve the already active namespace. This
 # never makes a cold host runnable and never changes namespace-unit privileges.
@@ -40,6 +44,11 @@ validate_warm_release() {
   # Reuse the complete snapshot contract, with byte-identical namespace/storage.
   cmp -s "$RELEASE_BASE/$target/payload/namespace-unit" "$RELEASE_BASE/$baseline/payload/namespace-unit" || release_fail 'warm deployment cannot change namespace unit'
   cmp -s "$RELEASE_BASE/$target/payload/storage" "$RELEASE_BASE/$baseline/payload/storage" || release_fail 'warm deployment cannot change Podman storage'
+  for names in idmap-support idmap-helpers/manifest.json idmap-helpers/newuidmap idmap-helpers/newgidmap; do
+    if [[ -e "$RELEASE_BASE/$target/payload/$names" || -e "$RELEASE_BASE/$baseline/payload/$names" ]]; then
+      cmp -s "$RELEASE_BASE/$target/payload/$names" "$RELEASE_BASE/$baseline/payload/$names" || release_fail 'warm deployment cannot change private ID helpers'
+    fi
+  done
   [[ "$(systemctl show wali-media-worker.service -p ActiveState --value)" == active ]] || release_fail 'warm deployment requires the existing active worker'
   dropins="$(systemctl show wali-media-worker.service -p DropInPaths --value)" || release_fail 'cannot inspect worker drop-ins'
   [[ -z "$dropins" ]] || release_fail 'unexpected worker drop-in'
@@ -128,6 +137,7 @@ validate_release() {
   cmp -s <(manifest "$root") "$root/manifest.sha256" || release_fail 'snapshot contents changed'
   snapshot_offline_trust "$root/payload" historical || release_fail 'invalid snapshot trust inputs'
   snapshot_database_ca "$root/payload"
+  idmap_helpers validate-snapshot "$root/payload"
   if [[ -f "$root/payload/environment" ]]; then
     validate_target_binding "$(read_env_value WALI_DEPLOY_ENVIRONMENT "$root/payload/environment")" \
       "$(read_env_value WALI_SUPABASE_PROJECT_REF "$root/payload/environment")" \
@@ -141,6 +151,7 @@ finish_snapshot() {
   snapshot_database_ca "$root/payload"
   find "$root" -type f -exec chmod 0400 {} +
   find "$root" -type d -exec chmod 0700 {} +
+  idmap_helpers validate-snapshot "$root/payload"
   [[ ! -f "$root/wali-media-worker" ]] || chmod 0555 "$root/wali-media-worker"
   chmod 0755 "$root"
   manifest "$root" > "$root/manifest.sha256"
@@ -156,7 +167,7 @@ finish_snapshot() {
   staged_release="$target"
 }
 capture_baseline() {
-  local root current index path key
+  local root current index path key reference=
   root="$(mktemp -d "$RELEASE_BASE/.snapshot.XXXXXX")"
   install -d -m 0700 "$root/payload"
   for index in "${!release_keys[@]}"; do
@@ -176,11 +187,19 @@ capture_baseline() {
   fi
   current="$(release_link current)"
   if [[ "$current" != absent ]]; then
+    # Older binary-only releases can be captured only when no private helper
+    # state requires provenance. Complete snapshots must validate before reuse.
+    if [[ -e "$RELEASE_BASE/$current/manifest.sha256" ]]; then
+      validate_release "$current"
+      reference="$RELEASE_BASE/$current/payload"
+    fi
     validate_file "$RELEASE_BASE/$current/wali-media-worker"
     cp -- "$RELEASE_BASE/$current/wali-media-worker" "$root/wali-media-worker"
   else
     touch "$root/binary.absent"
   fi
+  find "$root/payload" -type f -exec chmod 0400 {} +
+  idmap_helpers capture "$root/payload" "$reference"
   finish_snapshot "$root"
 }
 stage_release() {
@@ -193,6 +212,7 @@ stage_release() {
   cp -- "$SCRIPT_ROOT/wali-podman-namespace.service" "$root/payload/namespace-unit"
   cp -- "$SCRIPT_ROOT/storage.conf" "$root/payload/storage"
   cp -- "$SCRIPT_ROOT/verify.sh" "$root/payload/verifier"
+  cp -- "$SCRIPT_ROOT/idmap-helpers.py" "$root/payload/idmap-support"
   cp -- "$cosign_key" "$root/payload/cosign"
   if [[ -n "$database_ca" ]]; then
     cp -- "$database_ca" "$root/payload/database-ca"
@@ -211,6 +231,8 @@ stage_release() {
   cp -- "$media_sbom" "$root/payload/sbom/${media_image##*@sha256:}.spdx.json"
   cp -- "$verifier_sbom" "$root/payload/sbom/${verifier_image##*@sha256:}.spdx.json"
   [[ -z "$classifier_image" ]] || cp -- "$classifier_sbom" "$root/payload/sbom/${classifier_image##*@sha256:}.spdx.json"
+  find "$root/payload" -type f -exec chmod 0400 {} +
+  idmap_helpers stage "$root/payload"
   finish_snapshot "$root"
 }
 set_release_link() {
@@ -245,6 +267,7 @@ install_snapshot() {
   local link=$1 root index path key temporary group
   validate_release "$link"
   root="$RELEASE_BASE/$link/payload"
+  idmap_helpers validate-install "$root"
   for index in "${!release_keys[@]}"; do
     path="${release_paths[$index]}"; key="${release_keys[$index]}"
     [[ ! -L "$path" ]] || release_fail 'installed configuration became a symlink'
@@ -252,7 +275,7 @@ install_snapshot() {
     # Optional trust files did not exist in legacy complete snapshots. Restoring
     # one must remove newer installed trust inputs, not retain stale policy.
     case "$key" in
-      cosign-trust-root|cosign-trust-receipt|cosign-trust-receipt-digest|database-ca)
+      cosign-trust-root|cosign-trust-receipt|cosign-trust-receipt-digest|database-ca|idmap-support)
         if [[ ! -e "$root/$key" ]]; then rm -f -- "$path"; continue; fi ;;
     esac
     validate_file "$root/$key"
@@ -262,6 +285,12 @@ install_snapshot() {
     install -o root -g "$group" -m "${release_modes[$index]}" "$root/$key" "$temporary"
     mv -Tf -- "$temporary" "$path"
   done
+  if $warm_namespace_mode; then
+    idmap_helpers verify-installed "$root"
+  else
+    idmap_helpers install "$root"
+    idmap_helpers verify-installed "$root"
+  fi
   # The dedicated SBOM directory is part of the snapshot, including absence.
   if [[ -e "$SBOM_DIRECTORY" || -L "$SBOM_DIRECTORY" ]]; then
     safe_tree "$SBOM_DIRECTORY" || release_fail 'unsafe installed SBOM directory'
@@ -358,6 +387,7 @@ activate_release() {
   validate_file "$RELEASE_BASE/$target/wali-media-worker"
   snapshot_offline_trust "$RELEASE_BASE/$target/payload" current || release_fail 'offline trust expired before activation'
   validate_warm_release "$target" "$baseline"
+  idmap_helpers validate-install "$RELEASE_BASE/$target/payload"
   begin_transaction "$baseline"
   trap transaction_failure EXIT ERR INT TERM
   stop_wali_units

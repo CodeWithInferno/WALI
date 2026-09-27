@@ -338,7 +338,7 @@ class OfflineTrustTests(unittest.TestCase):
         # fixture tree. Only Linux root ownership and GNU install/mv conventions
         # are adapted; this is not evidence of host ownership or service recovery.
         code = (REPO / 'deploy/worker/releases.sh').read_text()
-        paths = ('/opt/wali-worker', '/etc/wali-worker', '/etc/systemd/system', '/usr/local/sbin', '/usr/share/doc/wali-worker')
+        paths = ('/opt/wali-worker', '/etc/wali-worker', '/etc/systemd/system', '/usr/local/sbin', '/usr/share/doc/wali-worker', '/usr/libexec/wali-worker')
         for path in paths:
             self.assertIn(path, code)
             code = code.replace(path, str(self.root / 'host' / path.lstrip('/')))
@@ -369,6 +369,19 @@ validate_target_binding() { [[ "$1" == staging && "$2" == abcdefghijklmnopqrst ]
 '''
         prefix += f'source {shlex.quote(str(copy))}\n'
         prefix += '''
+# Private helper byte/capability behavior is exercised by idmap-helper-tests.py.
+# This adapter confines the unrelated trust/CA snapshot tests to fixture files.
+idmap_helpers() {
+  inside "$2"
+  case "$1" in
+    stage) mkdir "$2/idmap-helpers"; printf fixture > "$2/idmap-helpers/newuidmap"; printf fixture > "$2/idmap-helpers/newgidmap"; printf fixture > "$2/idmap-helpers/manifest.json" ;;
+    capture)
+      if [[ -n "$3" && -d "$3/idmap-helpers" ]]; then inside "$3"; cp -R "$3/idmap-helpers" "$2/idmap-helpers"
+      else touch "$2/idmap-helpers.absent"; fi ;;
+    validate-snapshot|validate-install|install|verify-installed) : ;;
+    *) return 98 ;;
+  esac
+}
 safe_tree() { inside "$1"; [[ -d "$1" && ! -L "$1" && -z "$(find "$1" -type l -print -quit)" ]]; }
 worker_binary="$FIXTURE/worker"; environment_file="$FIXTURE/environment"; cosign_key="$FIXTURE/publisher.pub"
 database_ca=
