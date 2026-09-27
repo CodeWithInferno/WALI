@@ -2244,7 +2244,7 @@ class ArchitectureChecker
         "source_path" => "Packages/WALICore/Sources/WALIWire/StoreProtocol.swift", "direct_wire_unchanged" => true,
         "shared_envelope_maximum_bytes" => 4_194_304,
         "import_grant" => {"message_version" => 1, "maximum_bookmark_bytes" => 262_144, "maximum_encoded_bytes" => 368_640, "persistence" => "transient_only"},
-        "worker_request" => {"message_version" => 2, "maximum_source_bookmark_bytes" => 262_144, "maximum_staging_bookmark_bytes" => 262_144, "staging_scope" => "exact_job_uuid_and_generation_directory"},
+        "worker_request" => {"message_version" => 2, "maximum_source_bookmark_bytes" => 262_144, "maximum_staging_bookmark_bytes" => 262_144, "staging_scope" => "exact_job_uuid_and_generation_directory", "transient_identity_properties" => %w[fileResourceIdentifier volumeIdentifier], "stale_transient_policy" => "one_identity_bound_in_memory_renewal", "renewal_policy_adr" => "docs/adr/0030-identity-bound-store-bookmark-renewal.md"},
         "worker_handshake" => {"protocol_version" => 2, "message_version" => 2, "maximum_encoded_bytes" => 4096, "correlation" => "exact_nonce_echo_before_any_grants", "added_selectors" => ["negotiate:withReply:", "shutdownWithReply:"]},
         "presentation_demand" => {"command" => "preparePresentation", "envelope_message_version" => 1, "maximum_unique_item_ids" => 32, "caller_paths" => "forbidden", "authority" => "committed_agent_snapshot"},
         "lifecycle_callback" => {"message_version" => 1, "selector" => "agentWillTerminateWithReply:", "payload" => "none"},
