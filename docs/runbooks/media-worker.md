@@ -224,7 +224,7 @@ isolated restore drill before passing the deployment gate.
 `sudo deploy/worker/deploy.sh --rollback --environment staging --supabase-project-ref <ref>`
 restores a complete immutable snapshot: binary, protected environment, both WALI
 units, Storage configuration, verification script, public verification key, SBOMs,
-and runbooks, including optional offline trust inputs and database CA. Snapshot identity hashes
+and runbooks, including optional offline trust inputs, database CA, and private ID-mapping helpers. Snapshot identity hashes
 all of these inputs. The environment and
 manifest remain root-only. Both the host binding and snapshot must match the
 explicit environment and project. Legacy binary-only releases cannot be selected
@@ -239,6 +239,36 @@ transaction is recovered on the next invocation. Failed recovery stops the worke
 and retains the transaction for inspection. An identical deployment is a verified
 no-op that preserves the rollback target. `--rollback --dry-run` validates the
 target without mutating the host.
+
+The credential-free namespace unit uses private, release-managed copies of the
+host's `uidmap` package helpers under `/usr/libexec/wali-worker/idmap`. These are
+root:wali-worker 0550, with only `cap_setuid=ep` for `newuidmap` and
+`cap_setgid=ep` for `newgidmap`; the OS binaries and their package permissions
+remain unchanged. Only the namespace unit receives this private PATH. The main
+worker retains NoNewPrivileges and empty capability sets. Dedicated hosts need
+`python3` and `libcap2-bin` before deployment.
+
+Staging records each source package/version, executable digest and exact installed
+attributes. Inactive snapshot copies have mode 0400 and no capabilities. The
+release transaction captures and validates existing helpers against the current
+snapshot before stopping either service. It installs support and helper files
+while services are stopped, then checks bytes, ownership, modes, capabilities,
+and the active namespace unit. Failure restores the captured pair and prior unit
+state. A legacy snapshot without helpers means absence: restoration removes only
+the managed helper directory and support file, preserving unrelated files.
+Unexpected files, symlinks, or unproven helper provenance fail closed.
+`--preserve-warm-namespace` rejects a helper or namespace-unit change and never
+rewrites a helper pair while the namespace remains active.
+
+Updating the OS `uidmap` package does not silently update these private copies.
+Run a reviewed deployment to recapture them. For the approved cold-boot check,
+first confirm every queue/lease is idle, retain a recoverable baseline and valid
+credentials, and reboot only the dedicated WALI host. Record the new boot ID and
+namespace/worker activation before any manual Podman command can prewarm its
+namespace; then run the installed full verifier and a scoped upload. Local tests,
+a warm restart, and successful image verification are not cold-boot evidence.
+Rollback restores prior state but does not make an expired credential or a known
+old cold-start defect healthy.
 
 A legacy complete snapshot without a database CA remains readable when its
 environment also omits `PGSSLROOTCERT`. Restoring it removes a newer installed

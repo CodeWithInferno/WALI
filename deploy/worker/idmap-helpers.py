@@ -13,6 +13,7 @@ import tempfile
 
 SOURCE_DIRECTORY = Path("/usr/bin")
 MANAGED_DIRECTORY = Path("/usr/libexec/wali-worker/idmap")
+SUPPORT_PATH = Path("/usr/libexec/wali-worker/idmap-helpers.py")
 SYSTEM_PATH_DIRECTORIES = tuple(map(Path, ("/usr/sbin", "/usr/bin", "/sbin", "/bin")))
 NAMESPACE_PATH = "/usr/libexec/wali-worker/idmap:/usr/sbin:/usr/bin:/sbin:/bin"
 HELPERS = (("newuidmap", "cap_setuid=ep"), ("newgidmap", "cap_setgid=ep"))
@@ -119,7 +120,9 @@ def namespace_binding(payload, present):
     text = read_file(unit, 65536, mode=0o400).decode("utf-8")
     lines = text.splitlines()
     scoped = "Environment=PATH=" + NAMESPACE_PATH
-    require((lines.count(scoped) == 1) if present else (NAMESPACE_PATH not in text),
+    assignments = [line for line in lines if re.match(r"^\s*Environment\s*=", line)
+                   and re.search(r"(?<![A-Za-z0-9_])PATH\s*=", line)]
+    require((assignments == [scoped]) if present else (NAMESPACE_PATH not in text),
             "namespace PATH and private helper snapshot disagree")
 
 
@@ -133,6 +136,8 @@ def validate_snapshot(payload):
             require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_gid == 0
                     and info.st_size == 0 and not info.st_mode & 0o022 and capabilities(absent) == "",
                     "invalid helper absence marker")
+        require(not (payload / "idmap-support").exists() and not (payload / "idmap-support").is_symlink(),
+                "helper support exists without private helper payload")
         namespace_binding(payload, False)
         return None
     require(not absent.exists() and not absent.is_symlink(), "ambiguous private helper snapshot")
@@ -164,6 +169,8 @@ def validate_snapshot(payload):
                 and record["byte_count"] == len(data) and record["sha256"] == hashlib.sha256(data).hexdigest(),
                 "private helper bytes differ from their manifest")
     namespace_binding(payload, True)
+    require(not (payload / "idmap-support.absent").exists() and not (payload / "idmap-support.absent").is_symlink(),
+            "ambiguous private helper support snapshot")
     read_file(payload / "idmap-support", 262144, mode=0o400)
     return document["helpers"]
 
@@ -219,9 +226,13 @@ def verify_installed(payload):
     trusted_system_path()
     trusted_parents(MANAGED_DIRECTORY.parent)
     if records is None:
-        require(not MANAGED_DIRECTORY.exists() and not MANAGED_DIRECTORY.is_symlink(),
+        require(not MANAGED_DIRECTORY.exists() and not MANAGED_DIRECTORY.is_symlink()
+                and not SUPPORT_PATH.exists() and not SUPPORT_PATH.is_symlink(),
                 "unexpected private helpers for a legacy snapshot")
         return
+    expected_support = read_file(payload / "idmap-support", 262144, mode=0o400)
+    require(read_file(SUPPORT_PATH, 262144, mode=0o555) == expected_support,
+            "installed helper support differs from the selected snapshot")
     info = metadata(MANAGED_DIRECTORY.parent)
     require((info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) == (0, 0, 0o755),
             "private helper parent must be root:root 0755")
