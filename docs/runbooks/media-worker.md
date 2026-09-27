@@ -134,6 +134,13 @@ Storage cleanup uses the [multiple-object DELETE route](https://supabase.com/doc
 object path in `prefixes`. The separate verification GET keeps that exact object
 path. Completion still requires the scoped lease, an absent object response, and
 the database's absent-object check; a successful DELETE alone is insufficient.
+The GET accepts HTTP 404 or Supabase's exact HTTP 400 `NoSuchKey` envelope with
+semantic `statusCode` `404`, `error` `not_found`, and `message` `Object not found`.
+The latter is capped at 4 KiB and rejects duplicate/extra fields, trailing JSON,
+and all other error shapes. Supabase's [error status mapping](https://github.com/supabase/storage/blob/master/src/internal/errors/storage-error.ts)
+and [response handler](https://github.com/supabase/storage/blob/master/src/http/error-handler.ts)
+explain the transport/semantic status distinction. This does not treat missing
+buckets, expired credentials or arbitrary HTTP 400 responses as successful cleanup.
 
 The media image is an untrusted-data plane. Its process and independent verify
 passes accept fixed paths only, validate the embedded policy digest, fully
