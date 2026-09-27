@@ -166,6 +166,7 @@ private struct DiscoverSectionView: View {
             DiscoverHeroBand(
                 section: section,
                 featuredID: $featuredID,
+                size: CGSize(width: fullWidth, height: max(heroHeight, 420)),
                 leadingBleed: leadingBleed,
                 onCarouselHover: onCarouselHover,
                 onOpen: onOpen
@@ -295,6 +296,7 @@ private struct DiscoverHeroBand: View {
 
     let section: WALICatalogSectionPresentation
     @Binding var featuredID: String?
+    let size: CGSize
     let leadingBleed: CGFloat
     let onCarouselHover: (Bool) -> Void
     let onOpen: (String) -> Void
@@ -317,12 +319,14 @@ private struct DiscoverHeroBand: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             artworkPages
+                .frame(width: size.width, height: size.height)
                 .mask(alignment: .center) {
                     artworkDissolve
                 }
             fade
             chrome
         }
+        .frame(width: size.width, height: size.height)
         .onHover { hovering in
             onCarouselHover(hovering)
         }
@@ -361,31 +365,43 @@ private struct DiscoverHeroBand: View {
     }
 
     private var artworkPages: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 0) {
-                ForEach(loopingPages) { page in
-                    if let card = section.cards.first(where: { $0.id == page.logicalID }) {
-                        Button {
-                            onOpen(card.id)
-                        } label: {
-                            heroArtwork(card)
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                HStack(spacing: 0) {
+                    ForEach(loopingPages) { page in
+                        if let card = section.cards.first(where: { $0.id == page.logicalID }) {
+                            Button {
+                                onOpen(card.id)
+                            } label: {
+                                heroArtwork(card)
+                            }
+                            .buttonStyle(.plain)
+                            .frame(width: size.width, height: size.height)
+                            .id(page.id)
+                            .accessibilityLabel("\(card.title), published by \(card.creator)")
                         }
-                        .buttonStyle(.plain)
-                        .containerRelativeFrame(.horizontal)
-                        .id(page.id)
-                        .accessibilityLabel("\(card.title), published by \(card.creator)")
                     }
                 }
+                .scrollTargetLayout()
             }
-            .scrollTargetLayout()
+            .scrollIndicators(.hidden)
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $featuredID, anchor: .leading)
+            .onAppear {
+                proxy.scrollTo(featuredID, anchor: .leading)
+            }
+            .onChange(of: size) { _, _ in
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(featuredID, anchor: .leading)
+                }
+            }
+            .animation(
+                reduceMotion ? nil : .smooth(duration: WALIDiscoverLayout.heroCarouselAdvanceSeconds),
+                value: featuredID
+            )
         }
-        .scrollIndicators(.hidden)
-        .scrollTargetBehavior(.paging)
-        .scrollPosition(id: $featuredID)
-        .animation(
-            reduceMotion ? nil : .smooth(duration: WALIDiscoverLayout.heroCarouselAdvanceSeconds),
-            value: featuredID
-        )
     }
 
     private var artworkDissolve: some View {
@@ -503,7 +519,7 @@ private struct DiscoverHeroBand: View {
     @ViewBuilder
     private func heroArtwork(_ card: WALICatalogCardPresentation) -> some View {
         artworkFill(card)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: size.width, height: size.height)
             .clipped()
     }
 

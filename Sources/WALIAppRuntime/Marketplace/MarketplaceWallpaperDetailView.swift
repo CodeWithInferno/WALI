@@ -81,7 +81,7 @@ struct MarketplaceWallpaperDetailView: View {
             )
             ScrollView {
                 VStack(spacing: 0) {
-                    hero(detail, height: heroHeight, leadingBleed: leadingBleed)
+                    hero(detail, size: CGSize(width: fullWidth, height: heroHeight), leadingBleed: leadingBleed)
                     metadata(detail, leadingBleed: leadingBleed, visibleWidth: fullWidth - leadingBleed)
                     if !detail.related.isEmpty {
                         related(detail.related, leadingBleed: leadingBleed)
@@ -108,7 +108,7 @@ struct MarketplaceWallpaperDetailView: View {
 
     private func hero(
         _ detail: WALICatalogDetailPresentation,
-        height: CGFloat,
+        size: CGSize,
         leadingBleed: CGFloat
     ) -> some View {
         ZStack(alignment: .bottom) {
@@ -135,7 +135,7 @@ struct MarketplaceWallpaperDetailView: View {
                     Color.black
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
+            .frame(width: size.width, height: size.height)
             .clipped()
 
             if detail.previewURL == nil && detail.posterURL == nil {
@@ -183,7 +183,7 @@ struct MarketplaceWallpaperDetailView: View {
             .padding(.trailing, WALIMarketplaceDetailLayout.chromeInset)
             .padding(.bottom, WALIMarketplaceDetailLayout.chromeBottomInset)
         }
-        .frame(height: height)
+        .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .contain)
     }
 
