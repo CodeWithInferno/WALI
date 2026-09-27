@@ -40,6 +40,53 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         coordinator.stop()
     }
 
+    func testRestoredAccountReloadsTaxonomyBeforeOldAnonymousReadCompletes() async throws {
+        let subject = "11111111-1111-4111-8111-111111111111"
+        let category = CatalogTaxonomySummary(id: "nature", name: "Nature", slug: "nature")
+        let gateway = ScriptedCatalogGateway(homeSteps: [], taxonomy: [category], holdFirstTaxonomy: true)
+        let auth = ScriptedAuthStore()
+        let blocking = CreatorBlockingModel(gateway: EmptyCreatorBlocks(subject: subject), anonymousStore: EmptyAnonymousBlocks())
+        let coordinator = MarketplaceCoordinator(gateway: gateway, creatorBlocking: blocking, authStore: auth)
+        coordinator.start()
+        defer { coordinator.stop() }
+        await assertEmailEventually { await gateway.isFirstTaxonomyHeld }
+        await auth.emit(CatalogAuthState(userID: subject, expiresAt: .now.addingTimeInterval(60)))
+        await assertEmailEventually { coordinator.model.accountState == .signedIn(userID: subject) }
+        await assertEmailEventually { coordinator.discovery.taxonomyState == .ready }
+        XCTAssertEqual(coordinator.discovery.categories, [category])
+        await gateway.releaseFirstTaxonomy()
+        await assertEmailEventually { await gateway.taxonomyReturnCount == 2 }
+        XCTAssertEqual(coordinator.discovery.taxonomyState, .ready)
+        XCTAssertEqual(coordinator.discovery.tags, [category])
+    }
+
+    func testCurrentReadCancellationShowsRetryInsteadOfRemainingLoading() async throws {
+        let gateway = ScriptedCatalogGateway(homeSteps: [.cancelled], cancelTaxonomy: true)
+        let coordinator = MarketplaceCoordinator(gateway: gateway)
+        coordinator.start()
+        defer { coordinator.stop() }
+        await assertEmailEventually { coordinator.model.homeState != .loading }
+        await assertEmailEventually { coordinator.discovery.taxonomyState != .loading }
+        guard case .failed = coordinator.model.homeState else { return XCTFail("Discover must offer retry") }
+        guard case .failed = coordinator.discovery.taxonomyState else { return XCTFail("Taxonomy must offer retry") }
+    }
+
+    func testRestartResumesHomeLoadCancelledByStop() async throws {
+        let home = CatalogHome(sections: [])
+        let gateway = ScriptedCatalogGateway(homeSteps: [
+            .value(home, delay: .seconds(60)), .value(home, delay: .zero)
+        ])
+        let coordinator = MarketplaceCoordinator(gateway: gateway)
+        coordinator.start()
+        defer { coordinator.stop() }
+        await assertEmailEventually { await gateway.homeCallCount == 1 }
+        coordinator.stop()
+        coordinator.start()
+        await assertEmailEventually { coordinator.model.homeState == .empty }
+        let calls = await gateway.homeCallCount
+        XCTAssertEqual(calls, 2)
+    }
+
     func testSigningOutClearsPrivateDetailInteractionState() async throws {
         let gateway = ScriptedCatalogGateway(homeSteps: [], detailValue: Self.detail())
         let auth = ScriptedAuthStore()
@@ -1308,6 +1355,29 @@ private actor ScriptedAuthStore: CatalogAuthSessionProviding {
     }
 }
 
+@MainActor
+private final class EmptyAnonymousBlocks: AnonymousCreatorBlockStoring {
+    func load() throws -> Set<String> { [] }
+    func save(_ ids: Set<String>) throws {}
+}
+
+private actor EmptyCreatorBlocks: CreatorBlockingGateway {
+    let subject: String
+    init(subject: String) { self.subject = subject }
+    func creatorBlocks(cursor: String?, selectedCreatorID: String?) async throws -> CreatorBlockPage {
+        try CreatorBlockPage(subjectID: subject, generation: 0, items: [], nextCursor: nil)
+    }
+    func setCreatorBlock(creatorID: String, desired: Bool, expectedRevision: UInt64, idempotencyKey: String) async throws -> CreatorBlockResult {
+        throw CreatorBlockingError.unavailable
+    }
+    func hiddenCreatorInteractions(cursor: String?) async throws -> CreatorHiddenInteractionPage {
+        throw CreatorBlockingError.unavailable
+    }
+    func removeHiddenCreatorInteraction(_ value: CreatorHiddenInteraction, idempotencyKey: String) async throws {
+        throw CreatorBlockingError.unavailable
+    }
+}
+
 private actor ReceiptRecordingProbe {
     private var failures: Int
     private let retryable: Bool
@@ -1332,6 +1402,7 @@ private actor ReceiptRecordingProbe {
 }
 
 private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
+    private(set) var homeCallCount = 0
     private(set) var interactionCallCount = 0
     private(set) var searchRequests: [CatalogSearchRequest] = []
     private(set) var savedCursors: [String?] = []
@@ -1340,9 +1411,17 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
     private let recordingSucceeds: Bool
     private let holdFirstRecord: Bool
     private var firstRecordContinuation: CheckedContinuation<Void, Never>?
+    private let taxonomy: [CatalogTaxonomySummary]?
+    private let holdFirstTaxonomy: Bool
+    private let cancelTaxonomy: Bool
+    private var taxonomyCallCount = 0
+    private(set) var taxonomyReturnCount = 0
+    private var firstTaxonomyContinuation: CheckedContinuation<Void, Never>?
+    var isFirstTaxonomyHeld: Bool { firstTaxonomyContinuation != nil }
     enum HomeStep: Sendable {
         case value(CatalogHome, delay: Duration)
         case failure(CatalogRemoteError)
+        case cancelled
     }
 
     private var homeSteps: [HomeStep]
@@ -1356,7 +1435,10 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
         reportFailuresRemaining: Int = 0,
         savedPages: [CatalogPage] = [],
         recordingSucceeds: Bool = false,
-        holdFirstRecord: Bool = false
+        holdFirstRecord: Bool = false,
+        taxonomy: [CatalogTaxonomySummary]? = nil,
+        holdFirstTaxonomy: Bool = false,
+        cancelTaxonomy: Bool = false
     ) {
         self.homeSteps = homeSteps
         self.detailValue = detailValue
@@ -1364,6 +1446,31 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
         self.savedPages = savedPages
         self.recordingSucceeds = recordingSucceeds
         self.holdFirstRecord = holdFirstRecord
+        self.taxonomy = taxonomy
+        self.holdFirstTaxonomy = holdFirstTaxonomy
+        self.cancelTaxonomy = cancelTaxonomy
+    }
+
+    func categories() async throws -> [CatalogTaxonomySummary] {
+        if cancelTaxonomy { throw CancellationError() }
+        guard let taxonomy else { throw CatalogRequestError.notConfigured }
+        taxonomyCallCount += 1
+        if holdFirstTaxonomy && taxonomyCallCount == 1 {
+            await withCheckedContinuation { firstTaxonomyContinuation = $0 }
+        }
+        taxonomyReturnCount += 1
+        return taxonomy
+    }
+
+    func tags() async throws -> [CatalogTaxonomySummary] {
+        if cancelTaxonomy { throw CancellationError() }
+        guard let taxonomy else { throw CatalogRequestError.notConfigured }
+        return taxonomy
+    }
+
+    func releaseFirstTaxonomy() {
+        firstTaxonomyContinuation?.resume()
+        firstTaxonomyContinuation = nil
     }
 
     func savedWallpapers(cursor: String?) async throws -> CatalogPage {
@@ -1373,6 +1480,7 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
     }
 
     func home(locale: String, ratingCeiling: String) async throws -> CatalogHome {
+        homeCallCount += 1
         guard !homeSteps.isEmpty else {
             throw CatalogRemoteError(code: "temporarily_unavailable", safeMessage: nil, retryable: true)
         }
@@ -1383,6 +1491,8 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
             return value
         case let .failure(error):
             throw error
+        case .cancelled:
+            throw CancellationError()
         }
     }
 

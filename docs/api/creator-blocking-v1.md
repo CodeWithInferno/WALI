@@ -48,6 +48,13 @@ all subject-bound state. The UI offers Block Creator beside Report, keeps a
 minimal known target for reporting after hiding it, and provides Account →
 Blocked Creators with bounded list and hidden-interaction cleanup pages.
 
+Concurrent foreground reads share one bounded preference refresh. Cancelling one
+reader does not invalidate a result already accepted by another reader for the
+same subject and generation. Subject/preference changes also restart taxonomy
+reads; obsolete completions cannot replace their current result. A cancelled
+current catalog read offers retry instead of leaving its page loading, while
+stopped or superseded tasks do not change presentation.
+
 Rollback may stop new commands but must preserve existing server filtering,
 positive-action denial and relation generations. Do not drop block rows or
 re-enable a previous client that would present personalized cached metadata.
