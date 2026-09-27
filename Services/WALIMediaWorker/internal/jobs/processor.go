@@ -486,7 +486,11 @@ func canonicalAccountExport(payload json.RawMessage, job ExportJob) ([]byte, err
 	if validationError != nil {
 		return nil, validationError
 	}
-	for _, key := range []string{"terms_acceptances", "favorites", "saved_wallpapers", "creator_follows", "install_receipts", "engagement_events", "upload_sessions", "submissions", "rights_declarations", "reports"} {
+	arrayKeys := []string{"terms_acceptances", "favorites", "saved_wallpapers", "creator_follows", "install_receipts", "engagement_events", "upload_sessions", "submissions", "rights_declarations", "reports"}
+	if _, exists := root["creator_blocks"]; exists {
+		arrayKeys = append(arrayKeys, "creator_blocks")
+	}
+	for _, key := range arrayKeys {
 		entries := root[key].([]any)
 		sort.SliceStable(entries, func(left, right int) bool {
 			leftJSON, _ := json.Marshal(entries[left])
@@ -507,6 +511,10 @@ func exactExportRoot(root map[string]any) bool {
 		"preferences", "terms_acceptances", "favorites", "saved_wallpapers", "creator_follows",
 		"install_receipts", "engagement_events", "upload_sessions", "submissions",
 		"rights_declarations", "reports",
+	}
+	// Creator blocking adds an owner-scoped array to the existing version-1 projection.
+	if _, exists := root["creator_blocks"]; exists {
+		required = append(required, "creator_blocks")
 	}
 	if len(root) != len(required) {
 		return false

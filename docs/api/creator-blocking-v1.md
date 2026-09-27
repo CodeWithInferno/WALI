@@ -28,8 +28,11 @@ Hidden interaction rows contain only `kind` (`favorite`, `saved`, `follow`),
 `target_id`, `active`, `revision`. Cleanup uses existing negative favorite/save/
 follow commands with the returned revision and a retained retry key. No hidden
 media, incoming list, notification, public count or analytics signal is added.
-Owner export includes only outgoing relationships; account cleanup removes both
-directions and advances affected viewer generations.
+Owner export includes only outgoing relationships in the version-1
+`creator_blocks` array. The worker accepts older projections without that field;
+when present it must be an array and is sorted into canonical order. Unexpected
+root fields and forbidden nested data remain rejected. Account cleanup removes
+both directions and advances affected viewer generations.
 
 Authenticated V1/V2 catalog base views filter before paging/counts. Home, browse,
 search, direct detail, related items, creators, collections and saved/favorite
