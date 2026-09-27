@@ -10,10 +10,13 @@ The RPCs retain their existing parameters:
 
 | RPC | Parameters | Result |
 | --- | --- | --- |
+| `my_saved_wallpapers_v2`, `my_favorites_v2` | `cursor`, `limit` | `{items, next_cursor}` with the same summary shape and 50-item cap |
 | `catalog_home_v2` | `locale`, `rating_ceiling` | `{sections}` with the existing bounded sections/items shape |
 | `catalog_browse_v2` | `category`, `tags`, `sort`, `cursor`, `limit` | `{items, next_cursor}` |
 | `catalog_search_v2` | `query`, `filters`, `cursor`, `limit` | `{items, next_cursor, ranking_explanation}` |
 | `catalog_wallpaper_detail_v2` | `wallpaper_id` | Detail with typed `media` and V2 `related` summaries |
+
+Saved and Favorites RPCs require the authenticated owner and use the existing V2 views under invoker RLS. Rating, creator blocks, public eligibility and active-owner filters remain in those views. Their cursors use distinct `saved-v2` and `favorites-v2` kinds; V1 and V2 cursors cannot be mixed.
 
 Detail retains the common wallpaper, description, edition, rights, attribution, source, license, viewer favorite/save and related fields. The old flat video dimensions/timing and `video_default` are replaced by exactly one media object:
 

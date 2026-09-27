@@ -226,3 +226,21 @@ cross-volume input, no-replace collisions, repeated recovery, and idempotent GC.
 
 Compatibility tests cover every readable source pair and every claimed old
 reader. Automated tests never open a live user store or Apple wallpaper store.
+
+
+## 2026-09-27 still read compatibility repair
+
+Migration `202609270001` completes the accepted ADR0027 read adapters. Creator
+processing/list projections name the verified PNG container `png`, matching
+released native readers; stored `image/png` artifact facts and signed bytes are
+unchanged. Authenticated Saved/Favorites V2 RPCs read the existing owner-filtered
+V2 views with invoker RLS, 50-item pages and distinct V2 cursor kinds. V1 readers
+remain available and continue excluding stills. No tables, user records,
+credentials, storage permissions or publication policies are changed.
+
+Deploy this read-only projection/function migration after `202609130015`.
+Existing native clients discover the new RPC on their next Saved request and
+can read their still submissions without a binary update. The former missing-RPC
+fallback to V1 is retained only for servers that do not have V2. Verify the
+actual released app's Creator and Saved pages after deployment; SQL fixtures
+alone do not establish that user-visible acceptance.

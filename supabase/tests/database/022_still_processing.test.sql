@@ -178,6 +178,14 @@ select throws_ok($$update wali.submissions set media_kind='video' where id=(pg_t
 select throws_ok($$update wali.wallpaper_releases set media_kind='video' where id=(pg_temp.fixture('prepared')->>'release_id')::uuid$$,'P0001','WALI_MEDIA_KIND_IMMUTABLE','published release kind cannot change');
 
 select is(wali.creator_processing_projection((pg_temp.fixture('complete1')->>'submission_id')::uuid,1)#>>'{media_facts,media_kind}','still','Creator facts bind still kind');
+select is(wali.creator_processing_projection((pg_temp.fixture('complete1')->>'submission_id')::uuid,1)#>>'{media_facts,container}','png','Creator still container is the native-readable format name');
+select has_function('public','my_saved_wallpapers_v2',array['text','integer'],'native Saved V2 RPC exists');
+select has_function('public','my_favorites_v2',array['text','integer'],'native Favorites V2 RPC exists');
+select ok(not (select prosecdef from pg_proc where oid='public.my_saved_wallpapers_v2(text,integer)'::regprocedure),'Saved V2 preserves invoker RLS');
+select ok(not (select prosecdef from pg_proc where oid='public.my_favorites_v2(text,integer)'::regprocedure),'Favorites V2 preserves invoker RLS');
+select ok(not has_function_privilege('anon','public.my_saved_wallpapers_v2(text,integer)','execute'),'anonymous has no Saved V2 execution');
+select ok(not has_function_privilege('anon','public.my_favorites_v2(text,integer)','execute'),'anonymous has no Favorites V2 execution');
+
 select ok(not ((wali.creator_processing_projection((pg_temp.fixture('complete1')->>'submission_id')::uuid,1)->'media_facts') ?| array['frame_rate','duration_ms']),'Creator still facts omit timing');
 select has_function('public','catalog_browse_v2',array['text','text[]','text','text','integer'],'V2 Browse is explicit');
 select is(public.catalog_wallpaper_detail_v2((pg_temp.fixture('prepared')->>'wallpaper_id')::uuid)#>>'{media,kind}','still','detail is typed still');
@@ -194,12 +202,33 @@ select lives_ok($$select public.record_install_v1('00000000-0000-0000-0000-00000
 select is((select verified_install_count from public.catalog_wallpapers_v2 where id=(pg_temp.fixture('prepared')->>'wallpaper_id')::uuid),1::bigint,'still completed install increments durable public total');
 insert into wali.saved_wallpapers(user_id,wallpaper_id,active) values('00000000-0000-0000-0000-000000000003',(pg_temp.fixture('prepared')->>'wallpaper_id')::uuid,true);
 insert into wali.favorites(user_id,wallpaper_id,active) values('00000000-0000-0000-0000-000000000003',(pg_temp.fixture('prepared')->>'wallpaper_id')::uuid,true);
+-- Older video and current still must page together through the native RPC.
+insert into wali.saved_wallpapers(user_id,wallpaper_id,active,updated_at)
+ values('00000000-0000-0000-0000-000000000003','30000000-0000-0000-0000-000000000001',true,statement_timestamp()-interval '1 minute');
+insert into wali.favorites(user_id,wallpaper_id,active,updated_at)
+ values('00000000-0000-0000-0000-000000000003','30000000-0000-0000-0000-000000000001',true,statement_timestamp()-interval '1 minute');
 grant select on auto_fixture to anon,authenticated;
 select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000003',true);
 set local role authenticated;
 select is((select count(*) from public.my_saved_wallpapers_v2 where wallpaper->>'id'=pg_temp.fixture('prepared')->>'wallpaper_id'),1::bigint,'owner Saved V2 includes still');
 select is((select count(*) from public.my_saved_wallpapers_v1 where wallpaper->>'id'=pg_temp.fixture('prepared')->>'wallpaper_id'),0::bigint,'owner Saved V1 excludes still');
 select is((select count(*) from public.my_favorites_v2 where wallpaper->>'id'=pg_temp.fixture('prepared')->>'wallpaper_id'),1::bigint,'Favorites V2 includes still');
+select is(public.my_creator_submissions_v1(null,20)#>>'{items,0,processing,media_facts,container}','png','native Creator list receives its supported still container');
+select is(public.my_saved_wallpapers_v2(null,1)#>>'{items,0,media_kind}','still','native Saved RPC includes newest still');
+select is(public.my_favorites_v2(null,1)#>>'{items,0,media_kind}','still','Favorites RPC includes newest still');
+select is(jsonb_array_length(public.my_saved_wallpapers_v2(null,50)->'items'),2,'Saved V2 combines still and video in the existing items envelope');
+select is(jsonb_array_length(public.my_favorites_v2(null,50)->'items'),2,'Favorites V2 combines still and video');
+select is(public.my_saved_wallpapers_v2(public.my_saved_wallpapers_v2(null,1)->>'next_cursor',1)#>>'{items,0,id}','30000000-0000-0000-0000-000000000001','Saved V2 advances to older video');
+select is(public.my_favorites_v2(public.my_favorites_v2(null,1)->>'next_cursor',1)#>>'{items,0,id}','30000000-0000-0000-0000-000000000001','Favorites V2 advances to older video');
+select throws_ok($$select public.my_saved_wallpapers_v2(public.my_saved_wallpapers_v1(null,1)->>'next_cursor',1)$$,'P0001','WALI_CURSOR_INVALID','Saved V2 rejects a V1 cursor');
+select throws_ok($$select public.my_saved_wallpapers_v1(public.my_saved_wallpapers_v2(null,1)->>'next_cursor',1)$$,'P0001','WALI_CURSOR_INVALID','Saved V1 rejects a V2 cursor');
+select throws_ok($$select public.my_favorites_v2(public.my_favorites_v1(null,1)->>'next_cursor',1)$$,'P0001','WALI_CURSOR_INVALID','Favorites V2 rejects a V1 cursor');
+select throws_ok($$select public.my_favorites_v2(public.my_saved_wallpapers_v2(null,1)->>'next_cursor',1)$$,'P0001','WALI_CURSOR_INVALID','Favorites V2 rejects a Saved cursor');
+select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000002',true);
+select is(jsonb_array_length(public.my_saved_wallpapers_v2(null,50)->'items'),0,'Saved V2 cannot reveal another account saves');
+select is(jsonb_array_length(public.my_favorites_v2(null,50)->'items'),0,'Favorites V2 cannot reveal another account favorites');
+select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000003',true);
+
 reset role;
 set local role anon;
 select is(public.catalog_browse_v2(null,null,'newest',null,1)#>>'{items,0,media_kind}','still','V2 pages newest image first');
@@ -216,6 +245,9 @@ insert into wali.user_preferences(user_id,rating_ceiling) values('00000000-0000-
 update wali.wallpapers set content_rating='teen' where id=(pg_temp.fixture('prepared')->>'wallpaper_id')::uuid;
 set local role authenticated;
 select is((select count(*) from public.catalog_wallpapers_v2 where id=(pg_temp.fixture('prepared')->>'wallpaper_id')::uuid),0::bigint,'V2 respects actual viewer rating preference');
+select is(jsonb_array_length(public.my_saved_wallpapers_v2(null,50)->'items'),1,'Saved V2 retains actual viewer rating filter');
+select is(jsonb_array_length(public.my_favorites_v2(null,50)->'items'),1,'Favorites V2 retains actual viewer rating filter');
+
 reset role;
 select throws_ok($$select public.wali_edge_request_install_v2('00000000-0000-0000-0000-000000000003',gen_random_uuid(),'still_rating_install_01',(pg_temp.fixture('prepared')->>'wallpaper_id')::uuid,(pg_temp.fixture('prepared')->>'release_id')::uuid,(select revision from wali.wallpapers where id=(pg_temp.fixture('prepared')->>'wallpaper_id')::uuid))$$,'P0001','WALI_WALLPAPER_NOT_FOUND','service install checks actual actor rating without impersonated JWT');
 update wali.wallpapers set content_rating='everyone' where id=(pg_temp.fixture('prepared')->>'wallpaper_id')::uuid;
