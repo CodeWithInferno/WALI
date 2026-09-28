@@ -551,6 +551,8 @@ surfaces:
   # RLS with distinct V2 cursors; Creator still containers use the native png name.
   # Browse/Search V2 preserve opaque keyset fields and full filter digests while
   # keeping their scope markers within the unchanged 32-character decoder bound.
+  # Search V2 relevance re-scores its visible filtered anchor in the same query;
+  # an absent anchor uses the existing invalid-cursor restart without new fields.
   # Native account recovery reads the existing server-owned request IDs through
   # account_operation_references_v1; see docs/api/catalog-v1.md.
   # Private creator pages use100 items and10,000 active blocks, independently of
