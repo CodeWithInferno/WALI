@@ -271,6 +271,12 @@ creator, current release metadata, aggregate counts, and related IDs. Private
 moderator notes, raw paths, account IDs, reports, and rights evidence never
 enter catalog payloads.
 
+Native Browse, Search, and Saved cards publish metadata before their verified
+posters arrive. Pagination preserves the current result-set generation so a
+later page cannot discard earlier poster completions. First-page and next-page
+tasks remain separately cancellable; replacing filters, changing accounts or
+creator blocks, and stopping the coordinator invalidate or cancel both.
+
 ### Install
 
 1. An authenticated user requests an install for a published release.

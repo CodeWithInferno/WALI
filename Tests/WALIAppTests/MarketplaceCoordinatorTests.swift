@@ -40,6 +40,119 @@ final class MarketplaceCoordinatorTests: XCTestCase {
         coordinator.stop()
     }
 
+    func testBrowsePaginationKeepsEarlierPosterRequestsCurrent() async {
+        await checkPaginationPosters(searching: false)
+    }
+
+    func testSearchPaginationKeepsEarlierPosterRequestsCurrent() async {
+        await checkPaginationPosters(searching: true)
+    }
+
+    private func checkPaginationPosters(searching: Bool) async {
+        let first = Self.summary(id: Self.wallpaperID, title: "First")
+        let second = Self.summary(id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", title: "Second")
+        let pages = [CatalogPage(items: [first], nextCursor: "page-2"), CatalogPage(items: [second], nextCursor: nil)]
+        let gateway = ScriptedCatalogGateway(homeSteps: [], browsePages: pages, searchPages: pages)
+        let media = SuspendedCatalogMediaCache()
+        let coordinator = MarketplaceCoordinator(gateway: gateway, presentationMediaCache: media)
+        defer { coordinator.stop() }
+        if searching { coordinator.search("forest") } else { coordinator.loadBrowse() }
+        await assertEmailEventually { await media.requestCount == 1 }
+        coordinator.loadNextBrowsePage()
+        await assertEmailEventually { await media.requestCount == 2 }
+        // Page 2 starts while page 1's verified poster is still outstanding.
+        await media.finish(0)
+        await assertEmailEventually {
+            let cards = searching ? coordinator.model.searchItems : coordinator.model.browseItems
+            return cards.first?.posterURL == SuspendedCatalogMediaCache.url(0)
+        }
+        await media.finish(1)
+        await assertEmailEventually {
+            let cards = searching ? coordinator.model.searchItems : coordinator.model.browseItems
+            return cards.last?.posterURL == SuspendedCatalogMediaCache.url(1)
+        }
+    }
+
+    func testSavedPaginationKeepsEarlierPostersAndPageLoadingState() async {
+        let first = Self.summary(id: Self.wallpaperID, title: "First")
+        let second = Self.summary(id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", title: "Second")
+        let gateway = ScriptedCatalogGateway(homeSteps: [], savedPages: [
+            .init(items: [first], nextCursor: "page-2"), .init(items: [second], nextCursor: nil)
+        ])
+        let media = SuspendedCatalogMediaCache()
+        let coordinator = MarketplaceCoordinator(gateway: gateway, presentationMediaCache: media)
+        coordinator.model.accountState = .signedIn(userID: "11111111-1111-4111-8111-111111111111")
+        defer { coordinator.stop() }
+        coordinator.loadSavedWallpapers()
+        await assertEmailEventually { await media.requestCount == 1 }
+        coordinator.loadSavedWallpapers(loadMore: true)
+        await assertEmailEventually { await media.requestCount == 2 }
+        await media.finish(0)
+        await assertEmailEventually { coordinator.discovery.savedItems.first?.posterURL == SuspendedCatalogMediaCache.url(0) }
+        XCTAssertTrue(coordinator.discovery.isLoadingSavedPage, "First-page completion cannot finish the outstanding next page")
+        await media.finish(1)
+        await assertEmailEventually { !coordinator.discovery.isLoadingSavedPage }
+        XCTAssertEqual(coordinator.discovery.savedItems.last?.posterURL, SuspendedCatalogMediaCache.url(1))
+    }
+
+    func testBrowseFilterReplacementCancelsBothPagesAndRejectsTheirPosters() async {
+        let item = Self.summary(id: Self.wallpaperID, title: "Same wallpaper")
+        let second = Self.summary(id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", title: "Second")
+        let gateway = ScriptedCatalogGateway(homeSteps: [], browsePages: [
+            .init(items: [item], nextCursor: "page-2"), .init(items: [second], nextCursor: nil),
+            .init(items: [item], nextCursor: nil)
+        ])
+        let media = SuspendedCatalogMediaCache()
+        let coordinator = MarketplaceCoordinator(gateway: gateway, presentationMediaCache: media)
+        defer { coordinator.stop() }
+        coordinator.loadBrowse()
+        await assertEmailEventually { await media.requestCount == 1 }
+        coordinator.loadNextBrowsePage()
+        await assertEmailEventually { await media.requestCount == 2 }
+        coordinator.loadBrowse(category: "nature")
+        await assertEmailEventually { await media.requestCount == 3 }
+        await media.finish(2)
+        await assertEmailEventually { coordinator.model.browseItems.first?.posterURL == SuspendedCatalogMediaCache.url(2) }
+        await media.finish(0)
+        await media.finish(1)
+        await assertEmailEventually { await media.returnCount == 3 }
+        let cancelled = await media.cancelledRequests
+        XCTAssertEqual(cancelled, [0, 1], "Replacement must cancel both first-page and next-page media work")
+        XCTAssertEqual(coordinator.model.browseItems.map(\.id), [item.id])
+        XCTAssertEqual(coordinator.model.browseItems.first?.posterURL, SuspendedCatalogMediaCache.url(2))
+    }
+
+    func testAccountChangeCancelsSavedPagesAndRejectsTheirPosters() async {
+        let item = Self.summary(id: Self.wallpaperID, title: "Same wallpaper")
+        let second = Self.summary(id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", title: "Second")
+        let gateway = ScriptedCatalogGateway(homeSteps: [], savedPages: [
+            .init(items: [item], nextCursor: "page-2"), .init(items: [second], nextCursor: nil),
+            .init(items: [item], nextCursor: nil)
+        ])
+        let auth = ScriptedAuthStore()
+        let media = SuspendedCatalogMediaCache()
+        let coordinator = MarketplaceCoordinator(gateway: gateway, authStore: auth, presentationMediaCache: media)
+        coordinator.start()
+        defer { coordinator.stop() }
+        await auth.emit(CatalogAuthState(userID: "11111111-1111-4111-8111-111111111111", expiresAt: .now.addingTimeInterval(60)))
+        await assertEmailEventually { coordinator.model.accountState != .signedOut }
+        coordinator.loadSavedWallpapers()
+        await assertEmailEventually { await media.requestCount == 1 }
+        coordinator.loadSavedWallpapers(loadMore: true)
+        await assertEmailEventually { await media.requestCount == 2 }
+        await auth.emit(CatalogAuthState(userID: "22222222-2222-4222-8222-222222222222", expiresAt: .now.addingTimeInterval(60)))
+        await assertEmailEventually { await media.requestCount == 3 }
+        await media.finish(2)
+        await assertEmailEventually { coordinator.discovery.savedItems.first?.posterURL == SuspendedCatalogMediaCache.url(2) }
+        await media.finish(0)
+        await media.finish(1)
+        await assertEmailEventually { await media.returnCount == 3 }
+        let cancelled = await media.cancelledRequests
+        XCTAssertEqual(cancelled, [0, 1])
+        XCTAssertEqual(coordinator.discovery.savedItems.map(\.id), [item.id])
+        XCTAssertEqual(coordinator.discovery.savedItems.first?.posterURL, SuspendedCatalogMediaCache.url(2))
+    }
+
     func testRestoredAccountReloadsTaxonomyBeforeOldAnonymousReadCompletes() async throws {
         let subject = "11111111-1111-4111-8111-111111111111"
         let category = CatalogTaxonomySummary(id: "nature", name: "Nature", slug: "nature")
@@ -1408,6 +1521,8 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
     private(set) var savedCursors: [String?] = []
     private(set) var recordedKeys: [String] = []
     private var savedPages: [CatalogPage]
+    private var browsePages: [CatalogPage]
+    private var searchPages: [CatalogPage]
     private let recordingSucceeds: Bool
     private let holdFirstRecord: Bool
     private var firstRecordContinuation: CheckedContinuation<Void, Never>?
@@ -1434,6 +1549,8 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
         detailValue: CatalogWallpaperDetail? = nil,
         reportFailuresRemaining: Int = 0,
         savedPages: [CatalogPage] = [],
+        browsePages: [CatalogPage] = [],
+        searchPages: [CatalogPage] = [],
         recordingSucceeds: Bool = false,
         holdFirstRecord: Bool = false,
         taxonomy: [CatalogTaxonomySummary]? = nil,
@@ -1444,6 +1561,8 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
         self.detailValue = detailValue
         self.reportFailuresRemaining = reportFailuresRemaining
         self.savedPages = savedPages
+        self.browsePages = browsePages
+        self.searchPages = searchPages
         self.recordingSucceeds = recordingSucceeds
         self.holdFirstRecord = holdFirstRecord
         self.taxonomy = taxonomy
@@ -1497,12 +1616,14 @@ private actor ScriptedCatalogGateway: CatalogGateway, CatalogReportGateway {
     }
 
     func browse(_ request: CatalogBrowseRequest) async throws -> CatalogPage {
-        throw CatalogRequestError.notConfigured
+        guard !browsePages.isEmpty else { throw CatalogRequestError.notConfigured }
+        return browsePages.removeFirst()
     }
 
     func search(_ request: CatalogSearchRequest) async throws -> CatalogSearchPage {
         searchRequests.append(request)
-        throw CatalogRequestError.notConfigured
+        guard !searchPages.isEmpty else { throw CatalogRequestError.notConfigured }
+        return CatalogSearchPage(page: searchPages.removeFirst(), rankingExplanation: .init(formulaRevision: "test", modelRevision: nil))
     }
 
     func detail(wallpaperID: String) async throws -> CatalogWallpaperDetail {
@@ -1813,4 +1934,33 @@ private actor StaffModerationMetadataProbe: ModerationGateway {
     func queue(_ request: ModerationQueueRequest) async throws -> ModerationQueuePage { throw CatalogRequestError.notConfigured }
     func moderate(_ request: ModerationDecisionRequest) async throws -> ModerationDecisionResult { throw CatalogRequestError.notConfigured }
     func reports(_ request: ModerationReportQueueRequest) async throws -> ModerationReportPage { throw CatalogRequestError.notConfigured }
+}
+
+private actor SuspendedCatalogMediaCache: CatalogPresentationMediaCaching {
+    private(set) var requestCount = 0
+    private(set) var returnCount = 0
+    private(set) var cancelledRequests: Set<Int> = []
+    private var pending: [Int: CheckedContinuation<URL, Never>] = [:]
+
+    nonisolated static func url(_ index: Int) -> URL {
+        URL(fileURLWithPath: "/private/tmp/verified-catalog-poster-\(index).jpg")
+    }
+
+    func localURL(for artifact: CatalogArtifact) async throws -> URL {
+        let index = requestCount
+        requestCount += 1
+        let result = await withCheckedContinuation { pending[index] = $0 }
+        if Task.isCancelled { cancelledRequests.insert(index) }
+        returnCount += 1
+        // Deliberately return even after cancellation: coordinator fences own presentation.
+        return result
+    }
+
+    func localURL(for artifact: CreatorCanonicalArtifact) async throws -> URL {
+        throw CatalogPresentationMediaCacheError.unsupportedArtifact
+    }
+
+    func finish(_ index: Int) {
+        pending.removeValue(forKey: index)?.resume(returning: Self.url(index))
+    }
 }

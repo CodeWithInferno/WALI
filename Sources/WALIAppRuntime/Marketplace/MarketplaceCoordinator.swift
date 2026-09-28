@@ -281,6 +281,7 @@ public final class MarketplaceCoordinator {
     private var taxonomyGeneration: UInt64 = 0
     private var preferencesTask: Task<Void, Never>?
     private var savedTask: Task<Void, Never>?
+    private var savedPageTask: Task<Void, Never>?
     private var savedGeneration: UInt64 = 0
     private var pendingPreferenceWrite: (subjectID: String, categories: [String], rating: String, optOut: Bool, revision: UInt64, key: String)?
     let installAcknowledgementStore: CatalogInstallAcknowledgementStore
@@ -289,6 +290,7 @@ public final class MarketplaceCoordinator {
     private var recordRetryRequested = false
     private var homeTask: Task<Void, Never>?
     private var browseTask: Task<Void, Never>?
+    private var browsePageTask: Task<Void, Never>?
     private var detailTask: Task<Void, Never>?
     private var detailTargetID: String?
     private var actionTask: Task<Void, Never>?
@@ -512,12 +514,14 @@ public final class MarketplaceCoordinator {
         taxonomyTask?.cancel()
         preferencesTask?.cancel()
         savedTask?.cancel()
+        savedPageTask?.cancel()
         recordTask?.cancel()
         installTask?.cancel()
         moderatorAccess?.cancel()
         authenticationTask?.cancel()
         homeTask?.cancel()
         browseTask?.cancel()
+        browsePageTask?.cancel()
         detailTask?.cancel()
         actionTask?.cancel()
         reportTask?.cancel()
@@ -634,16 +638,25 @@ public final class MarketplaceCoordinator {
             return
         }
         if loadMore && (discovery.isLoadingSavedPage || discovery.savedNextCursor == nil) { return }
-        savedTask?.cancel()
-        savedGeneration &+= 1
+        if !loadMore {
+            savedTask?.cancel()
+            savedPageTask?.cancel()
+            savedGeneration &+= 1
+            discovery.isLoadingSavedPage = false
+        }
         let generation = savedGeneration
         let cursor = loadMore ? discovery.savedNextCursor : nil
         discovery.savedPageError = nil
         if loadMore { discovery.isLoadingSavedPage = true }
         else { discovery.savedState = .loading; discovery.savedNextCursor = nil }
-        savedTask = Task { [weak self] in
+        let task = Task { [weak self] in
             guard let self else { return }
-            defer { if generation == savedGeneration { discovery.isLoadingSavedPage = false } }
+            defer {
+                if loadMore, generation == savedGeneration {
+                    savedPageTask = nil
+                    discovery.isLoadingSavedPage = false
+                }
+            }
             do {
                 let page = try await gateway.savedWallpapers(cursor: cursor)
                 try Task.checkCancellation()
@@ -665,6 +678,8 @@ public final class MarketplaceCoordinator {
                 else { discovery.savedState = Self.loadState(for: error) }
             }
         }
+        if loadMore { savedPageTask = task }
+        else { savedTask = task }
     }
 
     public func retryInstallRecording() {
@@ -755,7 +770,7 @@ public final class MarketplaceCoordinator {
             blockedReportTarget = (detail.id, detail.currentReleaseID, creatorID)
         }
         let reloadSaved = discovery.savedState != .idle
-        taxonomyTask?.cancel(); homeTask?.cancel(); browseTask?.cancel(); detailTask?.cancel(); savedTask?.cancel()
+        taxonomyTask?.cancel(); homeTask?.cancel(); browseTask?.cancel(); browsePageTask?.cancel(); detailTask?.cancel(); savedTask?.cancel(); savedPageTask?.cancel()
         actionTask?.cancel(); installTask?.cancel()
         taxonomyGeneration &+= 1; homeGeneration &+= 1; browseGeneration &+= 1; detailGeneration &+= 1; savedGeneration &+= 1
         discovery.categories = []; discovery.tags = []; discovery.taxonomyState = .idle
@@ -815,6 +830,7 @@ public final class MarketplaceCoordinator {
         sort: CatalogBrowseSort = .featured
     ) {
         browseTask?.cancel()
+        browsePageTask?.cancel()
         browseGeneration &+= 1
         let generation = browseGeneration
         let started = Date()
@@ -861,6 +877,7 @@ public final class MarketplaceCoordinator {
         }
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         browseTask?.cancel()
+        browsePageTask?.cancel()
         isLoadingMore = false
         model.browsePageError = nil
         browseGeneration &+= 1
@@ -908,13 +925,13 @@ public final class MarketplaceCoordinator {
 
         isLoadingMore = true
         model.browsePageError = nil
-        browseGeneration &+= 1
+        // Another page belongs to the same result set; earlier posters remain current.
         let generation = browseGeneration
-        browseTask = Task { [weak self] in
+        browsePageTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 if generation == browseGeneration {
-                    browseTask = nil
+                    browsePageTask = nil
                     isLoadingMore = false
                 }
             }
@@ -2021,6 +2038,7 @@ public final class MarketplaceCoordinator {
         blockedReportTarget = nil
         preferencesTask?.cancel()
         savedTask?.cancel()
+        savedPageTask?.cancel()
         recordTask?.cancel()
         savedGeneration &+= 1
         pendingPreferenceWrite = nil
@@ -2047,6 +2065,7 @@ public final class MarketplaceCoordinator {
         selectedInstallMedia = nil
         model.detailState = .idle
         browseTask?.cancel()
+        browsePageTask?.cancel()
         browseGeneration &+= 1
         isLoadingMore = false
         model.browseItems = []
