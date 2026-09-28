@@ -262,6 +262,94 @@ func TestDeleteUsesSeparatedAuthAndVerifiesObjectIsGone(t *testing.T) {
 	}
 }
 
+func TestDeleteAcceptsOnlyBoundedSupabaseMissingObjectEnvelope(t *testing.T) {
+	const missing = `{"statusCode":"404","code":"NoSuchKey","error":"not_found","message":"Object not found"}`
+	const objectPath = "exports/22222222-2222-4222-8222-222222222222/33333333-3333-4333-8333-333333333333/account.json"
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+		gone   bool
+	}{
+		{"missing_object", http.StatusBadRequest, missing, true},
+		{"maximum_bounded_envelope", http.StatusBadRequest, missing + strings.Repeat(" ", 4096-len(missing)), true},
+		{"object_readable", http.StatusOK, missing, false},
+		{"unauthorized", http.StatusUnauthorized, missing, false},
+		{"forbidden", http.StatusForbidden, missing, false},
+		{"server_error", http.StatusInternalServerError, missing, false},
+		{"missing_bucket", http.StatusBadRequest, `{"statusCode":"404","code":"NoSuchBucket","error":"Bucket not found","message":"Bucket not found"}`, false},
+		{"invalid_jwt", http.StatusBadRequest, `{"statusCode":"400","code":"InvalidJWT","error":"InvalidJWT","message":"Invalid JWT"}`, false},
+		{"expired_jwt", http.StatusBadRequest, `{"statusCode":"400","code":"ExpiredToken","error":"ExpiredToken","message":"Token expired"}`, false},
+		{"generic_bad_request", http.StatusBadRequest, `{"statusCode":"400","code":"InvalidRequest","error":"InvalidRequest","message":"Invalid request"}`, false},
+		{"wrong_semantic_status", http.StatusBadRequest, strings.Replace(missing, `"404"`, `"400"`, 1), false},
+		{"numeric_semantic_status", http.StatusBadRequest, strings.Replace(missing, `"404"`, `404`, 1), false},
+		{"missing_code", http.StatusBadRequest, strings.Replace(missing, `"code":"NoSuchKey",`, "", 1), false},
+		{"contradictory_error", http.StatusBadRequest, strings.Replace(missing, `"not_found"`, `"Unauthorized"`, 1), false},
+		{"unknown_field", http.StatusBadRequest, strings.TrimSuffix(missing, "}") + `,"extra":"unexpected"}`, false},
+		{"duplicate_code", http.StatusBadRequest, strings.Replace(missing, `"code":`, `"code":"InvalidJWT","code":`, 1), false},
+		{"null_message", http.StatusBadRequest, strings.Replace(missing, `"Object not found"`, `null`, 1), false},
+		{"trailing_document", http.StatusBadRequest, missing + `{}`, false},
+		{"malformed", http.StatusBadRequest, strings.TrimSuffix(missing, "}"), false},
+		{"oversized", http.StatusBadRequest, missing + strings.Repeat(" ", 4097-len(missing)), false},
+		{"empty", http.StatusBadRequest, "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			verificationBody := &observedBody{Reader: strings.NewReader(test.body)}
+			transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if request.Header.Get("Authorization") != "Bearer worker-jwt" || request.Header.Get("apikey") != "publishable" {
+					t.Fatal("missing separated worker credentials")
+				}
+				response := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("[]")), Request: request}
+				switch calls {
+				case 1:
+					if request.Method != http.MethodDelete || request.URL.EscapedPath() != "/storage/v1/object/exports-private" {
+						t.Fatalf("unexpected deletion request: %s %s", request.Method, request.URL.Path)
+					}
+				case 2:
+					if request.Method != http.MethodGet || request.URL.EscapedPath() != "/storage/v1/object/exports-private/"+objectPath {
+						t.Fatalf("unexpected verification request: %s %s", request.Method, request.URL.Path)
+					}
+					response.StatusCode, response.Body = test.status, verificationBody
+					response.Header.Set("Content-Type", "application/json; charset=utf-8")
+				default:
+					t.Fatal("unexpected retry")
+				}
+				return response, nil
+			})
+			client, err := storage.NewClient("https://storage.example", "publishable", "worker-jwt", &http.Client{Transport: transport})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = client.Delete(context.Background(), "exports-private", objectPath)
+			if (err == nil) != test.gone {
+				t.Fatalf("gone=%v error=%v", test.gone, err)
+			}
+			if calls != 2 || !verificationBody.closed || verificationBody.bytesRead > 4097 {
+				t.Fatalf("calls=%d closed=%v bytes=%d", calls, verificationBody.closed, verificationBody.bytesRead)
+			}
+		})
+	}
+}
+
+type observedBody struct {
+	io.Reader
+	bytesRead int
+	closed    bool
+}
+
+func (body *observedBody) Read(buffer []byte) (int, error) {
+	count, err := body.Reader.Read(buffer)
+	body.bytesRead += count
+	return count, err
+}
+
+func (body *observedBody) Close() error {
+	body.closed = true
+	return nil
+}
+
 func TestImmutablePathRejectsRoleAndExtensionInjection(t *testing.T) {
 	digest := strings.Repeat("a", 64)
 	if _, err := storage.ImmutablePath(digest, "poster/../../x", "poster.jpg"); err == nil {

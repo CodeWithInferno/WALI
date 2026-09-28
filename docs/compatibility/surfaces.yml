@@ -549,6 +549,8 @@ surfaces:
   # public configuration contract is docs/release/production-configuration.md.
   # ADR0027 owner Saved/Favorites V2 RPCs use the existing V2 views and owner
   # RLS with distinct V2 cursors; Creator still containers use the native png name.
+  # Browse/Search V2 preserve opaque keyset fields and full filter digests while
+  # keeping their scope markers within the unchanged 32-character decoder bound.
   # Native account recovery reads the existing server-owned request IDs through
   # account_operation_references_v1; see docs/api/catalog-v1.md.
   # Private creator pages use100 items and10,000 active blocks, independently of

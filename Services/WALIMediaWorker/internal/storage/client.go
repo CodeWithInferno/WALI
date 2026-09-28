@@ -317,10 +317,40 @@ func (c *Client) Delete(ctx context.Context, bucket, objectPath string) error {
 		return fmt.Errorf("verify object deletion: %w", err)
 	}
 	defer verification.Body.Close()
-	if verification.StatusCode != http.StatusNotFound {
-		return errors.New("deleted object remains readable")
+	if !isMissingObjectResponse(verification) {
+		return errors.New("object deletion could not be confirmed")
 	}
 	return nil
+}
+
+func isMissingObjectResponse(response *http.Response) bool {
+	if response.StatusCode == http.StatusNotFound {
+		return true
+	}
+	if response.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	// Supabase sends semantic NoSuchKey/404 errors with HTTP 400. Match only
+	// its exact bounded envelope; other failures cannot establish absence.
+	const maximumErrorBytes = 4096
+	body, err := io.ReadAll(io.LimitReader(response.Body, maximumErrorBytes+1))
+	if err != nil || len(body) > maximumErrorBytes {
+		return false
+	}
+	fields, valid := credentialObject(body, "statusCode", "code", "error", "message")
+	if !valid {
+		return false
+	}
+	for key, expected := range map[string]string{
+		"statusCode": "404", "code": "NoSuchKey",
+		"error": "not_found", "message": "Object not found",
+	} {
+		var value string
+		if json.Unmarshal(fields[key], &value) != nil || value != expected {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Client) verifyExisting(ctx context.Context, publication PublishRequest) error {
